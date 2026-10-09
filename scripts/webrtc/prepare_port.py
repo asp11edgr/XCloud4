@@ -228,14 +228,21 @@ write_changed(source, text)
 source = base / 'libdatachannel/src/impl/threadpool.cpp'
 text = source.read_text()
 if 'x4_native_rtc_diagnostic' not in text:
+    original_spawn = '\twhile (count-- > 0)\n\t\tmWorkers.emplace_back(std::bind(&ThreadPool::run, this));'
+    if original_spawn not in text:
+        raise SystemExit('Unexpected pinned ThreadPool::spawn implementation')
     text = text.replace('namespace rtc::impl {',
         '#ifdef X4_OPENORBIS\nextern "C" void x4_native_rtc_diagnostic(int, int);\n'
         '#endif\n\nnamespace rtc::impl {', 1)
-    text = text.replace('\twhile (count-- > 0)\n\t\tmWorkers.emplace_back(std::bind(&ThreadPool::run, this));',
+    text = text.replace(original_spawn,
         '\twhile (count-- > 0) {\n#ifdef X4_OPENORBIS\n'
         '\t\ttry {\n\t\t\tmWorkers.emplace_back(std::bind(&ThreadPool::run, this));\n'
         '\t\t} catch (...) {\n\t\t\t::x4_native_rtc_diagnostic(19, int(mWorkers.size()));\n\t\t\tthrow;\n\t\t}\n'
         '\t\t::x4_native_rtc_diagnostic(18, int(mWorkers.size()));\n'
         '#else\n\t\tmWorkers.emplace_back(std::bind(&ThreadPool::run, this));\n#endif\n\t}')
+for marker in ('::x4_native_rtc_diagnostic(19, int(mWorkers.size()));',
+               '::x4_native_rtc_diagnostic(18, int(mWorkers.size()));'):
+    if marker not in text:
+        raise SystemExit('ThreadPool worker diagnostic was not applied: ' + marker)
 write_changed(source, text)
 print('OpenOrbis dependency overlay prepared:', overlay)
