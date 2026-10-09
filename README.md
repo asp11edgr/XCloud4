@@ -12,13 +12,17 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest prepared development checkpoint: 0.7.21
+## Latest prepared development checkpoint: 0.7.22
 
-Product **0.7.21**, PS4 **APP_VER 00.91**, targets the measured CPU video-conversion bottleneck. In the actual 0.7.20 capture, one interval records **499.6 ms per NV12-to-RGB conversion**, **9.6 ms per native Decode call** and **5.8 ms per image draw**, with about **1.90 new image draws per second**. The input queue reaches its 256-packet capacity and drops packets while conversion occupies the main thread. These observations come from the current 0.7.20 launch; earlier crash records are separate.
+The implemented **0.7.22**, PS4 **APP_VER 00.92**, converts eight pixels at a time with original SSE2 code, preserving the previous integer color coefficients, rounding and bounded scalar tail. Native output memory, decoder rings, allocations and ownership remain unchanged. The previous staging change substantially improves video, but its current cost is still about **29.354 ms to copy + 20.068 ms to convert each image**. The native build, final source inventory and compiled instruction audit are verified, fresh actual Claude **Opus 5.5** review returned PASS, and VM/PC/retrieved-PS4 package hashes match. The 0.7.22 console result remains **pending**. No resulting FPS or smoothness is established. See the [0.7.22 implementation, review and artifact evidence](docs/RELEASE_NOTES_0.7.22.md).
 
-The implementation copies each validated native NV12 picture once into persistent CPU heap storage, then runs the existing color conversion from that storage. It selects aligned SSE4.1 streaming reads only when runtime CPUID reports the feature, with baseline SSE2 copying otherwise; neither path's speed is promised before measurement. Native decoder output remains type 3 (`WC_GARLIC`), and the existing picture-size/pitch bounds are preserved. `MFENCE` orders CPU memory accesses; it does not establish native GPU completion. The memory-access explanation is a supported optimization hypothesis, while the reduction in conversion time and queue pressure still needs a 0.7.21 console measurement.
+## Latest tested development checkpoint: 0.7.21
 
-The full native package built successfully. Package/source hashes, all **9369** source-manifest entries and the compiled CPUID/streaming-load/SSE2 dispatch are verified. A fresh actual Claude Code **Opus 5.5** source review returned PASS with no material finding. VM, PC and the retrieved PS4 package match; only the 0.7.21 installer remains on the console. The console result remains **pending**. The review notes a pre-existing counter-reset limitation: exclude the single timing interval spanning a decoder restart, which can contain a wrapped delta. See the [0.7.20 measured report](docs/ERROR_REPORT_0.7.20.md) and [0.7.21 implementation, review and artifact evidence](docs/RELEASE_NOTES_0.7.21.md).
+Product **0.7.21**, PS4 **APP_VER 00.91**, copies validated native NV12 output into persistent CPU storage before RGB conversion, with runtime-selected SSE4.1 streaming reads and a baseline SSE2 fallback. Native type 3 output and existing buffer bounds remain. The owner confirms video is much better than 0.7.20 but still choppy, and confirms the D-pad and sticks work; the earlier D-pad concern was retracted. Other buttons, local chords and release/cancellation paths have not been fully checked.
+
+Sixteen sustained intervals cover **80.513 seconds** and report **12.979 new image draws per second**, with interval rates of **10.96–14.00**; later observations fall roughly within **8–13**. Mean copy plus conversion is **49.422 ms**, compared with **499.5965 ms** for the prior direct conversion sample, a ratio of about **10.109×** for that preparation region. These are different live intervals, not a controlled benchmark; the draw rate is not panel or server FPS. Queue overflow, damaged reconstruction and keyframe waits remain.
+
+The native build, package/source hashes, **9369** source-manifest entries and compiled dispatch are verified. Fresh actual Claude Code **Opus 5.5** source review returned PASS, and VM/PC/retrieved-PS4 package hashes match. Exclude the single counter interval spanning a decoder restart, which can contain a wrapped delta. See the [0.7.21 measured result and remaining limits](docs/ERROR_REPORT_0.7.21.md), [artifact evidence](docs/RELEASE_NOTES_0.7.21.md) and [0.7.20 baseline](docs/ERROR_REPORT_0.7.20.md).
 
 ## Previous tested development checkpoint: 0.7.20
 
@@ -82,7 +86,7 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 
 `XCloud4-0.7.14.pkg` classifies a parsed nested exchange's direct SDP and other field shapes using numeric diagnostics, without changing the accepted SDP rule or printing remote text. Full build, focused Claude review, matching source and transfer integrity are confirmed. The console again reports **`ConnectionExchangeFailed`**, message mask **`0x00010400`** (`command` / `PerformSdpExchangeV1Command`), after successful keepalive. The new nested-field helper is **not entered**, because the logical outer error occurs first. Cleanup succeeds, with ICE/RTC/video/audio counters at zero. **The root cause remains unknown; no valid remote answer or game media is established.** Product 0.7.14 uses **APP_VER 00.84**. See [0.7.14 actual capture and paused status](docs/RELEASE_NOTES_0.7.14.md).
 
-The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller reports are implemented, and the owner tentatively reports response in 0.7.20; individual controls and release/cancellation behavior have not been fully validated. See the [0.7.20 result](docs/ERROR_REPORT_0.7.20.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
+The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller reports are implemented, and the owner confirms the D-pad and sticks work in 0.7.21; other controls and release/cancellation behavior have not been fully validated. See the [0.7.21 result](docs/ERROR_REPORT_0.7.21.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
 ## Confirmed progress
 
@@ -147,7 +151,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The current 0.7.21 development source successfully produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.21.pkg`; the native build and package integrity are verified. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The current 0.7.22 development source successfully produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.22.pkg`; the native build and VM/PC package integrity are verified. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

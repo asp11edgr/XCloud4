@@ -1,6 +1,6 @@
 # XCloud4 0.7.21 — stage native NV12 before CPU conversion
 
-Product **0.7.21**, PS4 **APP_VER 00.91**, application identifier **XCLD00001**. The PS4 interface remains Spanish; repository and release content remain English. **Native build, package/source integrity, compiled instruction inspection, fresh Claude source review and PS4 delivery are confirmed. The console result remains pending.**
+Product **0.7.21**, PS4 **APP_VER 00.91**, application identifier **XCLD00001**. The PS4 interface remains Spanish; repository and release content remain English. **At the original packaging checkpoint, native build, package/source integrity, compiled instruction inspection, fresh Claude source review and PS4 delivery were confirmed; the console result was pending.** The later console result is recorded in the dated addendum below.
 
 ## Reason
 
@@ -48,3 +48,9 @@ The compiled native ELF has SHA-256 `f1a47412225373c7f44a18156a5d8ff59d6f95aa789
 The earlier actual Claude Opus 5.5 performance analysis completed in **15 turns / 14 reads / 14 files**. A separate fresh review of the 0.7.21 source returned **PASS** in **13 turns / 12 reads / 12 files**, with no access outside its allowlist and matching source hashes after review. It read the media/video implementation and application/display/ABI/build context, plus the SDK memory-type definition; notice reading was limited to lines 120–139. It did not execute the application or a hardware benchmark. It identified a pre-existing measurement limitation: decoder restart resets video counters while the previous report snapshot survives, so one interval can show a wrapped delta. Exclude that interval from timing comparisons. This checkpoint does not alter the unrelated reset behavior.
 
 The 0.7.20 input mapping, bounded processing and graphics-completion changes are retained. The owner's controller observation is tentative; individual input paths and external closure remain to be checked. No achieved FPS or performance gain is promised for 0.7.21, and no automated tests have been added or run. Earlier artifacts remain preserved.
+
+## Hardware addendum — 2026-10-09
+
+The owner confirms much better video than 0.7.20, with remaining choppiness, and explicitly confirms the **D-pad and sticks work**, retracting the earlier D-pad concern. The preserved early sustained capture records **49.422 ms per copy + conversion** and **12.979 new image draws per second** across **80.513 seconds**. The preparation-region ratio against the earlier direct-conversion sample is about **10.109×**, from different live intervals rather than a controlled benchmark. Queue overflow and keyframe recovery remain; the complete control matrix and external closure are unverified.
+
+See the [0.7.21 measured result and limitations](ERROR_REPORT_0.7.21.md). This later hardware observation does not turn the original source-only Claude review into an executed hardware test. Original package/source hashes and review metadata above remain unchanged.

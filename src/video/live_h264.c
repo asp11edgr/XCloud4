@@ -174,6 +174,7 @@ int x4_live_video_start(X4LiveVideo *v)
         s->streaming_copy ? 1u : 0u, s->staging_size);
     v->pixels = calloc(X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(*v->pixels));
     if (!v->pixels) { rc = stage(v, "IMAGEN RGB", -5); goto fail; }
+    printf("XCloud4: video RGB convert mode=2 block_pixels=8 scalar_tail_max=7\n");
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
     if (stage(v, "CREAR DECODER", rc) < 0) goto fail;
 
@@ -186,6 +187,79 @@ fail:
 }
 
 static unsigned clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : (unsigned)v; }
+
+/* Original SSE2 conversion using Intel's documented PMADDWD, PSRAD and
+ * saturation contracts. Keep the scalar BT.601 coefficients and rounding:
+ * products/sums use signed 32 bits; after >>8 every result lies within
+ * [-258,534], so the signed 16-bit pack cannot alter it. The unsigned byte
+ * pack then implements clamp(0,255). No external converter is copied. */
+__attribute__((target("sse2"), noinline))
+static void convert_nv12_sse2(uint32_t *pixels, const uint8_t *nv12,
+    unsigned width, unsigned height, unsigned pitch)
+{
+    const __m128i zero = _mm_setzero_si128();
+    const __m128i ybias = _mm_set1_epi16(16);
+    const __m128i uvbias = _mm_set1_epi16(128);
+    const __m128i rounding = _mm_set1_epi32(128);
+    const __m128i rcoeff = _mm_setr_epi16(298,409,298,409,298,409,298,409);
+    const __m128i bcoeff = _mm_setr_epi16(298,516,298,516,298,516,298,516);
+    const __m128i gcoeff = _mm_setr_epi16(-100,-208,-100,-208,-100,-208,-100,-208);
+    const __m128i ycoeff = _mm_set1_epi32(298);
+    const __m128i alpha = _mm_set1_epi8((char)-1);
+    const uint8_t *uvplane = nv12 + (size_t)pitch * height;
+    for (unsigned y = 0; y < height; ++y) {
+        const uint8_t *yrow = nv12 + (size_t)y * pitch;
+        const uint8_t *uvrow = uvplane + (size_t)(y / 2) * pitch;
+        uint32_t *out = pixels + (size_t)y * width;
+        unsigned x = 0;
+        /* MOVQ loads exactly eight bytes, including on odd-pitch rows.
+         * Stores write exactly eight RGBA pixels; no row padding is read. */
+        for (; width - x >= 8; x += 8) {
+            __m128i luma = _mm_subs_epu16(
+                _mm_unpacklo_epi8(_mm_loadl_epi64((const __m128i *)(yrow + x)), zero), ybias);
+            __m128i uv = _mm_sub_epi16(
+                _mm_unpacklo_epi8(_mm_loadl_epi64((const __m128i *)(uvrow + x)), zero), uvbias);
+            /* [U0,V0,U1,V1,U2,V2,U3,V3] becomes each chroma value twice,
+             * matching NV12's two adjacent pixels per U/V pair. */
+            __m128i u = _mm_shufflehi_epi16(
+                _mm_shufflelo_epi16(uv, _MM_SHUFFLE(2,2,0,0)), _MM_SHUFFLE(2,2,0,0));
+            __m128i w = _mm_shufflehi_epi16(
+                _mm_shufflelo_epi16(uv, _MM_SHUFFLE(3,3,1,1)), _MM_SHUFFLE(3,3,1,1));
+            __m128i rlo = _mm_srai_epi32(_mm_add_epi32(rounding,
+                _mm_madd_epi16(_mm_unpacklo_epi16(luma, w), rcoeff)), 8);
+            __m128i rhi = _mm_srai_epi32(_mm_add_epi32(rounding,
+                _mm_madd_epi16(_mm_unpackhi_epi16(luma, w), rcoeff)), 8);
+            __m128i blo = _mm_srai_epi32(_mm_add_epi32(rounding,
+                _mm_madd_epi16(_mm_unpacklo_epi16(luma, u), bcoeff)), 8);
+            __m128i bhi = _mm_srai_epi32(_mm_add_epi32(rounding,
+                _mm_madd_epi16(_mm_unpackhi_epi16(luma, u), bcoeff)), 8);
+            __m128i glo = _mm_srai_epi32(_mm_add_epi32(rounding, _mm_add_epi32(
+                _mm_madd_epi16(_mm_unpacklo_epi16(luma, zero), ycoeff),
+                _mm_madd_epi16(_mm_unpacklo_epi16(u, w), gcoeff))), 8);
+            __m128i ghi = _mm_srai_epi32(_mm_add_epi32(rounding, _mm_add_epi32(
+                _mm_madd_epi16(_mm_unpackhi_epi16(luma, zero), ycoeff),
+                _mm_madd_epi16(_mm_unpackhi_epi16(u, w), gcoeff))), 8);
+            __m128i r = _mm_packus_epi16(_mm_packs_epi32(rlo, rhi), zero);
+            __m128i g = _mm_packus_epi16(_mm_packs_epi32(glo, ghi), zero);
+            __m128i b = _mm_packus_epi16(_mm_packs_epi32(blo, bhi), zero);
+            __m128i rg = _mm_unpacklo_epi8(r, g);
+            __m128i ba = _mm_unpacklo_epi8(b, alpha);
+            _mm_storeu_si128((__m128i *)(out + x), _mm_unpacklo_epi16(rg, ba));
+            _mm_storeu_si128((__m128i *)(out + x + 4), _mm_unpackhi_epi16(rg, ba));
+        }
+        /* Bounded scalar fallback for a short row or its final 0..7 pixels. */
+        for (; x < width; ++x) {
+            int luma = yrow[x] - 16;
+            if (luma < 0) luma = 0;
+            size_t uv = x & ~1u;
+            int u = uvrow[uv] - 128, w = uvrow[uv + 1] - 128;
+            unsigned r = clamp((298 * luma + 409 * w + 128) >> 8);
+            unsigned g = clamp((298 * luma - 100 * u - 208 * w + 128) >> 8);
+            unsigned b = clamp((298 * luma + 516 * u + 128) >> 8);
+            out[x] = 0xff000000u | (b << 16) | (g << 8) | r;
+        }
+    }
+}
 
 /* Original fixed-block copy based on the instruction contracts in Intel's
  * SSE4 programming reference, section 2.2.3. No external project helper is
@@ -261,20 +335,7 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
     ++v->copy_calls; v->copy_bytes += length; v->copy_us += copy_elapsed;
     if (copy_elapsed > v->copy_max_us) v->copy_max_us = copy_elapsed;
     uint64_t begin = sceKernelGetProcessTime();
-    const uint8_t *yplane = s->staging;
-    const uint8_t *uvplane = yplane + (size_t)o->framePitch * o->frameHeight;
-    for (unsigned y = 0; y < o->frameHeight; ++y) {
-        for (unsigned x = 0; x < o->frameWidth; ++x) {
-            int luma = yplane[y * o->framePitch + x] - 16;
-            if (luma < 0) luma = 0;
-            size_t uv = (y / 2) * o->framePitch + (x & ~1u);
-            int u = uvplane[uv] - 128, w = uvplane[uv + 1] - 128;
-            unsigned r = clamp((298 * luma + 409 * w + 128) >> 8);
-            unsigned g = clamp((298 * luma - 100 * u - 208 * w + 128) >> 8);
-            unsigned b = clamp((298 * luma + 516 * u + 128) >> 8);
-            v->pixels[y * o->frameWidth + x] = 0xff000000u | (b << 16) | (g << 8) | r;
-        }
-    }
+    convert_nv12_sse2(v->pixels, s->staging, o->frameWidth, o->frameHeight, o->framePitch);
     s->pending_valid = false;
     v->width = o->frameWidth; v->height = o->frameHeight;
     uint64_t completed = sceKernelGetProcessTime(), elapsed = completed - begin;
