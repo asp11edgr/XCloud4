@@ -89,6 +89,16 @@ The actual 0.7.4 capture records certificate DER **359 bytes**, local-offer medi
 
 Matching 0.7.4 source is preserved separately: **83543344 bytes**, SHA-256 `6bf845b53bdeab0898b33d3d1e07876661c24324f7a4ad6a06c4bfa18d311c31`; all **9367** manifest hashes matched. It captures this failed attempt before subsequent repairs, with every previous archive unchanged. See [0.7.4 notes and primary ABI references](RELEASE_NOTES_0.7.4.md).
 
+### 0.7.5 original native SO_NBIO adapter
+
+An original adapter sets `SO_NBIO=0x1200` through POSIX `setsockopt` on the existing kernel descriptor, with `SOL_SOCKET=0xffff` and a four-byte integer one. It then queries the same option through `getsockopt` and requires enabled mode plus a returned size of four bytes. Events 65–68 record set/get errno, mode and size. Any operation/state/size failure rejects socket setup. UDP/TCP use the adapter, preserving the four-worker policy and pipe handling.
+
+Pinned Sony/WebKit and WoWPS sources support the interface/constant research; their implementations were not copied. WoWPS documents a similar OpenOrbis descriptor/nonblocking limitation, while XCloud4's EACCES evidence is its own console capture. No SDK implementation or exact internal denial cause is established by that comment. Claude Opus 5.5 completed a read-only review in **5 turns**, with no concrete defect identified within that scope. Dependency/application/package builds and static ELF/OELF option/import checks succeeded.
+
+The actual console set/query results are errno **0**, enabled mode **256 (`0x100`)** and size **4**. Nonblocking socket setup, connection and interface query succeed; one interface and one host candidate are recorded. Gathering, offer readiness and the local-description request return zero. Xbox accepts `POST /sdp` with **HTTP 202**, but repeated answer requests remain **HTTP 204** without a remote SDP answer until keepalive returns **HTTP 410**. Remote deletion returns **HTTP 200**. This confirms local socket/gathering progress, not completed ICE connectivity: no RTP or live game video/audio is received. The reason for the missing answer/session expiry remains unconfirmed.
+
+Matching 0.7.5 source is preserved separately: **83543722 bytes**, SHA-256 `8efc459212d3bc99304442e3f98f1c970af3907fb225600933493001eb9d841b`; all **9367** manifest source hashes matched and the PC copy matches. Previous snapshots remain unchanged. See [0.7.5 notes and source pins](RELEASE_NOTES_0.7.5.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.

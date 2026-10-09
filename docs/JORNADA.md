@@ -228,3 +228,19 @@ Claude Opus 5.5 completed a read-only socket review in **5 turns**, successfully
 Certificate DER result is **359 bytes**, local-offer media count is **3**, and the offer is committed. Direct `FIONBIO` reports **errno 13 (`EACCES`)**, followed by connection -1, gathering -2 and local-description request -2. Remote cleanup returns **HTTP 200** and no RTP is received. The owner and console capture confirm the failed attempt. The proposed direct ioctl does not resolve the denial, and no precise native cause or successful game media is established. Native network nonblocking APIs and descriptor/API compatibility are the next investigation stage.
 
 The immutable matching source snapshot is **83543344 bytes**, SHA-256 `6bf845b53bdeab0898b33d3d1e07876661c24324f7a4ad6a06c4bfa18d311c31`; all **9367** source hashes matched. Every earlier snapshot remains unchanged. See [0.7.4 notes and primary references](RELEASE_NOTES_0.7.4.md).
+
+## 0.7.5: original native SO_NBIO adapter
+
+The new original adapter uses POSIX `setsockopt` with PlayStation `SO_NBIO=0x1200` on the existing descriptor, then reads the option through `getsockopt` and requires enabled mode/four-byte size. Events 65–68 report numeric set/get errno, mode and size. Invalid results reject setup; UDP/TCP both use the adapter. The four-worker policy and pipe handling remain in place.
+
+API research used the pinned Sony/WebKit PlayStation additions and WoWPS socket-control source listed in [0.7.5 notes](RELEASE_NOTES_0.7.5.md), without copying their implementations. WoWPS's description of an OpenOrbis limitation supports research; actual XCloud4 EACCES is established by the owner's console capture, not a verified SDK implementation or confirmed internal cause. The exact source provenance is retained in third-party notices.
+
+Claude Opus 5.5 completed a read-only review in **5 turns**, successfully, using four grep inspections and identifying no concrete defect within that scope. Dependency and full application/package compilation succeeded in Lubuntu without warnings/errors: `XCloud4-0.7.5.pkg`, **8847360 bytes**, SHA-256 `077a7c2a04e8caad38cc57eb955a200c339c67116eb6bb4ef881cd4ec0eb97fb`. VM/PC/PS4 retrieval hashes match. Static ELF/OELF inspection confirms the option constants, four-byte arguments, same-descriptor query, returned-state checks and native libkernel set/get imports. The earlier installer was retired only after verification; the console installer directory then contained only 0.7.5.
+
+### Actual 0.7.5 console result
+
+Set/query errno values are **0**, returned mode is **256 (`0x100`)**, size is **4**, and socket nonblocking setup succeeds. Connection/interface query succeed with one interface and one host candidate. Gathering, offer readiness and `rtcSetLocalDescription` return zero. Xbox `POST /sdp` returns **HTTP 202**. The previous socket operation failure is resolved in this capture.
+
+Repeated answer requests return **HTTP 204** without remote SDP until keepalive returns **HTTP 410**. The application reports that Xbox did not maintain the session; deletion succeeds with **HTTP 200**. The owner reports a new error view. Final counters show no completed ICE, video or audio, and no RTP is received. Successful local gathering and accepted SDP submission do not establish remote negotiation or media. The precise cause of the missing answer/session expiry remains under investigation.
+
+The exact immutable source archive is **83543722 bytes**, SHA-256 `8efc459212d3bc99304442e3f98f1c970af3907fb225600933493001eb9d841b`. All **9367** recorded source hashes matched, and the PC copy matches the guest archive. It includes the final SO_NBIO adapter and matching libjuice changes; all earlier snapshots remain preserved. See [0.7.5 release evidence](RELEASE_NOTES_0.7.5.md).
