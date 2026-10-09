@@ -1,6 +1,6 @@
 # XCloud4 0.7.18 — native SCTP address ABI and initialization diagnostics
 
-Product **0.7.18**, PS4 **APP_VER 00.88**, application identifier **XCLD00001**. Retains the receiving SSRC guard, audio-first offer, validated Teredo handling, native condition-variable replacement and monotonic ICE clock. **Live game media remains unconfirmed.** The latest tested result is [0.7.17](ERROR_REPORT_0.7.17.md): ICE completed, DTLS connected and SRTP keys derived, followed by peer failure without RTP.
+Product **0.7.18**, PS4 **APP_VER 00.88**, application identifier **XCLD00001**. Retains the receiving SSRC guard, audio-first offer, validated Teredo handling, native condition-variable replacement and monotonic ICE clock. **Live game media remains unconfirmed.** The latest [0.7.18 console attempt](ERROR_REPORT_0.7.18.md) reaches native SCTP start, then crashes in the receive worker. The previous [0.7.17 result](ERROR_REPORT_0.7.17.md) reached ICE completion, DTLS connection and SRTP key derivation, followed by managed peer failure without RTP.
 
 ## Concrete SCTP address-layout mismatch
 
@@ -62,4 +62,4 @@ The owner installed and ran 0.7.18. Auth, provisioning, valid SDP application, I
 
 The matched native ELF resolves the fault to **SctpTransport::doRecv()**, whose source allocates a **65,536-byte automatic receive buffer**. Its frame reserves **66,072 bytes**, and the faulting call writes at **RSP - 8** into an unmapped page. This is strong evidence for a worker-stack-capacity problem, while the actual stack size and a repaired console result remain unconfirmed. No normal terminal media-counter/cleanup summary was produced, so the absence of playback is not presented as a measured final packet count.
 
-See the [version-specific error report](ERROR_REPORT_0.7.18.md) for the frozen attempt hash, symbols, numeric steps and limits. The earlier package preparation evidence remains unchanged. Extensive Antigravity reference comparison is now requested using this latest failure; no further code change or package has been prepared for it. The PS4 interface remains Spanish; repository and release content remain English.
+See the [version-specific error report](ERROR_REPORT_0.7.18.md) for the frozen attempt hash, symbols, numeric steps and limits. The completed [public-client comparison](CLIENT_COMPARISON_0.7.18.md), including actual Antigravity and fresh Claude Code review scope, proposes an owned heap receive buffer followed by native stack measurements. These proposals are not implemented; the earlier package preparation evidence and release assets remain unchanged. The PS4 interface remains Spanish; repository and release content remain English.
