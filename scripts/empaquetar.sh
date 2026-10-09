@@ -6,16 +6,29 @@ cd "$(dirname "$0")/.."
 TITLE='XCloud4'
 TITLE_ID='XCLD00001'
 CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
-VERSION='00.10'
+VERSION='00.11'
+PACKAGE_VERSION='0.1.1'
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"
+# The PS4 startup loader requires this application module before main().
+# Keep Sony runtime binaries in an external local directory, never in Git.
+: "${X4_RUNTIME_MODULES:?Define X4_RUNTIME_MODULES con los módulos locales de PS4}"
+FIOS_MODULE="$X4_RUNTIME_MODULES/libSceFios2.prx"
+[[ -s "$FIOS_MODULE" ]] || { echo "Falta $FIOS_MODULE; no se genera un paquete incompleto." >&2; exit 1; }
+python3 - "$FIOS_MODULE" <<'PY'
+import pathlib,sys
+module=pathlib.Path(sys.argv[1])
+if module.read_bytes()[:4] != bytes.fromhex('4f153d1d'):
+    raise SystemExit('Fios2 debe ser un módulo SELF. Un ELF obtenido por FTP requiere conversión previa.')
+PY
 # LibOrbisPkg is distributed as a self-contained .NET executable.
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 HOSTLIBS="${X4_HOSTLIBS:-$HOME/.local/share/xcloud4/hostlibs}"
 if [[ -d "$HOSTLIBS/usr/lib/x86_64-linux-gnu" ]]; then
     export LD_LIBRARY_PATH="$HOSTLIBS/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-mkdir -p build/package/sce_sys dist
+mkdir -p build/package/sce_sys build/package/sce_module dist
 cp build/eboot.bin build/package/eboot.bin
+cp "$FIOS_MODULE" build/package/sce_module/libSceFios2.prx
 cp assets/icon0.png build/package/sce_sys/icon0.png
 cp LICENSE build/package/LICENSE.txt
 cp THIRD_PARTY_NOTICES.md build/package/THIRD_PARTY_NOTICES.md
@@ -36,9 +49,9 @@ DIST="$PWD/dist"
 (
     cd build/package
     "$TOOLS/create-gp4" -out xcloud4.gp4 --content-id="$CONTENT_ID" \
-        --files 'eboot.bin sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
+        --files 'eboot.bin sce_module/libSceFios2.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
     "$TOOLS/PkgTool.Core" pkg_build xcloud4.gp4 "$DIST"
 )
-cp "dist/$CONTENT_ID.pkg" dist/XCloud4-0.1.0.pkg
-sha256sum dist/XCloud4-0.1.0.pkg > dist/XCloud4-0.1.0.pkg.sha256
-printf '\nPaquete: %s/dist/XCloud4-0.1.0.pkg\n' "$PWD"
+cp "dist/$CONTENT_ID.pkg" "dist/XCloud4-$PACKAGE_VERSION.pkg"
+sha256sum "dist/XCloud4-$PACKAGE_VERSION.pkg" > "dist/XCloud4-$PACKAGE_VERSION.pkg.sha256"
+printf '\nPaquete: %s/dist/XCloud4-%s.pkg\n' "$PWD" "$PACKAGE_VERSION"

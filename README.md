@@ -2,9 +2,9 @@
 
 Cliente nativo experimental de Xbox Cloud Gaming para PS4 Fat con firmware 12.00 y GoldHEN.
 
-## Versión inicial — 0.1.0
+## Versión inicial — 0.1.1
 
-Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. El paquete todavía no se ha ejecutado en la PS4; conexión con Xbox, reproducción de video y audio siguen pendientes.
+Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. La 0.1.0 se instaló en PS4 12.00 pero falló al iniciar porque faltaba `sce_module/libSceFios2.prx`, según el registro de la consola. La 0.1.1 incorpora esa dependencia en el paquete local y todavía requiere confirmar su inicio en PS4. Conexión con Xbox, reproducción de video y audio siguen pendientes.
 
 El entorno de trabajo elegido es la máquina virtual de Lubuntu existente en VirtualBox. Se mantiene su red NAT para descargar herramientas y preparar compilaciones.
 
@@ -26,10 +26,13 @@ En Lubuntu, después de preparar el entorno:
 cd "$HOME/Projects/XCloud4"
 source "$HOME/.config/xcloud4/env.sh"
 make -j2
+export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.1.0.pkg`. El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.1.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` en formato SELF. Este módulo se conserva fuera de Git y mantiene sus derechos originales; el empaquetador se detiene si falta o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+
+El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 
 ## Organización
 

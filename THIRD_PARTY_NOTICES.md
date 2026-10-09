@@ -22,4 +22,10 @@ El empaquetador LibOrbisPkg incluido en OpenOrbis usa .NET Core 3.0. Para ejecut
 
 Estas bibliotecas se usan únicamente durante el empaquetado local. No se incluyen en el PKG ni en el repositorio de XCloud4.
 
-XCloud4 se distribuye bajo GPL-3.0-only; consulta `LICENSE`. El alfabeto de píxeles, el icono y las pantallas se crearon para este proyecto. No se incorporan bibliotecas PRX ni módulos propietarios de Sony.
+El código fuente de XCloud4 se distribuye bajo GPL-3.0-only; consulta `LICENSE`. El alfabeto de píxeles, el icono y las pantallas se crearon para este proyecto.
+
+## Módulos del paquete local para PS4
+
+El registro real de la consola confirmó que el cargador exige `sce_module/libSceFios2.prx` antes de entrar en `main`. El PKG 0.1.1 preparado para el propietario incluye ese módulo del ejemplo de OpenOrbis v0.5.4, que se conserva en una carpeta externa al repositorio. No se incorpora su código fuente ni se modifica su contenido.
+
+Los módulos de Sony conservan sus derechos originales y no quedan cubiertos por la licencia GPL de XCloud4. No deben publicarse en GitHub ni incorporarse al repositorio. El código y las instrucciones de construcción se mantienen separados de los binarios necesarios para el uso local. La aceptación del módulo y el funcionamiento de la app requieren confirmarse en la consola.

@@ -12,7 +12,21 @@
 
 ## Pendiente inmediato
 
-Ejecutar la aplicación en la PS4 12.00 con GoldHEN para conocer el resultado real de instalación, pantalla y control. Xbox, audio y decodificación siguen pendientes. No se han ejecutado pruebas automatizadas.
+El usuario instaló el paquete 0.1.0 en su PS4 12.00 con GoldHEN v2.4b18.7. Al abrirlo, la consola mostró que los datos de la aplicación están dañados. La foto confirma el fallo de inicio; todavía no demuestra cuál es su causa. Pantalla y control siguen sin confirmarse en la consola. Xbox, audio y decodificación siguen pendientes. No se han ejecutado pruebas automatizadas.
+
+Se obtuvo acceso al registro de la consola por el servidor Klog de GoldHEN. En el segundo intento se registró `EXEC /app0/eboot.bin`, seguido de `Loading /app0/sce_module/libSceFios2.prx fails (0x80020002)` y `PRX_SCE_MODULE_LOAD_ERROR` (`0xa0020102`). Esto identifica una dependencia ausente antes de `main`. Los registros completos se guardan fuera del repositorio.
+
+La corrección 0.1.1 agrega Fios2 al paquete desde una carpeta externa de módulos locales. Se utiliza la variante SELF del ejemplo `hello_world` incluido en el archivo verificado de OpenOrbis v0.5.4. No se cambia su contenido ni se incorpora el módulo a Git. La ejecución de la versión corregida en PS4 sigue pendiente.
+
+El paquete 0.1.1 se compiló y generó en Lubuntu. El GP4 incluye `sce_module/libSceFios2.prx`; el módulo tiene SHA-256 `3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01`. El PKG mide 6619136 bytes y tiene SHA-256 `f38e3321f1327d4c2bfeffce42b732840e3d705e1c5f5bf9f662fd867a544497`. Se transfirió a `/data/pkg/XCloud4-0.1.1.pkg` mediante FTP y se descargó esa copia para comparar su huella: coincide. Se solicita al propietario instalar y abrir la versión corregida.
+
+También se obtuvo una copia local de Fios2 de la consola por FTP. Empieza con la cabecera ELF: el servidor entrega el módulo descifrado, no un SELF listo para empaquetar. Se conserva fuera de Git como evidencia; no se utilizó en el paquete. El empaquetador rechaza esta entrada sin convertir.
+
+## Revisión con Claude Code
+
+Claude Code Pro se utilizó para dos revisiones estáticas con Sonnet 5. Se contrastaron sus propuestas con los encabezados y ejemplos del SDK y con los archivos generados. Las dudas sobre el tipo de memoria, el pitch de vídeo y la lista de archivos del paquete no demostraron defectos. Una propuesta posterior sobre GOT/RELRO requiere confirmar el comportamiento del cargador y no se ha aplicado.
+
+El usuario pidió utilizar Opus 5.5. La versión 2.1.220 rechazó ese modelo porque requiere 2.1.280 o posterior; Claude Code se actualizó mediante WinGet a 2.1.292. Dos revisiones posteriores registran efectivamente `claude-opus-5-5`. La primera rechazó el cambio propuesto sobre GOT/RELRO por no resolver su propia hipótesis y eliminar una sección que requiere el conversor. La segunda, con el registro real, confirmó que la dependencia ausente es la explicación respaldada por la evidencia y señaló que la aceptación del módulo agregado sigue pendiente. Ninguna revisión sustituye la ejecución real en PS4.
 
 ## GitHub
 

@@ -13,6 +13,10 @@ pkg.gp4
 *.log
 .cache/
 sdk/
+runtime/
+*.prx
+*.sprx
+*.self
 .xcloud4-prepared
 /core
 /core.*
