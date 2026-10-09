@@ -25,7 +25,7 @@ struct X4Rtc {
     int pc, video, audio, channels[4];
     CallbackSlot *slot;
     atomic_int state, error;
-    atomic_bool gathering_done;
+    atomic_bool gathering_done, offer_logged;
     atomic_uint_fast64_t video_packets, audio_packets;
     atomic_flag data_gate;
     char sdp[SDP_CAP];
@@ -191,10 +191,10 @@ static void sdp_shape_log(const char *sdp, size_t length)
         }
         if (sdp_prefix(line, "a=setup:")) {
             unsigned setup = sdp_setup(sdp_after(line, 8));
-            if (m) m->setup = setup; else session_setup = setup;
+            if (m) m->setup = setup; else if (!count) session_setup = setup;
         } else if (sdp_prefix(line, "a=ice-options:")) {
             unsigned trickle = sdp_trickle(sdp_after(line, 14));
-            if (m) m->trickle = trickle; else session_trickle = trickle;
+            if (m) m->trickle = trickle; else if (!count) session_trickle = trickle;
         } else if (m) {
             unsigned number;
             if (sdp_prefix(line, "a=mid:")) {
@@ -252,7 +252,6 @@ static void description_callback(int pc, const char *sdp, const char *type, void
     size_t length = sdp ? strnlen(sdp, SDP_CAP) : SDP_CAP;
     if (length == SDP_CAP || !type || strcmp(type, "offer")) fail(rtc, -40);
     else {
-        sdp_shape_log(sdp, length);
         lock(&rtc->data_gate);
         memcpy(rtc->sdp, sdp, length + 1);
         unlock(&rtc->data_gate);
@@ -291,6 +290,7 @@ static void gathering_callback(int pc, rtcGatheringState state, void *pointer)
     (void)pc;
     X4Rtc *rtc = enter(pointer);
     if (!rtc) return;
+    printf("XCloud4: RTC gathering state=%d\n", (int)state);
     if (state == RTC_GATHERING_COMPLETE) atomic_store(&rtc->gathering_done, true);
     leave(pointer);
 }
@@ -412,6 +412,7 @@ X4Rtc *x4_rtc_open(int *error)
     atomic_init(&rtc->state, X4_RTC_NEW);
     atomic_init(&rtc->error, 0);
     atomic_init(&rtc->gathering_done, false);
+    atomic_init(&rtc->offer_logged, false);
     atomic_init(&rtc->video_packets, 0);
     atomic_init(&rtc->audio_packets, 0);
     atomic_flag_clear(&rtc->data_gate);
@@ -491,12 +492,31 @@ void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user
 int x4_rtc_local_description(X4Rtc *rtc,char *sdp,size_t capacity)
 {
     if(!rtc||!sdp||!capacity)return -1;
+    sdp[0]=0;
     if(atomic_load(&rtc->error))return atomic_load(&rtc->error);
-    lock(&rtc->data_gate);
-    size_t size=strlen(rtc->sdp);
-    int rc=size?1:0;
-    if(size+1>capacity)rc=-1;else memcpy(sdp,rtc->sdp,size+1);
-    unlock(&rtc->data_gate);return rc;
+    /* The initial description callback precedes gathering and is only a
+     * snapshot. GreenVita gathers before creating its offer; use the current
+     * library description after gathering instead of that stale snapshot.
+     * The session worker owns this call, and its existing deadline bounds
+     * the pending return. No credentials or candidates are constructed here. */
+    if(!atomic_load(&rtc->gathering_done))return 0;
+    if(capacity>SDP_CAP)capacity=SDP_CAP;
+    int required=rtcGetLocalDescription(rtc->pc,NULL,0);
+    if(required==RTC_ERR_NOT_AVAIL)return 0;
+    if(required<1)return required<0?required:-40;
+    /* CAPI lengths include the NUL terminator. The library copies its
+     * description under its own mutex; no application callback lock is held. */
+    if((size_t)required>capacity)return RTC_ERR_TOO_SMALL;
+    char type[16]={0};
+    int rc=rtcGetLocalDescriptionType(rtc->pc,type,sizeof(type));
+    if(rc!=6||memcmp(type,"offer",6))return rc<0?rc:-40;
+    rc=rtcGetLocalDescription(rtc->pc,sdp,(int)capacity);
+    if(rc!=required||rc<1||(size_t)rc>capacity||sdp[rc-1]||strnlen(sdp,(size_t)rc)!=(size_t)rc-1) {
+        memset(sdp,0,capacity);
+        return rc<0?rc:-40;
+    }
+    if(!atomic_exchange(&rtc->offer_logged,true))sdp_shape_log(sdp,(size_t)rc-1);
+    return 1;
 }
 int x4_rtc_next_local_candidate(X4Rtc *rtc,char *candidate,size_t capacity,char *mid,size_t mid_capacity)
 {
