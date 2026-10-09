@@ -59,3 +59,7 @@ GreenVita `src/api_xbox/stream.rs` and session creation in `api.rs` describe `/v
 The Passport comparison additionally reviewed [Stratix MicrosoftAuthService](https://github.com/nafields/stratix/blob/59d804185192f0c0f618836aace9229b77ce48e4/Packages/XCloudAPI/Sources/XCloudAPI/Auth/MicrosoftAuthService.swift), revision `59d804185192f0c0f618836aace9229b77ce48e4`. This is protocol research, not incorporated Swift source.
 
 Transport library candidates, pins and local SDK evidence are in [WEBRTC_PS4.md](WEBRTC_PS4.md). Title search stays deferred in [MEJORAS_FUTURAS.md](MEJORAS_FUTURAS.md).
+
+## AJ GeForce NOW PS4
+
+The owner supplied [AJfiles/AJ-GeforceNow-PS4](https://github.com/AJfiles/AJ-GeforceNow-PS4/tree/87568ca50a89e6f8dd65fe005d21521c27e65c26), pinned at `87568ca50a89e6f8dd65fe005d21521c27e65c26`. The [scoped reference review](REFERENCE_REVIEW_AJ_GFN_PS4.md) compares the active libpeer backend, native audio/video and provider-specific negotiation. The author's reported PS4 Pro/9.00 performance was not reproduced on the owner's PS4. No application implementation was copied into XCloud4 in this review.

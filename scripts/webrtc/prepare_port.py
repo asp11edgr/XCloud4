@@ -293,7 +293,7 @@ write_changed(source, text)
 
 # First-offer diagnostics are fixed numeric stages only. Never print SDP,
 # ICE credentials, addresses, certificate bytes or exception messages.
-def checked_patch(source, replacements, marker):
+def checked_patch(source, replacements, marker, exact=False):
     text = source.read_text()
     if marker not in text:
         for original, replacement in replacements:
@@ -305,6 +305,8 @@ def checked_patch(source, replacements, marker):
     for original, replacement in replacements:
         if replacement not in text:
             raise SystemExit('Incomplete pinned diagnostic patch: ' + str(source) + ': ' + original)
+        if exact and text.count(replacement) != 1:
+            raise SystemExit('Ambiguous pinned diagnostic patch: ' + str(source) + ': ' + original)
     write_changed(source, text)
 
 source = base / 'libdatachannel/src/peerconnection.cpp'
@@ -578,5 +580,103 @@ checked_patch(source, [
      'void DtlsSrtpTransport::postHandshake() {\n\tif (mInitDone)\n\t\treturn;\n\tX4_SRTP_EVENT(85, 0);'),
     ('\tmInitDone = true;', '\tmInitDone = true;\n\tX4_SRTP_EVENT(85, 1);'),
 ], 'X4_SRTP_EVENT(85, 1);')
+
+# The SDK's libc++ __config undefines __FreeBSD__, whereas the userspace
+# SCTP C objects retain the detected HAVE_SCONN_LEN/HAVE_SA_LEN ABI. Select
+# that same public layout explicitly for this target, without changing any
+# other platform macro or socket option. The length byte is also required.
+source = base / 'libdatachannel/deps/usrsctp/usrsctplib/usrsctp.h'
+checked_patch(source, [
+    ('    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)\n'
+     'struct sockaddr_conn {',
+     '    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \\\n'
+     '    defined(X4_OPENORBIS)\nstruct sockaddr_conn {'),
+], '    defined(X4_OPENORBIS)\nstruct sockaddr_conn {', exact=True)
+
+source = base / 'libdatachannel/src/impl/sctptransport.cpp'
+sctp_diagnostic_header = (
+    '#include <exception>\n#ifdef X4_OPENORBIS\n#include <cstddef>\n#include <cerrno>\n'
+    'extern "C" void x4_native_rtc_diagnostic(int, int);\n'
+    'static_assert(sizeof(sockaddr_conn) == 16, "XCloud4 SCTP address size");\n'
+    'static_assert(offsetof(sockaddr_conn, sconn_len) == 0, "XCloud4 SCTP length offset");\n'
+    'static_assert(offsetof(sockaddr_conn, sconn_family) == 1, "XCloud4 SCTP family offset");\n'
+    'static_assert(offsetof(sockaddr_conn, sconn_port) == 2, "XCloud4 SCTP port offset");\n'
+    'static_assert(offsetof(sockaddr_conn, sconn_addr) == 8, "XCloud4 SCTP pointer offset");\n'
+    '#define X4_SCTP_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+    'static int x4_sctp_result(int step, int result) {\n'
+    '\tconst int saved_errno = errno;\n\tX4_SCTP_EVENT(91, step);\n'
+    '\tX4_SCTP_EVENT(92, result);\n\tX4_SCTP_EVENT(93, result ? saved_errno : 0);\n'
+    '\terrno = saved_errno;\n\treturn result;\n}\n'
+    '#define X4_SCTP_RESULT(step,expression) x4_sctp_result(step,expression)\n'
+    '#else\n#define X4_SCTP_EVENT(id,value) ((void)0)\n'
+    '#define X4_SCTP_RESULT(step,expression) (expression)\n#endif')
+sctp_operations = [
+    (2, 'usrsctp_set_non_blocking(mSock, 1)'),
+    (3, 'usrsctp_setsockopt(mSock, SOL_SOCKET, SO_LINGER, &sol, sizeof(sol))'),
+    (4, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_ENABLE_STREAM_RESET, &av, sizeof(av))'),
+    (5, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_RECVRCVINFO, &on, sizeof(on))'),
+    (9, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_NODELAY, &nodelay, sizeof(nodelay))'),
+    (10, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_PEER_ADDR_PARAMS, &spp, sizeof(spp))'),
+    (11, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_INITMSG, &sinit, sizeof(sinit))'),
+    (12, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_FRAGMENT_INTERLEAVE, &level, sizeof(level))'),
+    (13, 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_ACCEPT_ZERO_CHECKSUM, &edmid, sizeof(edmid))'),
+    (14, 'usrsctp_getsockopt(mSock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, &rcvBufLen)'),
+    (15, 'usrsctp_getsockopt(mSock, SOL_SOCKET, SO_SNDBUF, &sndBuf, &sndBufLen)'),
+    (16, 'usrsctp_setsockopt(mSock, SOL_SOCKET, SO_RCVBUF, &rcvBuf, sizeof(rcvBuf))'),
+    (17, 'usrsctp_setsockopt(mSock, SOL_SOCKET, SO_SNDBUF, &sndBuf, sizeof(sndBuf))'),
+    (20, 'usrsctp_bind(mSock, reinterpret_cast<struct sockaddr *>(&local), sizeof(local))'),
+]
+# Each SCTP_EVENT registration has the same call but a distinct preceding
+# event type. Match all three contexts independently, rather than replacing
+# an ambiguous expression or silently accepting a partial migration.
+sctp_replacements = [
+    ('#include <exception>', sctp_diagnostic_header),
+    ('\tmSock = usrsctp_socket(AF_CONN, SOCK_STREAM, IPPROTO_SCTP, nullptr, nullptr, 0, nullptr);',
+     '\tmSock = usrsctp_socket(AF_CONN, SOCK_STREAM, IPPROTO_SCTP, nullptr, nullptr, 0, nullptr);\n'
+     '#ifdef X4_OPENORBIS\n\t(void)X4_SCTP_RESULT(1, mSock ? 0 : -1);\n#endif'),
+    ('#ifdef HAVE_SCONN_LEN\n\tsconn.sconn_len = sizeof(sconn);',
+     '#if defined(HAVE_SCONN_LEN) || defined(X4_OPENORBIS)\n\tsconn.sconn_len = sizeof(sconn);'),
+    ('\tInstances->insert(this);\n}', '\tInstances->insert(this);\n\tX4_SCTP_EVENT(91, 18);\n}'),
+    ('void SctpTransport::start() {\n\tregisterIncoming();\n\tconnect();\n}',
+     'void SctpTransport::start() {\n\tX4_SCTP_EVENT(91, 19);\n'
+     '\tregisterIncoming();\n\tconnect();\n\tX4_SCTP_EVENT(91, 22);\n}'),
+    ('\tint ret = usrsctp_connect(mSock, reinterpret_cast<struct sockaddr *>(&remote), sizeof(remote));',
+     '\tint ret = X4_SCTP_RESULT(21, usrsctp_connect(mSock, reinterpret_cast<struct sockaddr *>(&remote), sizeof(remote)));'),
+]
+for step, expression in sctp_operations:
+    sctp_replacements.append(('if (' + expression + ')',
+                              'if (X4_SCTP_RESULT(' + str(step) + ', ' + expression + '))'))
+for step, event in ((6, 'SCTP_ASSOC_CHANGE'), (7, 'SCTP_SENDER_DRY_EVENT'),
+                    (8, 'SCTP_STREAM_RESET_EVENT')):
+    expression = 'usrsctp_setsockopt(mSock, IPPROTO_SCTP, SCTP_EVENT, &se, sizeof(se))'
+    prefix = '\tse.se_type = ' + event + ';\n'
+    sctp_replacements.append((prefix + '\tif (' + expression + ')',
+        prefix + '\tif (X4_SCTP_RESULT(' + str(step) + ', ' + expression + '))'))
+checked_patch(source, sctp_replacements, 'static int x4_sctp_result(int step, int result) {', exact=True)
+
+# Initialization exceptions can set PeerConnection::Failed directly before
+# any SCTP state callback. Preserve the original error/cleanup path and add
+# only fixed numeric stages and exception classes, never exception messages.
+source = base / 'libdatachannel/src/impl/peerconnection.cpp'
+checked_patch(source, [
+    ('#include <sstream>', '#include <sstream>\n#ifdef X4_OPENORBIS\n#include <cerrno>\n#endif'),
+    ('\t\tPLOG_VERBOSE << "Starting SCTP transport";',
+     '\t\tPLOG_VERBOSE << "Starting SCTP transport";\n\t\tX4_ICE_EXCEPTION_EVENT(94, 0);'),
+    ('\t\treturn emplaceTransport(this, &mSctpTransport, std::move(transport));',
+     '\t\tX4_ICE_EXCEPTION_EVENT(94, 1);\n'
+     '\t\tauto started = emplaceTransport(this, &mSctpTransport, std::move(transport));\n'
+     '\t\tX4_ICE_EXCEPTION_EVENT(94, started ? 2 : 3);\n\t\treturn started;'),
+    ('\t} catch (const std::exception &e) {\n\t\tPLOG_ERROR << e.what();\n'
+     '\t\tchangeState(State::Failed);\n\t\tthrow std::runtime_error("SCTP transport initialization failed");',
+     '\t} catch (const std::exception &e) {\n#ifdef X4_OPENORBIS\n'
+     '\t\tconst int sctp_init_errno = errno;\n'
+     '\t\tif (auto nativeSystem = dynamic_cast<const std::system_error *>(&e)) {\n'
+     '\t\t\tX4_ICE_EXCEPTION_EVENT(95, 2);\n'
+     '\t\t\tX4_ICE_EXCEPTION_EVENT(96, nativeSystem->code().value());\n'
+     '\t\t} else X4_ICE_EXCEPTION_EVENT(95, dynamic_cast<const std::runtime_error *>(&e) ? 3 : 4);\n'
+     '\t\tX4_ICE_EXCEPTION_EVENT(97, sctp_init_errno);\n\t\terrno = sctp_init_errno;\n#endif\n'
+     '\t\tPLOG_ERROR << e.what();\n\t\tchangeState(State::Failed);\n'
+     '\t\tthrow std::runtime_error("SCTP transport initialization failed");'),
+], 'X4_ICE_EXCEPTION_EVENT(95, 2);', exact=True)
 
 print('OpenOrbis dependency overlay prepared:', overlay)

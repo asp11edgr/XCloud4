@@ -93,6 +93,13 @@ void x4_native_rtc_diagnostic(int event,int value)
     case 88: label="juice failed candidate pair count"; break;
     case 89: label="juice failed remote candidate count"; break;
     case 90: label="juice failed STUN entry count"; break;
+    case 91: label="SCTP initialization step"; break;
+    case 92: label="SCTP operation result"; break;
+    case 93: label="SCTP operation errno"; break;
+    case 94: label="SCTP construction stage"; break;
+    case 95: label="SCTP initialization exception class"; break;
+    case 96: label="SCTP initialization exception code"; break;
+    case 97: label="SCTP initialization catch errno"; break;
     default: label="unknown event"; break;
     }
     printf("XCloud4: RTC native %s value=%d (0x%08x)\n",label,value,(unsigned)value);

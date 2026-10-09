@@ -6,14 +6,14 @@ Reviewed on **2026-10-09** at immutable commit **`87568ca50a89e6f8dd65fe005d2152
 
 | Area | AJ implementation | Relevance to XCloud4 |
 |---|---|---|
-| Native build | OpenOrbis; active application links libpeer-orbis, usrsctp, MbedTLS and libsrtp | Useful comparison of PS4 runtime and SCTP integration |
+| Native build | OpenOrbis/freebsd12-elf; libpeer-orbis selects internal SCTP, while libusrsctp remains in the link group | Useful PS4 runtime reference; does not validate XCloud4's usrsctp integration |
 | Signaling | NVIDIA WebSocket offer; client answer plus NVST SDP | Provider-specific protocol; XCloud4 submits a client offer through Xbox HTTP signaling |
 | Video | FFmpeg H.264 software decoding and native VideoOut presentation | Potential software fallback and presentation reference; XCloud4's local native decoder already works |
 | Audio | Opus, 48 kHz stereo S16, SceAudioOut MAIN, bounded PCM queue | Useful loss/concealment and worker-lifetime reference |
 | Input | NVIDIA data-channel packets with XInput-style buttons/axes | Controller representation reference; wire messages differ from Xbox |
 | Waiting queue | CloudMatch polling with cancel and a bounded wait | Useful UI pattern; states and requests remain specific to NVIDIA |
 
-The active library selection is established by [build linkage](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/scripts/build-ps4.ps1#L116) and [native CMake sources](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/ps4/CMakeLists.txt). A libdatachannel build helper also exists; that helper does not make it the active application backend.
+The active library selection is established by [build linkage](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/scripts/build-ps4.ps1#L116) and [native CMake sources](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/ps4/CMakeLists.txt). A libdatachannel build helper also exists; that helper does not make it the active application backend. Archive linkage alone does not identify the selected SCTP implementation.
 
 ## Concrete useful patterns
 
@@ -21,6 +21,12 @@ The active library selection is established by [build linkage](https://github.co
 - [Native audio setup and decoding](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/stream/audio/AudioPipeline_ps4.cpp#L61) uses an initial user with SYSTEM fallback and Opus loss concealment. XCloud4 retains its confirmed SYSTEM output path.
 - [VideoOut renderer](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/stream/PS4VideoOutRenderer.cpp#L745) bounds resolution and framebuffer changes; [FFmpeg integration](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/stream/ffmpeg/FFmpegVideoDecoder.cpp) supplies software decoding. Reported hardware-decoder failures on another console do not invalidate XCloud4's confirmed local decoding.
 - [MbedTLS timer compatibility](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/mbedtls_timing_compat.c#L22) uses a monotonic clock; [network worker](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/opennow/webrtc/session.cpp#L334) separates peer processing from presentation.
+
+## Native SCTP selection and connection state
+
+The [PS4 toolchain](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/cmake/orbis-ps4-x64.cmake#L13) targets **x86_64-pc-freebsd12-elf**. For that target, [libpeer CMake](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/third_party/libpeer-orbis/src/CMakeLists.txt#L18) explicitly sets **CONFIG_USE_USRSCTP=0**, selecting libpeer's internal SCTP implementation. The same file lists `libusrsctp.a` in its link group at line 36, and the application build also links that archive. Its presence does not establish that the PS4 data-channel path uses usrsctp.
+
+After a successful DTLS handshake, [peer_connection.c](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/src/third_party/libpeer-orbis/src/peer_connection.c#L651) calls `sctp_create_association` when data channels are configured. A nonzero result logs a creation failure at line 672, but execution still reaches **PEER_CONNECTION_COMPLETED** at line 678. Consequently, that state alone does not prove successful SCTP association creation or channel opening, and it cannot validate XCloud4's distinct usrsctp ABI integration. These are source-level observations, not results from running AJ on the owner's console.
 
 ## Provider-specific behavior
 
@@ -36,4 +42,4 @@ Actual Claude Code selected **claude-opus-5-5** and completed a read-only review
 
 The top-level [license](https://github.com/AJfiles/AJ-GeforceNow-PS4/blob/87568ca50a89e6f8dd65fe005d21521c27e65c26/LICENSE) is MIT. Bundled dependencies retain their individual licenses; this review does not classify every bundled source as MIT. No external application implementation was copied into XCloud4 as part of this review.
 
-The useful next step is comparing native SCTP/runtime integration and preserving known working media paths. A complete WebRTC backend replacement is not supported by the current evidence. This reference review is not a demonstrated fix for XCloud4's [0.7.17 failure](ERROR_REPORT_0.7.17.md).
+The useful next step is comparing PS4 runtime and internal SCTP behavior while preserving known working media paths. AJ's selected internal backend does not independently validate XCloud4's usrsctp integration. A complete WebRTC backend replacement is not supported by the current evidence. This reference review is not a demonstrated fix for XCloud4's [0.7.17 failure](ERROR_REPORT_0.7.17.md).
