@@ -15,7 +15,7 @@ La base 0.2.2 ya reproduce la muestra y cierra correctamente. La siguiente entre
 - HTTP y TLS con las bibliotecas nativas del SDK (`Http.h`, `Ssl.h`, `Net.h`); funciones resueltas al entrar, igual que en la muestra multimedia. Validación de certificados habilitada.
 - Solicitudes fuera del hilo de dibujo, con límites de tiempo y respuesta. El menú debe seguir aceptando el mando durante el acceso.
 - JSON con límites y comprobación de tipos; distinguir fallos de conexión, del protocolo y del servicio.
-- El identificador público de aplicación OAuth debe configurarse y comprobarse antes de pedir un código. No se ha elegido ni copiado el identificador de GreenVita.
+- El propietario registró XCloud4 y se incorporó su identificador público de aplicación OAuth. El portal confirma que permite cuentas personales y flujos de clientes públicos. Consulta `REGISTRO_MICROSOFT.md`. El identificador de GreenVita no se utiliza.
 - Tokens solo en memoria durante el primer hito; evitar imprimirlos o incluirlos en Git, paquetes o registros. Persistencia y renovación se diseñarán después.
 
 ## Fuentes revisadas
@@ -24,3 +24,9 @@ La base 0.2.2 ya reproduce la muestra y cierra correctamente. La siguiente entre
 - GreenVita, MPL-2.0, `src/api_xbox/auth.rs`, versión fijada en `REFERENCIAS.md`. Es una referencia de los intercambios Xbox; todavía no se ha adaptado su implementación.
 
 Este documento describe la siguiente implementación. No demuestra autenticación ni disponibilidad de juegos en la PS4.
+
+## Entrega 0.3.0
+
+Se añade CUENTA al menú. X solicita acceso por código, cuadrado comprueba HTTPS con los metadatos públicos de Microsoft y triángulo borra la sesión local. Entrar en la pantalla no solicita un código automáticamente. Círculo cancela una solicitud pendiente y vuelve al menú; OPTIONS espera su cancelación manteniendo la interfaz antes de solicitar la salida nativa confirmada en 0.2.2.
+
+El intercambio de credenciales Xbox y el catálogo aún no forman parte de esta entrega. Una cuenta autorizada solo significa que se obtuvo un token Microsoft para los permisos solicitados. No demuestra inicio de un juego ni acceso cloud. No se ejecutaron pruebas automatizadas; los resultados en consola se documentarán por separado.

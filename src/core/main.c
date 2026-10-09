@@ -14,7 +14,10 @@ int main(void)
     X4Screen screen = {0};
     X4DemoVideo video = {0};
     X4DemoAudio audio = {.handle = -1};
+    X4Auth *auth = x4_auth_create();
+    X4AuthSnapshot account = {0};
     int media_active = 0;
+    int closing = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
 reopen_interface:;
     int rc = x4_display_open(&display);
@@ -26,17 +29,31 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.2.2: inicio de interfaz, control y muestra multimedia\n");
-    for (unsigned frame = 0; !screen.exit_requested; ++frame) {
+    printf("XCloud4 0.3.0: interfaz, multimedia y acceso Microsoft\n");
+    for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
-        x4_screen_update(&screen, controller.pressed, controller.data.buttons);
+        int previous_page = screen.page;
+        if (!closing) x4_screen_update(&screen, controller.pressed, controller.data.buttons);
+        if (previous_page == 4 && screen.page != 4) x4_auth_cancel(auth);
         if (screen.exit_requested) {
-            screen.exit_error = x4_exit_prepare();
-            if (screen.exit_error < 0) {
-                printf("XCloud4: preparar salida fallo 0x%08x\n", (unsigned)screen.exit_error);
-                screen.exit_requested = 0;
-            } else break;
+            if (x4_auth_busy(auth)) {
+                x4_auth_cancel(auth);
+                closing = 1;
+            } else {
+                closing = 0;
+                screen.exit_error = x4_exit_prepare();
+                if (screen.exit_error < 0) {
+                    printf("XCloud4: preparar salida fallo 0x%08x\n", (unsigned)screen.exit_error);
+                    screen.exit_requested = 0;
+                } else break;
+            }
         }
+        if (!closing && screen.page == 4 && previous_page == 4) {
+            if (controller.pressed & ORBIS_PAD_BUTTON_CROSS) x4_auth_start(auth, X4_AUTH_SIGN_IN);
+            else if (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) x4_auth_start(auth, X4_AUTH_CHECK_CONNECTION);
+            else if (controller.pressed & ORBIS_PAD_BUTTON_TRIANGLE) x4_auth_forget(auth);
+        }
+        x4_auth_snapshot(auth, &account);
         if (screen.page != 3 && media_active) {
             x4_audio_stop(&audio);
             x4_video_stop(&video);
@@ -60,6 +77,8 @@ reopen_interface:;
         }
         x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
+        if (screen.page == 4 || closing)
+            x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         rc = x4_display_present(&display);
         if (rc < 0) {
@@ -67,6 +86,13 @@ reopen_interface:;
             break;
         }
     }
+    /* A display failure can break the loop early: cancel then join before
+     * cleaning the UI. Ordinary OPTIONS keeps rendering while it cancels. */
+    x4_auth_cancel(auth);
+    while (x4_auth_busy(auth)) sceKernelUsleep(100000);
+    printf("XCloud4: cerrar acceso Microsoft\n");
+    int auth_rc = x4_auth_close(auth);
+    if (auth_rc >= 0) auth = NULL;
     printf("XCloud4: cerrar audio\n");
     x4_audio_stop(&audio);
     printf("XCloud4: cerrar decoder\n");
@@ -89,6 +115,8 @@ reopen_interface:;
     screen.exit_requested = 0;
     screen.page = 0;
     media_active = 0;
+    closing = 0;
+    if (!auth) auth = x4_auth_create();
     sceKernelUsleep(250000);
     goto reopen_interface;
 }

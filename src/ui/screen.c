@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "canvas.h"
 #include <stdio.h>
+#include <string.h>
 static const uint32_t BG = 0xff1b1510, PANEL = 0xff30261c;
 static const uint32_t WHITE = 0xfff5f1eb, MUTED = 0xffb6a899, GREEN = 0xff72d86e;
 void x4_screen_update(X4Screen *s, uint32_t pressed, uint32_t held)
@@ -11,8 +12,8 @@ void x4_screen_update(X4Screen *s, uint32_t pressed, uint32_t held)
         s->page = 0; return;
     }
     if (s->page == 0) {
-        if (pressed & (ORBIS_PAD_BUTTON_LEFT | ORBIS_PAD_BUTTON_UP)) s->selected = (s->selected + 2) % 3;
-        if (pressed & (ORBIS_PAD_BUTTON_RIGHT | ORBIS_PAD_BUTTON_DOWN)) s->selected = (s->selected + 1) % 3;
+        if (pressed & (ORBIS_PAD_BUTTON_LEFT | ORBIS_PAD_BUTTON_UP)) s->selected = (s->selected + 3) % 4;
+        if (pressed & (ORBIS_PAD_BUTTON_RIGHT | ORBIS_PAD_BUTTON_DOWN)) s->selected = (s->selected + 1) % 4;
         if (pressed & ORBIS_PAD_BUTTON_CROSS) s->page = s->selected + 1;
     }
 }
@@ -21,7 +22,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.2.2", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.3.0", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -34,14 +35,14 @@ static void home(uint32_t *p, const X4Screen *s)
 {
     x4_text(p, 84, 267, 5, "TU PUNTO DE PARTIDA", WHITE);
     x4_text(p, 84, 332, 3, "EL PROYECTO AVANZA EN TU CONSOLA", MUTED);
-    const char *titles[] = {"CONTROL", "PROYECTO", "IMAGEN Y SONIDO"};
-    const char *descriptions[] = {"BOTONES, PALANCAS\nY GATILLOS.", "ESTADO Y SIGUIENTES\nETAPAS DEL PROYECTO.", "UN VIDEO LOCAL\nY TONOS EN ESTEREO."};
-    for (int i = 0; i < 3; ++i) {
-        int x = 84 + i * 596;
-        x4_rect(p, x, 441, 560, 326, PANEL);
-        x4_rect(p, x, 441, 560, 6, s->selected == i ? GREEN : PANEL);
+    const char *titles[] = {"CONTROL", "PROYECTO", "IMAGEN Y\nSONIDO", "CUENTA"};
+    const char *descriptions[] = {"BOTONES, PALANCAS\nY GATILLOS.", "ESTADO Y SIGUIENTES\nETAPAS DEL PROYECTO.", "UN VIDEO LOCAL\nY TONOS EN ESTEREO.", "ACCESO A MICROSOFT\nCON UN CODIGO."};
+    for (int i = 0; i < 4; ++i) {
+        int x = 84 + i * 446;
+        x4_rect(p, x, 441, 414, 326, PANEL);
+        x4_rect(p, x, 441, 414, 6, s->selected == i ? GREEN : PANEL);
         x4_text(p, x + 28, 493, 4, titles[i], WHITE);
-        x4_text(p, x + 28, 569, 3, descriptions[i], MUTED);
+        x4_text(p, x + 28, 590, 3, descriptions[i], MUTED);
         x4_text(p, x + 28, 699, 3, s->selected == i ? "X  ABRIR" : "", GREEN);
     }
     x4_text(p, 84, 833, 3, "XBOX CLOUD GAMING AUN NO ESTA CONECTADO.", MUTED);
@@ -102,7 +103,7 @@ void x4_screen_draw(const X4Screen *s, const X4Controller *c, uint32_t *p)
     header(p, c);
     if (s->page == 1) controller_page(p, c);
     else if (s->page == 2) project_page(p);
-    else if (s->page != 3) home(p, s);
+    else if (s->page == 0) home(p, s);
 }
 
 void x4_media_draw(const X4DemoVideo *v, const X4DemoAudio *a, uint32_t *p)
@@ -138,4 +139,48 @@ void x4_exit_error_draw(int error, uint32_t *p)
     snprintf(message, sizeof(message), "NO SE PUDO SALIR: 0X%08X. OPTIONS PARA REINTENTAR.", (unsigned)error);
     x4_rect(p, 84, 999, 1752, 54, PANEL);
     x4_text(p, 100, 1015, 3, message, WHITE);
+}
+
+void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
+{
+    x4_text(p, 84, 267, 5, "TU CUENTA MICROSOFT", WHITE);
+    x4_text(p, 84, 332, 3, "AUTORIZA XCLOUD4 DESDE TU TELEFONO O PC.", MUTED);
+    x4_rect(p, 84, 400, 1752, 424, PANEL);
+    if (closing) {
+        x4_text(p, 126, 452, 4, "CERRANDO LA CONEXION...", WHITE);
+        x4_text(p, 126, 530, 3, "ESPERA UNOS SEGUNDOS PARA VOLVER AL INICIO DE PS4.", MUTED);
+    } else if (a->state == X4_AUTH_WAITING) {
+        x4_text(p, 126, 443, 3, "INTRODUCE ESTE CODIGO EN MICROSOFT:", WHITE);
+        x4_text(p, 126, 493, strlen(a->user_code) <= 16 ? 8 : 4, a->user_code, GREEN);
+        x4_text_literal(p, 126, 593, 3, a->verification_uri, WHITE);
+        char left[64];
+        snprintf(left, sizeof(left), "CADUCA EN %u:%02u", a->seconds_left / 60, a->seconds_left % 60);
+        x4_text(p, 126, 661, 3, left, MUTED);
+        x4_text(p, 126, 734, 3, "CIRCULO CANCELA EL ACCESO Y VUELVE AL MENU.", MUTED);
+    } else {
+        const char *title = "LISTO PARA INICIAR SESION";
+        switch (a->state) {
+        case X4_AUTH_CONNECTING: title = "CONECTANDO CON MICROSOFT..."; break;
+        case X4_AUTH_CONNECTED: title = "CONEXION A MICROSOFT CORRECTA"; break;
+        case X4_AUTH_AUTHORIZED: title = "CUENTA MICROSOFT AUTORIZADA"; break;
+        case X4_AUTH_CANCELLED: title = "ACCESO CANCELADO"; break;
+        case X4_AUTH_EXPIRED: title = "EL ACCESO HA CADUCADO"; break;
+        case X4_AUTH_DENIED: title = "ACCESO RECHAZADO"; break;
+        case X4_AUTH_ERROR: title = "NO SE PUDO COMPLETAR EL ACCESO"; break;
+        default: break;
+        }
+        x4_text(p, 126, 452, 4, title, a->state == X4_AUTH_ERROR ? WHITE : GREEN);
+        x4_text(p, 126, 531, 3, a->stage, MUTED);
+        if (a->state == X4_AUTH_AUTHORIZED)
+            x4_text(p, 126, 601, 3, "LA CUENTA ESTA EN ESTA SESION DE LA APP.\nEL CATALOGO Y LOS JUEGOS SIGUEN EN PREPARACION.", WHITE);
+        else if (!busy)
+            x4_text(p, 126, 601, 3, "X SOLICITA UN CODIGO. CUADRADO REVISA LA CONEXION.\nTU CONTRASENA SE INTRODUCE EN LA PAGINA DE MICROSOFT.", WHITE);
+        if (a->error || a->http_status >= 400) {
+            char error[72];
+            snprintf(error, sizeof(error), "DETALLE 0X%08X    HTTP %d", (unsigned)a->error, a->http_status);
+            x4_text(p, 126, 742, 3, error, MUTED);
+        }
+    }
+    x4_text(p, 84, 853, 2, "X INICIAR   CUADRADO CONEXION   TRIANGULO BORRAR SESION   CIRCULO VOLVER   OPTIONS SALIR", WHITE);
+    x4_text(p, 84, 899, 2, "APLICACION REGISTRADA: XCLOUD4. EL ACCESO A XBOX AUN ESTA EN PREPARACION.", MUTED);
 }

@@ -27,3 +27,11 @@ El proyecto expone decodificación H.264 con `libSceVideodec2`, presentación y 
 ## Código utilizado hasta ahora
 
 Los tres proyectos anteriores se usan como referencias de investigación; aún no se ha incorporado su código. La versión 0.1.0 adapta las secuencias de inicialización pública de VideoOut y Pad de OpenOrbis y añade pantallas, renderizado e icono propios bajo GPL-3.0-only.
+## Contratos de red para 0.3.0
+
+Se consultaron las declaraciones de Http/Net/Ssl del SDK OpenOrbis v0.5.4 y ejemplos públicos para completar firmas sin tipos. La implementación de transporte y del flujo OAuth es propia de XCloud4; no se copió la implementación de los proyectos siguientes.
+
+- `sceSslTerm(ctx)` y `sceNetPoolDestroy(id)` con retorno entero: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/http.c y https://github.com/flatz/ps4_remote_pkg_installer/blob/master/net.c.
+- Firmas de `sceHttpSetRecvTimeOut(id, usec)` y `sceHttpSetAutoRedirect(id, enabled)`, y opciones TLS: https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.cpp y https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.h.
+
+Las declaraciones ayudan a preparar la ABI; su uso real debe confirmarse en PS4 12.00. Los resultados de consola se registran en JORNADA.md.

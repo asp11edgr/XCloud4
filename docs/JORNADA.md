@@ -68,6 +68,16 @@ El propietario instaló la 0.2.2 y confirmó: "si ya funciono correctamente" al 
 
 Klog registra `recursos cerrados`, `solicitar salida al menu PS4`, `Kill for LoadExec(0x5a)` y `Kill for LoadExec(0x5a) => 0` para el proceso 90. Esto confirma la solicitud de cierre de la nueva versión y coincide con el resultado visual informado por el propietario.
 
+## Registro Microsoft y preparación 0.3.0
+
+El propietario pidió continuar usando Claude y preparar el registro propio, con GreenVita como alternativa temporal si no se obtenía. En Microsoft Entra se cambió al directorio de su cuenta personal, se preparó XCloud4 para cuentas personales y el propietario autorizó pulsar Registrar, que acepta las directivas de Microsoft. El portal entregó el identificador público `f9ac8684-1032-4131-bb47-d2f58da9bb93`. Se guardó Permitir flujos de clientes públicos habilitado. No se creó un secreto, no se concedió consentimiento administrativo y no se usa el identificador de GreenVita.
+
+Claude Code Pro con `claude-opus-5-5` escribió la capa HTTPS nativa y el trabajador de OAuth por dispositivo en dos encargos separados, con edición limitada a esos archivos. Codex integró CUENTA, el lector JSON acotado, el registro propio, la carga de módulos y la cancelación antes de salir. Se revisaron las entradas retenidas por solicitudes HTTP y la carrera de cancelación al finalizar el trabajador. Audio y decodificación conservan las fuentes confirmadas en 0.2.2. La conexión y autorización desde la PS4 todavía están pendientes.
+
+En una tercera revisión de la integración, Claude no encontró defectos graves y señaló el tamaño del argumento de `sceHttpReadData`. Se confirmó la declaración de 64 bits y se ajustó a `size_t`. Se compiló y empaquetó la versión final en Lubuntu sin errores ni avisos. No se añadieron ni ejecutaron pruebas automatizadas.
+
+`XCloud4-0.3.0.pkg`: 6619136 bytes. SHA-256: `13d826e4b2e682f4ec40aeeaec0ecf4fc9b39b4d577ff08aff86416cd7485859`. Se copió a `/data/pkg/XCloud4-0.3.0.pkg`; la huella del archivo recuperado por FTP coincide. Se inició captura Klog para que el propietario instale, abra CUENTA y compruebe conexión antes del acceso por código. Resultados de esta versión en consola pendientes.
+
 ## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

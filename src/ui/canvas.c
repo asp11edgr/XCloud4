@@ -2,6 +2,19 @@
 #include "canvas.h"
 /* Original 5x7 uppercase bitmap alphabet; no external font asset required. */
 static const struct { char c; uint8_t rows[7]; } glyphs[] = {
+    {'a',{0,0,14,1,15,17,15}}, {'b',{16,16,30,17,17,17,30}},
+    {'c',{0,0,14,16,16,17,14}}, {'d',{1,1,15,17,17,17,15}},
+    {'e',{0,0,14,17,31,16,14}}, {'f',{6,8,8,28,8,8,8}},
+    {'g',{0,15,17,17,15,1,14}}, {'h',{16,16,30,17,17,17,17}},
+    {'i',{4,0,12,4,4,4,14}}, {'j',{2,0,6,2,2,18,12}},
+    {'k',{16,16,18,20,24,20,18}}, {'l',{12,4,4,4,4,4,14}},
+    {'m',{0,0,26,21,21,21,21}}, {'n',{0,0,30,17,17,17,17}},
+    {'o',{0,0,14,17,17,17,14}}, {'p',{0,30,17,17,30,16,16}},
+    {'q',{0,15,17,17,15,1,1}}, {'r',{0,0,22,25,16,16,16}},
+    {'s',{0,0,15,16,14,1,30}}, {'t',{8,8,28,8,8,9,6}},
+    {'u',{0,0,17,17,17,19,13}}, {'v',{0,0,17,17,17,10,4}},
+    {'w',{0,0,17,17,21,21,10}}, {'x',{0,0,17,10,4,10,17}},
+    {'y',{0,17,17,17,15,1,14}}, {'z',{0,0,31,2,4,8,31}},
     {'A',{14,17,17,31,17,17,17}}, {'B',{30,17,17,30,17,17,30}},
     {'C',{14,17,16,16,16,17,14}}, {'D',{30,17,17,17,17,17,30}},
     {'E',{31,16,16,30,16,16,31}}, {'F',{31,16,16,30,16,16,16}},
@@ -37,14 +50,14 @@ void x4_rect(uint32_t *p, int x, int y, int w, int h, uint32_t color)
     for (int row = y; row < bottom; ++row)
         for (int col = x; col < right; ++col) p[row * X4_WIDTH + col] = color;
 }
-void x4_text(uint32_t *p, int x, int y, int scale, const char *text, uint32_t color)
+static void draw_text(uint32_t *p, int x, int y, int scale, const char *text, uint32_t color, int literal)
 {
     const int origin = x;
     if (scale < 1) return;
     for (; *text; ++text) {
         char c = *text;
         if (c == '\n') { x = origin; y += 10 * scale; continue; }
-        if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
+        if (!literal && c >= 'a' && c <= 'z') c -= 'a' - 'A';
         const uint8_t *rows = NULL;
         for (unsigned i = 0; i < sizeof(glyphs) / sizeof(glyphs[0]); ++i)
             if (glyphs[i].c == c) { rows = glyphs[i].rows; break; }
@@ -56,3 +69,7 @@ void x4_text(uint32_t *p, int x, int y, int scale, const char *text, uint32_t co
         x += 6 * scale;
     }
 }
+void x4_text(uint32_t *p, int x, int y, int scale, const char *text, uint32_t color)
+{ draw_text(p, x, y, scale, text, color, 0); }
+void x4_text_literal(uint32_t *p, int x, int y, int scale, const char *text, uint32_t color)
+{ draw_text(p, x, y, scale, text, color, 1); }

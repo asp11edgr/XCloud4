@@ -24,6 +24,12 @@ La salida de audio MAIN usa el usuario SYSTEM (0xFF), siguiendo el ejemplo públ
 
 OPTIONS prepara la solicitud de salida mediante SystemService antes de cerrar recursos. Después solicita `sceSystemServiceLoadExec("exit", NULL)` y espera que la consola retire el proceso, evitando regresar a la ruta `_exit` que falló. Una solicitud rechazada permite reintentar desde la interfaz. Audio y video conservan sus implementaciones confirmadas. El propietario confirmó que la 0.2.2 regresa al inicio sin el error: esta es la nueva base funcional.
 
+## Acceso Microsoft — 0.3.0
+
+Se prepara la pantalla CUENTA con conexión HTTPS y acceso por código. Usa el registro **XCloud4** creado por el propietario, para cuentas personales y con flujos de cliente público habilitados. X solicita un código, cuadrado comprueba la conexión, triángulo elimina la sesión local y círculo cancela/vuelve. Los tokens quedan en memoria durante esta ejecución y se borran al cerrar. La muestra y salida nativa conservan la base confirmada 0.2.2.
+
+Conexión y autorización de esta entrega pendientes de comprobar en la PS4. Credenciales de Xbox, catálogo y sesión de juego aún no están implementados. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
+
 ## Etapas
 
 1. Preparar OpenOrbis y las herramientas de compilación; generar una aplicación mínima propia.
