@@ -12,9 +12,11 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development checkpoint: 0.7.15
+## Development checkpoint: 0.7.16
 
 The owner resumed development after the 0.7.14 pause and authorized three changes together: omit undefined receiving-track SSRC declarations, create audio MID 0 before video MID 1 as PSBox does, and expand valid Teredo candidates into IPv4 UDP routes. The full 0.7.15 package, focused Claude review and matching source integrity are confirmed. **Two console attempts now apply a valid Xbox SDP answer**, then RTC fails with no media and cleanup succeeds. An uncaught `condition_variable timed_wait failed` exception subsequently closes the application with CE-34878-0. See [0.7.15 scope and evidence](docs/RELEASE_NOTES_0.7.15.md). The preserved 0.7.14 refusal remains historical evidence; combining the new changes limits attribution.
+
+The 0.7.16 checkpoint rebuilds the complete LLVM 11 condition-variable object with native headers, correcting the linked timeout comparison from 110 to 60. The full build, focused Claude review, explicit object selection and native constant are confirmed; the package has been copied and hash-verified on PS4 for the owner to install. It also records a fixed numeric IPv6 rejection reason. **Console stability, ICE connection and game media remain unconfirmed in this version.** See [0.7.16 source and evidence](docs/RELEASE_NOTES_0.7.16.md).
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -110,7 +112,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.15 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.15.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The 0.7.16 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.16.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

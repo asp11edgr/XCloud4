@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.15\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.16\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1914,10 +1914,30 @@ done:
     return valid;
 }
 
+/* Fixed numeric diagnostics describe the validation that discarded a
+ * candidate, without disclosing its contents or inferring an RTC cause. */
+enum SignalTeredoReason {
+    SIGNAL_TEREDO_ACCEPTED = 0,
+    SIGNAL_TEREDO_MISSING_FIELDS = 1,
+    SIGNAL_TEREDO_FOUNDATION = 2,
+    SIGNAL_TEREDO_COMPONENT_NUMBER = 3,
+    SIGNAL_TEREDO_COMPONENT_UNSUPPORTED = 4,
+    SIGNAL_TEREDO_TRANSPORT = 5,
+    SIGNAL_TEREDO_PRIORITY = 6,
+    SIGNAL_TEREDO_OUTER_PORT = 7,
+    SIGNAL_TEREDO_TYPE_MARKER = 8,
+    SIGNAL_TEREDO_TYPE = 9,
+    SIGNAL_TEREDO_EXTENSION_PAIR = 10,
+    SIGNAL_TEREDO_IPV6_GRAMMAR = 11,
+    SIGNAL_TEREDO_PREFIX = 12,
+    SIGNAL_TEREDO_DECODED_PORT = 13,
+    SIGNAL_TEREDO_IPV4_FILTER = 14
+};
+
 /* Original bounded implementation of the Teredo address layout used by
  * PSBox ef22c57: 2001:0000::/32, inverted port bytes10..11 and IPv4 bytes12..15.
  * Only valid UDP component1 candidates are expanded for the IPv4-only peer. */
-static bool signal_candidate_teredo(const char *candidate, uint8_t ipv4[4], uint16_t *port)
+static bool signal_candidate_teredo(const char *candidate, uint8_t ipv4[4], uint16_t *port, unsigned *reason)
 {
     SignalCandidateWord fields[8], name, value;
     uint8_t bytes[16] = {0};
@@ -1926,32 +1946,48 @@ static bool signal_candidate_teredo(const char *candidate, uint8_t ipv4[4], uint
     const char *cursor = candidate;
     memset(ipv4, 0, 4);
     *port = 0;
+    *reason = SIGNAL_TEREDO_MISSING_FIELDS;
     for (unsigned i = 0; i < 8; ++i) if (!signal_candidate_word(&cursor, &fields[i])) goto done;
+    *reason = SIGNAL_TEREDO_FOUNDATION;
     if (fields[0].length <= 10 || fields[0].length > 42 ||
         memcmp(fields[0].data, "candidate:", 10)) goto done;
     for (size_t i = 10; i < fields[0].length; ++i) {
         unsigned char c = (unsigned char)fields[0].data[i];
         if (!alphanumeric(c) && c != '+' && c != '/') goto done;
     }
-    if (!signal_candidate_number(fields[1], 256, &component) || component != 1 ||
-        fields[2].length != 3 || signal_message_lower((unsigned char)fields[2].data[0]) != 'u' ||
+    *reason = SIGNAL_TEREDO_COMPONENT_NUMBER;
+    if (!signal_candidate_number(fields[1], 256, &component)) goto done;
+    *reason = SIGNAL_TEREDO_COMPONENT_UNSUPPORTED;
+    if (component != 1) goto done;
+    *reason = SIGNAL_TEREDO_TRANSPORT;
+    if (fields[2].length != 3 || signal_message_lower((unsigned char)fields[2].data[0]) != 'u' ||
         signal_message_lower((unsigned char)fields[2].data[1]) != 'd' ||
-        signal_message_lower((unsigned char)fields[2].data[2]) != 'p' ||
-        !signal_candidate_number(fields[3], UINT32_MAX, &priority) || !priority ||
-        !signal_candidate_number(fields[5], UINT16_MAX, &outer_port) || !outer_port ||
-        !signal_candidate_literal(fields[6], "typ") ||
-        !(signal_candidate_literal(fields[7], "host") || signal_candidate_literal(fields[7], "srflx") ||
+        signal_message_lower((unsigned char)fields[2].data[2]) != 'p') goto done;
+    *reason = SIGNAL_TEREDO_PRIORITY;
+    if (!signal_candidate_number(fields[3], UINT32_MAX, &priority) || !priority) goto done;
+    *reason = SIGNAL_TEREDO_OUTER_PORT;
+    if (!signal_candidate_number(fields[5], UINT16_MAX, &outer_port) || !outer_port) goto done;
+    *reason = SIGNAL_TEREDO_TYPE_MARKER;
+    if (!signal_candidate_literal(fields[6], "typ")) goto done;
+    *reason = SIGNAL_TEREDO_TYPE;
+    if (!(signal_candidate_literal(fields[7], "host") || signal_candidate_literal(fields[7], "srflx") ||
           signal_candidate_literal(fields[7], "prflx") || signal_candidate_literal(fields[7], "relay"))) goto done;
     /* ICE extensions are name/value pairs, not extra unpaired fields. */
+    *reason = SIGNAL_TEREDO_EXTENSION_PAIR;
     while (signal_candidate_word(&cursor, &name)) if (!signal_candidate_word(&cursor, &value)) goto done;
-    if (!signal_candidate_ipv6(fields[4], bytes) ||
-        bytes[0] != 0x20 || bytes[1] != 0x01 || bytes[2] || bytes[3]) goto done;
+    *reason = SIGNAL_TEREDO_IPV6_GRAMMAR;
+    if (!signal_candidate_ipv6(fields[4], bytes)) goto done;
+    *reason = SIGNAL_TEREDO_PREFIX;
+    if (bytes[0] != 0x20 || bytes[1] != 0x01 || bytes[2] || bytes[3]) goto done;
     *port = (uint16_t)(((uint16_t)bytes[10] << 8 | bytes[11]) ^ UINT16_MAX);
+    *reason = SIGNAL_TEREDO_DECODED_PORT;
     if (!*port) goto done;
     for (unsigned i = 0; i < 4; ++i) ipv4[i] = (uint8_t)(bytes[12 + i] ^ 0xff);
     /* Never turn unusable, loopback, multicast or reserved IPv4 into routes. */
+    *reason = SIGNAL_TEREDO_IPV4_FILTER;
     if (!ipv4[0] || ipv4[0] == 127 || ipv4[0] >= 224) goto done;
     valid = true;
+    *reason = SIGNAL_TEREDO_ACCEPTED;
 done:
     x4_secure_clear(bytes, sizeof(bytes));
     x4_secure_clear(fields, sizeof(fields));
@@ -1983,6 +2019,7 @@ static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
     X4JsonSpan object = item, value;
     uint8_t ipv4[4] = {0};
     uint16_t port = 0;
+    unsigned teredo_reason = SIGNAL_TEREDO_ACCEPTED;
     bool ipv6 = false, valid = true;
     if (x4_json_type(item) == X4_JSON_T_STRING) {
         if (!signal_decode(item, w->candidate_object, sizeof(w->candidate_object), true) ||
@@ -2003,8 +2040,8 @@ static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
         if (x4_json_uint32(value, &index) || index > 64) goto malformed;
     }
     if (!ipv6) { valid = signal_remote_add(w, end); goto done; }
-    if (!signal_candidate_teredo(w->candidate, ipv4, &port)) {
-        printf("XCloud4: ICE remoto IPv6 clase=1 derivados=0 nuevos=0\n");
+    if (!signal_candidate_teredo(w->candidate, ipv4, &port, &teredo_reason)) {
+        printf("XCloud4: ICE remoto IPv6 clase=1 razon=%u derivados=0 nuevos=0\n", teredo_reason);
         goto done;
     }
     unsigned before = w->remote_candidates;
