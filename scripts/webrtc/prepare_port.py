@@ -245,4 +245,147 @@ for marker in ('::x4_native_rtc_diagnostic(19, int(mWorkers.size()));',
     if marker not in text:
         raise SystemExit('ThreadPool worker diagnostic was not applied: ' + marker)
 write_changed(source, text)
+
+# First-offer diagnostics are fixed numeric stages only. Never print SDP,
+# ICE credentials, addresses, certificate bytes or exception messages.
+def checked_patch(source, replacements, marker):
+    text = source.read_text()
+    if marker not in text:
+        for original, replacement in replacements:
+            if text.count(original) != 1:
+                raise SystemExit('Unexpected pinned offer implementation: ' + str(source) + ': ' + original)
+            text = text.replace(original, replacement, 1)
+    if marker not in text:
+        raise SystemExit('Offer diagnostic was not applied: ' + str(source))
+    for original, replacement in replacements:
+        if replacement not in text:
+            raise SystemExit('Incomplete pinned diagnostic patch: ' + str(source) + ': ' + original)
+    write_changed(source, text)
+
+source = base / 'libdatachannel/src/peerconnection.cpp'
+checked_patch(source, [
+    ('namespace rtc {', '#ifdef X4_OPENORBIS\nextern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_OFFER_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_OFFER_EVENT(id,value) ((void)0)\n#endif\n\nnamespace rtc {'),
+    ('\tauto iceTransport = impl()->initIceTransport();\n\tif (!iceTransport)\n\t\treturn; // closed\n\n\tif (init.iceUfrag',
+     '\tX4_OFFER_EVENT(20, 0);\n\tauto iceTransport = impl()->initIceTransport();\n\tX4_OFFER_EVENT(21, 0);\n'
+     '\tif (!iceTransport)\n\t\treturn; // closed\n\n\tif (init.iceUfrag'),
+    ('\tDescription local = iceTransport->getLocalDescription(type);',
+     '\tDescription local = iceTransport->getLocalDescription(type);\n\tX4_OFFER_EVENT(22, 0);'),
+    ('\timpl()->populateLocalDescription(local);',
+     '\timpl()->populateLocalDescription(local);\n\tX4_OFFER_EVENT(23, local.mediaCount());'),
+    ('\timpl()->processLocalDescription(std::move(local));',
+     '\timpl()->processLocalDescription(std::move(local));\n\tX4_OFFER_EVENT(24, 0);'),
+    ('\t\ticeTransport->gatherLocalCandidates(impl()->localBundleMid());',
+     '\t\tX4_OFFER_EVENT(25, 0);\n\t\ticeTransport->gatherLocalCandidates(impl()->localBundleMid());\n\t\tX4_OFFER_EVENT(26, 0);'),
+], 'X4_OFFER_EVENT(26, 0);')
+
+source = base / 'libdatachannel/src/impl/icetransport.cpp'
+checked_patch(source, [
+    ('namespace rtc::impl {', '#ifdef X4_OPENORBIS\nextern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_ICE_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_ICE_EVENT(id,value) ((void)0)\n#endif\n\nnamespace rtc::impl {'),
+    ('\tmAgent = decltype(mAgent)(juice_create(&jconfig), juice_destroy);',
+     '\tX4_ICE_EVENT(30, 0);\n\tmAgent = decltype(mAgent)(juice_create(&jconfig), juice_destroy);\n\tX4_ICE_EVENT(31, mAgent ? 0 : -1);'),
+    ('\tif (juice_get_local_description(mAgent.get(), sdp, JUICE_MAX_SDP_STRING_LEN) < 0)',
+     '\tconst int localResult = juice_get_local_description(mAgent.get(), sdp, JUICE_MAX_SDP_STRING_LEN);\n'
+     '\tX4_ICE_EVENT(32, localResult);\n\tif (localResult < 0)'),
+    ('\tif (juice_gather_candidates(mAgent.get()) < 0) {',
+     '\tconst int gatherResult = juice_gather_candidates(mAgent.get());\n'
+     '\tX4_ICE_EVENT(33, gatherResult);\n\tif (gatherResult < 0) {'),
+], 'X4_ICE_EVENT(33, gatherResult);')
+
+source = base / 'libdatachannel/src/impl/peerconnection.cpp'
+checked_patch(source, [
+    ('namespace rtc::impl {', '#include <system_error>\n#ifdef X4_OPENORBIS\n'
+     'extern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_ICE_EXCEPTION_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_ICE_EXCEPTION_EVENT(id,value) ((void)0)\n#endif\n\nnamespace rtc::impl {'),
+    ('\t} catch (const std::exception &e) {\n\t\tPLOG_ERROR << e.what();\n\t\tchangeState(State::Failed);\n'
+     '\t\tthrow std::runtime_error("ICE transport initialization failed");',
+     '\t} catch (const std::exception &e) {\n'
+     '\t\tif (auto nativeSystem = dynamic_cast<const std::system_error *>(&e)) {\n'
+     '\t\t\tX4_ICE_EXCEPTION_EVENT(2, nativeSystem->code().value());\n\t\t\tX4_ICE_EXCEPTION_EVENT(35, 2);\n'
+     '\t\t} else X4_ICE_EXCEPTION_EVENT(35, dynamic_cast<const std::runtime_error *>(&e) ? 3 : 4);\n'
+     '\t\tPLOG_ERROR << e.what();\n\t\tchangeState(State::Failed);\n'
+     '\t\tthrow std::runtime_error("ICE transport initialization failed");'),
+], 'X4_ICE_EXCEPTION_EVENT(35, 2);')
+
+source = base / 'libdatachannel/src/impl/certificate.cpp'
+checked_patch(source, [
+    ('namespace rtc::impl {', '#ifdef X4_OPENORBIS\nextern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_CERT_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_CERT_EVENT(id,value) ((void)0)\n#endif\n\nnamespace rtc::impl {'),
+    ('\tPLOG_DEBUG << "Generating certificate (MbedTLS)";',
+     '\tPLOG_DEBUG << "Generating certificate (MbedTLS)";\n\tX4_CERT_EVENT(40, 0);'),
+    ('\t\tauto now = std::chrono::system_clock::now();',
+     '\t\tX4_CERT_EVENT(41, 0);\n\t\tauto now = std::chrono::system_clock::now();'),
+    ('\t\tstring notAfter = mbedtls::format_time(now + std::chrono::hours(24 * 365));',
+     '\t\tstring notAfter = mbedtls::format_time(now + std::chrono::hours(24 * 365));\n\t\tX4_CERT_EVENT(42, 0);'),
+    ('\t\tstd::string name = std::string("O=" + commonName + ",CN=" + commonName);',
+     '\t\tX4_CERT_EVENT(43, 0);\n\t\tstd::string name = std::string("O=" + commonName + ",CN=" + commonName);'),
+    ('\t\tif (certificateLen <= 0) {', '\t\tX4_CERT_EVENT(44, int(certificateLen));\n\t\tif (certificateLen <= 0) {'),
+    ('\treturn Certificate(std::move(crt), std::move(pk));\n}\n\nstd::tuple<shared_ptr<mbedtls_x509_crt>',
+     '\tX4_CERT_EVENT(45, 0);\n\treturn Certificate(std::move(crt), std::move(pk));\n}\n\nstd::tuple<shared_ptr<mbedtls_x509_crt>'),
+], 'X4_CERT_EVENT(44, int(certificateLen));')
+
+source = base / 'libdatachannel/src/impl/tls.cpp'
+checked_patch(source, [
+    ('\tif (my_gmtime(t, &g) != 0)\n\t\treturn 0;\n\n\treturn ::strftime(buf, size, format, &g);',
+     '\tconst int timeResult = my_gmtime(t, &g);\n#ifdef X4_OPENORBIS\n'
+     '\tx4_native_rtc_diagnostic(48, timeResult);\n#endif\n\tif (timeResult != 0)\n\t\treturn 0;\n\n'
+     '\tconst size_t formattedSize = ::strftime(buf, size, format, &g);\n#ifdef X4_OPENORBIS\n'
+     '\tx4_native_rtc_diagnostic(49, int(formattedSize));\n#endif\n\treturn formattedSize;'),
+], 'x4_native_rtc_diagnostic(49, int(formattedSize));')
+
+juice_diagnostic_header = ('#include "log.h"\n#ifdef X4_OPENORBIS\n'
+    'extern void x4_native_rtc_diagnostic(int, int);\n'
+    '#define X4_JUICE_EVENT(id,value) x4_native_rtc_diagnostic(id,value)\n'
+    '#else\n#define X4_JUICE_EVENT(id,value) ((void)0)\n#endif')
+source = base / 'libdatachannel/deps/libjuice/src/udp.c'
+checked_patch(source, [
+    ('#include "log.h"', juice_diagnostic_header),
+    ('\tif (sock == INVALID_SOCKET) {\n\t\tJLOG_WARN("UDP socket creation failed, errno=%d", sockerrno);',
+     '\tif (sock == INVALID_SOCKET) {\n\t\tX4_JUICE_EVENT(50, sockerrno);\n'
+     '\t\tJLOG_WARN("UDP socket creation failed, errno=%d", sockerrno);'),
+    ('\tif (fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK) < 0) {',
+     '\tint existing_flags = fcntl(sock, F_GETFL, 0);\n'
+     '\tif (existing_flags < 0) X4_JUICE_EVENT(51, sockerrno);\n'
+     '\tif (fcntl(sock, F_SETFL, existing_flags | O_NONBLOCK) < 0) {\n\t\tX4_JUICE_EVENT(52, sockerrno);'),
+    ('\t\tJLOG_WARN("UDP socket binding failed, errno=%d", sockerrno);',
+     '\t\tX4_JUICE_EVENT(53, sockerrno);\n\t\tJLOG_WARN("UDP socket binding failed, errno=%d", sockerrno);'),
+    ('\t\tJLOG_WARN("UDP socket binding failed on port %hu, errno=%d", port, sockerrno);',
+     '\t\tX4_JUICE_EVENT(53, sockerrno);\n\t\tJLOG_WARN("UDP socket binding failed on port %hu, errno=%d", port, sockerrno);'),
+    ('\t\tJLOG_WARN("UDP socket binding failed on port range %s:[%hu,%hu], errno=%d",',
+     '\t\tX4_JUICE_EVENT(53, sockerrno);\n\t\tJLOG_WARN("UDP socket binding failed on port range %s:[%hu,%hu], errno=%d",'),
+    ('\tif (getaddrinfo(config->bind_address, "0", &hints, &ai_list) != 0) {',
+     '\tconst int bind_address_result = getaddrinfo(config->bind_address, "0", &hints, &ai_list);\n'
+     '\tX4_JUICE_EVENT(54, bind_address_result);\n\tif (bind_address_result != 0) {'),
+], 'X4_JUICE_EVENT(54, bind_address_result);')
+
+source = base / 'libdatachannel/deps/libjuice/src/agent.c'
+checked_patch(source, [
+    ('#include "log.h"', juice_diagnostic_header),
+    ('\tif (conn_create(agent, &socket_config)) {',
+     '\tconst int connection_result = conn_create(agent, &socket_config);\n'
+     '\tX4_JUICE_EVENT(55, connection_result);\n\tif (connection_result) {'),
+    ('\tint records_count = conn_get_addrs(agent, records, ICE_MAX_CANDIDATES_COUNT - 1);',
+     '\tint records_count = conn_get_addrs(agent, records, ICE_MAX_CANDIDATES_COUNT - 1);\n'
+     '\tX4_JUICE_EVENT(56, records_count);'),
+    ('\t\tint ret = thread_init(&agent->resolver_thread, resolver_thread_entry, agent);',
+     '\t\tint ret = thread_init(&agent->resolver_thread, resolver_thread_entry, agent);\n\t\tX4_JUICE_EVENT(57, ret);'),
+], 'X4_JUICE_EVENT(57, ret);')
+
+source = base / 'libdatachannel/deps/libjuice/src/conn_poll.c'
+checked_patch(source, [
+    ('#include "log.h"', juice_diagnostic_header),
+    ('\tif (pipe(pipefds)) {',
+     '\tconst int pipe_result = pipe(pipefds);\n'
+     '\tX4_JUICE_EVENT(59, pipe_result == 0 ? 0 : errno);\n\tif (pipe_result) {'),
+    ('\tfcntl(pipefds[0], F_SETFL, O_NONBLOCK);\n\tfcntl(pipefds[1], F_SETFL, O_NONBLOCK);',
+     '\tif (fcntl(pipefds[0], F_SETFL, O_NONBLOCK) < 0) X4_JUICE_EVENT(60, errno);\n'
+     '\tif (fcntl(pipefds[1], F_SETFL, O_NONBLOCK) < 0) X4_JUICE_EVENT(61, errno);'),
+    ('\tint ret = thread_init(&registry_impl->thread, conn_thread_entry, registry);',
+     '\tint ret = thread_init(&registry_impl->thread, conn_thread_entry, registry);\n\tX4_JUICE_EVENT(58, ret);'),
+], 'X4_JUICE_EVENT(58, ret);')
 print('OpenOrbis dependency overlay prepared:', overlay)

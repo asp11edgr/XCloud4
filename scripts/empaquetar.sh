@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 TITLE='XCloud4'
 TITLE_ID='XCLD00001'
 CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
-VERSION='00.72'
-PACKAGE_VERSION='0.7.2'
+VERSION='00.73'
+PACKAGE_VERSION='0.7.3'
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"
 # The PS4 startup loader requires the auxiliary OpenOrbis modules before main().
 # Keep compiled module binaries in an external local directory, never in Git.

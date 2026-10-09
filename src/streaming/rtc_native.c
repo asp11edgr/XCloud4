@@ -3,6 +3,7 @@
 #include "../core/module.h"
 #include <mbedtls/entropy.h>
 #include <orbis/libkernel.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -13,6 +14,7 @@ static int32_t (*native_exit)(const char *, const char *const *);
  * No exception text, offer, ICE credential or provider response is logged. */
 void x4_native_rtc_diagnostic(int event,int value)
 {
+    int saved_errno = errno;
     const char *label;
     switch(event) {
     case 1: label="invalid_argument"; break;
@@ -30,9 +32,44 @@ void x4_native_rtc_diagnostic(int event,int value)
     case 17: label="ICE ready"; break;
     case 18: label="workers created"; break;
     case 19: label="worker creation failed after"; break;
+    case 20: label="offer ICE begin"; break;
+    case 21: label="offer ICE ready"; break;
+    case 22: label="offer ICE description ready"; break;
+    case 23: label="offer populated media count"; break;
+    case 24: label="offer committed"; break;
+    case 25: label="offer gathering begin"; break;
+    case 26: label="offer gathering ready"; break;
+    case 30: label="juice agent begin"; break;
+    case 31: label="juice agent result"; break;
+    case 32: label="juice local description result"; break;
+    case 33: label="juice gathering result"; break;
+    case 35: label="ICE underlying exception class"; break;
+    case 40: label="certificate begin"; break;
+    case 41: label="certificate key ready"; break;
+    case 42: label="certificate times ready"; break;
+    case 43: label="certificate serial ready"; break;
+    case 44: label="certificate DER result"; break;
+    case 45: label="certificate ready"; break;
+    case 48: label="certificate UTC conversion result"; break;
+    case 49: label="certificate time formatted length"; break;
+    case 50: label="UDP socket failed errno"; break;
+    case 51: label="UDP get flags failed errno"; break;
+    case 52: label="UDP set flags failed errno"; break;
+    case 53: label="UDP bind failed errno"; break;
+    case 54: label="UDP bind address resolution result"; break;
+    case 55: label="juice connection result"; break;
+    case 56: label="juice host candidate count"; break;
+    case 57: label="juice resolver thread result"; break;
+    case 58: label="juice poll thread result"; break;
+    case 59: label="juice poll pipe errno"; break;
+    case 60: label="juice poll read pipe flags errno"; break;
+    case 61: label="juice poll write pipe flags errno"; break;
+    case 62: label="native interface query result"; break;
+    case 63: label="native interface result count"; break;
     default: label="unknown event"; break;
     }
     printf("XCloud4: RTC native %s value=%d (0x%08x)\n",label,value,(unsigned)value);
+    errno = saved_errno;
 }
 
 int x4_native_random(void *data, size_t size)

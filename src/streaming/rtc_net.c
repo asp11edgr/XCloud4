@@ -2,6 +2,7 @@
 /* IPv4 resolver/interface adapters. OpenOrbis musl's Linux netlink-based
  * getifaddrs and resolver must not be used on the native BSD kernel. */
 #include "../core/module.h"
+#include "rtc_native.h"
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
@@ -146,23 +147,26 @@ typedef struct {
 
 int x4_native_getifaddrs(struct ifaddrs **out)
 {
-    if (!out || !ctl_get_info) { errno = EINVAL; return -1; }
+    if (!out || !ctl_get_info) { x4_native_rtc_diagnostic(63,-EINVAL); errno = EINVAL; return -1; }
     *out = NULL;
     OrbisNetCtlInfo info = {0};
-    if (ctl_get_info(ORBIS_NET_CTL_INFO_IP_ADDRESS, &info) < 0) { errno = ENETDOWN; return -1; }
+    int query_result = ctl_get_info(ORBIS_NET_CTL_INFO_IP_ADDRESS, &info);
+    x4_native_rtc_diagnostic(62,query_result);
+    if (query_result < 0) { x4_native_rtc_diagnostic(63,-ENETDOWN); errno = ENETDOWN; return -1; }
     info.ip_address[sizeof(info.ip_address) - 1] = 0;
     NativeInterface *item = calloc(1, sizeof(*item));
-    if (!item) { errno = ENOMEM; return -1; }
+    if (!item) { x4_native_rtc_diagnostic(63,-ENOMEM); errno = ENOMEM; return -1; }
     item->address.sin_len = sizeof(item->address);
     item->address.sin_family = AF_INET;
     if (inet_pton(AF_INET, info.ip_address, &item->address.sin_addr) != 1 || !item->address.sin_addr.s_addr) {
-        free(item); errno = ENETDOWN; return -1;
+        free(item); x4_native_rtc_diagnostic(63,-ENETDOWN); errno = ENETDOWN; return -1;
     }
     memcpy(item->name, "x4-native-net", 14);
     item->interface.ifa_name = item->name;
     item->interface.ifa_flags = IFF_UP;
     item->interface.ifa_addr = (struct sockaddr *)&item->address;
     *out = &item->interface;
+    x4_native_rtc_diagnostic(63,1);
     return 0;
 }
 

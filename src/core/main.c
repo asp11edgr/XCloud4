@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.2: diagnostico del arranque WebRTC y recepcion de H264/Opus\n");
+    printf("XCloud4 0.7.3: diagnostico de la oferta WebRTC y recepcion de H264/Opus\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
