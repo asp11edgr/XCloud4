@@ -30,15 +30,18 @@ int x4_module_open(const char *name)
 {
     int handle = loaded_handle(name);
     if (handle >= 0) return handle;
-    if (!strcmp(name, "libSceVideodec2") || !strcmp(name, "libSceAudioOut")) {
+    if (!strcmp(name, "libSceVideodec2") || !strcmp(name, "libSceAudioOut") || !strcmp(name, "libSceSystemService")) {
         int sysmodule = x4_module_open("libSceSysmodule");
         if (sysmodule >= 0) {
             void *address = NULL;
-            int internal = !strcmp(name, "libSceAudioOut");
+            int audio = !strcmp(name, "libSceAudioOut");
+            int system = !strcmp(name, "libSceSystemService");
+            int internal = audio || system;
             const char *symbol = internal ? "sceSysmoduleLoadModuleInternal" : "sceSysmoduleLoadModule";
             if (x4_module_symbol(sysmodule, symbol, &address) >= 0) {
                 int32_t (*load)(uint32_t) = (int32_t (*)(uint32_t))address;
-                uint32_t id = internal ? ORBIS_SYSMODULE_INTERNAL_AUDIOOUT : ORBIS_SYSMODULE_VIDEODEC2;
+                uint32_t id = audio ? ORBIS_SYSMODULE_INTERNAL_AUDIOOUT :
+                    system ? ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE : ORBIS_SYSMODULE_VIDEODEC2;
                 int rc = load(id);
                 printf("XCloud4: Sysmodule %s -> 0x%08x\n", name, (unsigned)rc);
                 handle = loaded_handle(name);

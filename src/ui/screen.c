@@ -21,7 +21,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.2.1", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.2.2", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -129,4 +129,13 @@ void x4_media_draw(const X4DemoVideo *v, const X4DemoAudio *a, uint32_t *p)
     x4_text(p, 1110, 598, 2, line, WHITE);
     x4_text(p, 1110, 710, 2, "MUESTRA LOCAL DE 8 SEGUNDOS.\n640 X 368. 48 KHZ.\nXBOX AUN NO ESTA CONECTADO.", MUTED);
     x4_text(p, 84, 915, 3, "X  REPETIR     CUADRADO  SONIDO     CIRCULO  VOLVER     OPTIONS  SALIR", WHITE);
+}
+
+void x4_exit_error_draw(int error, uint32_t *p)
+{
+    if (!error) return;
+    char message[96];
+    snprintf(message, sizeof(message), "NO SE PUDO SALIR: 0X%08X. OPTIONS PARA REINTENTAR.", (unsigned)error);
+    x4_rect(p, 84, 999, 1752, 54, PANEL);
+    x4_text(p, 100, 1015, 3, message, WHITE);
 }

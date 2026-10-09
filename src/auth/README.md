@@ -1,1 +1,1 @@
-Integración pendiente. Consulta docs/ARQUITECTURA.md.
+Integración pendiente. La siguiente etapa prepara HTTPS, acceso Microsoft por código y credenciales de Xbox; después el catálogo. Consulta `docs/AUTENTICACION.md` y las referencias fijadas en `docs/REFERENCIAS.md`. Todavía no hay una sesión autenticada ni un código emitido para XCloud4.

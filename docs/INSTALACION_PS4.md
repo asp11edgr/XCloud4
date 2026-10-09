@@ -1,5 +1,9 @@
 # Instalar XCloud4
 
+## Corrección de cierre 0.2.2
+
+Instalar `XCloud4-0.2.2.pkg` y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO y pulsar OPTIONS para salir. El propietario confirmó video, sonido y retorno correcto al inicio sin CE-34878-0; Klog confirma el cierre mediante LoadExec. Esta versión queda como base funcional.
+
 ## Corrección de sonido 0.2.1
 
 Seleccionar `XCloud4-0.2.1.pkg` en Package Installer (HDD o ALL si se copió por red) y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO; debe conservar el video y ahora intentar abrir el audio MAIN con el usuario SYSTEM. X repite, cuadrado silencia y círculo vuelve. Sonido pendiente de confirmación. La 0.2.0 ya reprodujo video en la consola, pero su audio mostró `0x809B0001`.

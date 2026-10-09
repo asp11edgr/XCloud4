@@ -18,7 +18,11 @@ La 0.2.0 está compilada y empaquetada en Lubuntu. El propietario informó que e
 
 ### Corrección 0.2.1
 
-La salida de audio MAIN usa el usuario SYSTEM (0xFF), siguiendo el ejemplo público de OpenOrbis, y espera el consumo del bloque PCM antes de sobrescribirlo. Agrega registros de inicialización, apertura, hilo y finalización. El video conserva la implementación de la 0.2.0. La reproducción de sonido de la 0.2.1 está pendiente de confirmación en PS4.
+La salida de audio MAIN usa el usuario SYSTEM (0xFF), siguiendo el ejemplo público de OpenOrbis, y espera el consumo del bloque PCM antes de sobrescribirlo. Agrega registros de inicialización, apertura, hilo y finalización. El propietario confirmó que el sonido funciona en la 0.2.1; Klog muestra 384000 muestras enviadas sin error. El video conserva la implementación de la 0.2.0. El cierre con OPTIONS mostró CE-34878-0 y SIGSYS al entrar en `_exit`.
+
+### Corrección de cierre 0.2.2
+
+OPTIONS prepara la solicitud de salida mediante SystemService antes de cerrar recursos. Después solicita `sceSystemServiceLoadExec("exit", NULL)` y espera que la consola retire el proceso, evitando regresar a la ruta `_exit` que falló. Una solicitud rechazada permite reintentar desde la interfaz. Audio y video conservan sus implementaciones confirmadas. El propietario confirmó que la 0.2.2 regresa al inicio sin el error: esta es la nueva base funcional.
 
 ## Etapas
 
@@ -42,7 +46,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.2.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 

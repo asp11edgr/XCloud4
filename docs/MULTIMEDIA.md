@@ -31,3 +31,17 @@ No se añadieron ni ejecutaron pruebas automatizadas. La 0.1.2 y su etiqueta se 
 El registro real contiene `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` en cada inicio de la muestra 0.2.0. La pantalla y la foto del propietario muestran `0x809B0001`; la implementación pasaba a MAIN el usuario obtenido de UserService. El ejemplo público OpenOrbis v0.5.4 abre MAIN con `ORBIS_USER_SERVICE_USER_ID_SYSTEM` (0xFF). La 0.2.1 adopta esa asociación y elimina la consulta del usuario para el audio.
 
 También sigue la espera explícita con `sceAudioOutOutput(handle, NULL)` antes de reutilizar el bloque PCM y al finalizar, y registra los resultados de init, open y creación del hilo. Fuente primaria: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp. Las credenciales de Microsoft no intervienen. Se conserva el video de la 0.2.0. La corrección de sonido queda pendiente de confirmación real.
+
+El propietario confirmó después: "La version 2.1 ya corrigio el sonido funciona bien". El registro muestra `AudioOutOpen MAIN SYSTEM(0xff) -> 0x20000007`, creación del hilo y `PCM terminado, muestras=384000 error=0x00000000` en dos reproducciones. Esta confirmación cubre la muestra local; Opus, WebRTC y sincronización siguen pendientes.
+
+## Cierre 0.2.2
+
+OPTIONS causó CE-34878-0 en la 0.2.0 y la 0.2.1. Para el proceso 84 de la 0.2.1, Klog registra SIGSYS en el hilo principal: RIP `libkernel + 0x28bc`, último salto desde `0x409330` hacia `libkernel + 0x28b0`. El ELF de esa versión contiene `_exit@plt` en el desplazamiento `0x9330`, y su inicio C retorna de main hacia `exit` → `_Exit` → `_exit`. Esta evidencia ubica el fallo en la salida final del programa.
+
+La 0.2.2 resuelve `sceSystemServiceLoadExec` al pedir salir y solicita `"exit"` después de cerrar los recursos. Espera a que el sistema retire la aplicación en vez de retornar de main. Si preparar la solicitud falla, conserva la interfaz; si la solicitud es rechazada después del cierre, la vuelve a abrir para permitir otro intento. Se agregan registros por etapa de cierre. Audio y video permanecen iguales a la 0.2.1.
+
+La espera de retirada está limitada a diez segundos; si se agota, vuelve a abrir la interfaz con un error. Se añade una pausa antes de reabrir para evitar un ciclo rápido de fallo de presentación y rechazo de salida. Claude Opus 5.5 revisó el cambio; esas medidas responden a sus observaciones. La comparación del último salto con `_exit@plt` se hizo contra el ejecutable exacto de la 0.2.1. La revisión estática no confirma el resultado de LoadExec en la consola.
+
+Contrato de la función: `include/orbis/SystemService.h` de OpenOrbis v0.5.4. Ejemplo primario de uso investigado, sin copiar su implementación: https://github.com/bucanero/PS4CheatsManager/blob/main/source/main.c (`terminate`, solicitud LoadExec con `"exit"`). La salida real sin CE-34878-0 queda pendiente hasta abrir la 0.2.2 en la consola. No se ejecutaron pruebas automatizadas.
+
+Resultado posterior confirmado: el propietario informó que la 0.2.2 cierra correctamente. Klog muestra recursos cerrados, solicitud de salida y `Kill for LoadExec(0x5a) => 0`, sin un nuevo SIGSYS en ese cierre. Se conserva `v0.2.2` como base de reproducción local y salida correcta.

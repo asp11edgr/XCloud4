@@ -54,6 +54,20 @@ La 0.2.1 abre MAIN con el usuario SYSTEM (0xFF), siguiendo el ejemplo oficial de
 
 La corrección se compiló y empaquetó en Lubuntu sin errores. Paquete `XCloud4-0.2.1.pkg`, 6619136 bytes, SHA-256 `6023aeacd4521e3e486ad3fb335bafab77631bd92613c56a5383037f341ab2e9`. Se copió a `/data/pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalarla mientras se captura Klog; sonido 0.2.1 pendiente. La implementación de video no cambió.
 
-## GitHub al final de la jornada
+## Confirmación de sonido y corrección del cierre 0.2.2
+
+El propietario confirmó que el sonido de la 0.2.1 funciona. Klog registra AudioOutOpen SYSTEM correcto y dos reproducciones de 384000 muestras sin error. Informó también CE-34878-0 al pulsar OPTIONS. El proceso 84 termina con SIGSYS en libkernel después de un salto desde `0x409330`; el ELF exacto de la 0.2.1 contiene `_exit@plt` en `0x9330`, y el retorno de main termina en esa función. El fallo está ubicado en la salida final.
+
+La 0.2.2 prepara y resuelve SystemService antes del cierre de recursos, solicita LoadExec con `"exit"` y evita retornar de main. Permite reintentar desde la interfaz si falla la preparación, se rechaza la solicitud o pasan diez segundos sin que la consola retire el proceso. Claude Opus 5.5 revisó el flujo; se aplicó su observación sobre la espera limitada y la pausa entre reintentos. Se conservaron las implementaciones confirmadas de audio y video. No se ejecutaron pruebas automatizadas.
+
+Se compiló y empaquetó en Lubuntu sin errores. `XCloud4-0.2.2.pkg`: 6619136 bytes, SHA-256 `be3c6ceceaac2fd5ccc20a169bc2f2127ef83dc616eb1f4e4001803adc2f497e`. Se copió a `/data/pkg` de PS4 y se comparó la huella del archivo recuperado por FTP: coincide. Se avisó al propietario para instalar y comprobar OPTIONS con captura Klog. Cierre real de esta versión pendiente.
+
+## Resultado confirmado de la 0.2.2
+
+El propietario instaló la 0.2.2 y confirmó: "si ya funciono correctamente" al preguntar si OPTIONS regresa al inicio sin CE-34878-0. Quedan confirmados video de la muestra, tonos PCM y cierre al menú de PS4. Se conserva la 0.2.2 como nueva base funcional. Cuenta Microsoft, catálogo, Opus y WebRTC siguen pendientes.
+
+Klog registra `recursos cerrados`, `solicitar salida al menu PS4`, `Kill for LoadExec(0x5a)` y `Kill for LoadExec(0x5a) => 0` para el proceso 90. Esto confirma la solicitud de cierre de la nueva versión y coincide con el resultado visual informado por el propietario.
+
+## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.
