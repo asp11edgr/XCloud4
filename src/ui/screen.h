@@ -6,6 +6,7 @@
 #include "../auth/device_auth.h"
 #include "../auth/xbox_catalog.h"
 #include "../auth/xbox_session.h"
+#include "../media/live_media.h"
 typedef struct { int page; int selected; int exit_requested; int exit_error; } X4Screen;
 void x4_screen_update(X4Screen *screen, uint32_t pressed, uint32_t held);
 void x4_screen_draw(const X4Screen *screen, const X4Controller *controller, uint32_t *pixels);
@@ -14,3 +15,5 @@ void x4_exit_error_draw(int error, uint32_t *pixels);
 void x4_auth_draw(const X4AuthSnapshot *auth, int busy, int closing, uint32_t *pixels);
 void x4_catalog_draw(const X4CatalogSnapshot *catalog, unsigned selected, int busy, uint32_t *pixels);
 void x4_session_draw(const X4SessionSnapshot *session, int busy, int closing, uint32_t *pixels);
+void x4_live_status_draw(const X4LiveMediaSnapshot *media, int error, uint32_t *pixels);
+void x4_live_overlay(const X4LiveMediaSnapshot *media, int muted, uint32_t *pixels);

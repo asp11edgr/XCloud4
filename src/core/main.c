@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include <stdio.h>
+#include <string.h>
 #include <stdatomic.h>
 #include <orbis/libkernel.h>
 #include "../video/display.h"
 #include "../input/controller.h"
 #include "../ui/screen.h"
 #include "../auth/auth_profile.h"
+#include "../media/live_media.h"
 #include "lifecycle.h"
 
 int main(void)
@@ -23,6 +25,10 @@ int main(void)
     int session_back = 0;
     int media_active = 0;
     int closing = 0;
+    X4LiveMedia *live = NULL;
+    X4LiveMediaSnapshot live_status = {0};
+    int live_error = 0, live_muted = 0;
+    int live_retained = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
 reopen_interface:;
     int rc = x4_display_open(&display);
@@ -34,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.6.2: interfaz, multimedia, cuenta, catalogo y perfil temporal de acceso\n");
+    printf("XCloud4 0.7.2: diagnostico del arranque WebRTC y recepcion de H264/Opus\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
@@ -99,9 +105,29 @@ reopen_interface:;
                 if (catalog_selected >= catalog.count) catalog_selected = catalog.count - 1;
                 if ((controller.pressed & ORBIS_PAD_BUTTON_CROSS) &&
                     catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth)) {
-                    rc = x4_auth_start_session(auth, catalog_selected);
+                    live_error = 0;
+                    if (live) {
+                        live_error = x4_auth_set_media_callback(auth, NULL, NULL);
+                        if (!live_error) live_error = x4_live_media_close(live);
+                        if (!live_error) live = NULL;
+                    }
+                    if (!live_error) {
+                        live_retained = 0;
+                        live = x4_live_media_create(&live_error);
+                        if (live) {
+                            live_error = x4_live_media_set_payload_type(live, X4_LIVE_KIND_VIDEO, 102);
+                            if (!live_error) live_error = x4_live_media_set_payload_type(live, X4_LIVE_KIND_AUDIO, 111);
+                            if (!live_error) live_error = x4_live_media_start(live);
+                        }
+                    }
+                    memset(&live_status, 0, sizeof(live_status));
+                    live_muted = 0;
+                    rc = live_error;
+                    if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live);
+                    if (!rc) rc = x4_auth_start_session(auth, catalog_selected);
+                    if (rc && !live_error) live_error = rc;
                     x4_auth_session_snapshot(auth, &session);
-                    if (rc == 0 || session.state == X4_SESSION_ERROR) {
+                    if (rc == 0 || session.state == X4_SESSION_ERROR || live_error) {
                         session_back = 0;
                         screen.page = 6;
                     }
@@ -109,6 +135,24 @@ reopen_interface:;
                     if (rc) printf("XCloud4: solicitar sesion fallo 0x%08x\n", (unsigned)rc);
                 }
             } else catalog_selected = 0;
+        }
+        if (live && !live_retained) {
+            x4_live_media_tick(live);
+            x4_live_media_snapshot(live, &live_status);
+            if (x4_auth_busy(auth)) {
+                if (x4_live_media_take_keyframe_request(live)) x4_auth_request_keyframe(auth);
+                if (live_status.video_error) x4_auth_cancel(auth);
+                if (screen.page == 6 && (controller.pressed & ORBIS_PAD_BUTTON_SQUARE)) {
+                    live_muted = !live_muted;
+                    x4_live_media_set_muted(live, live_muted != 0);
+                }
+            } else {
+                /* The worker closes RTC before publishing completion. */
+                int stop_rc = x4_auth_set_media_callback(auth, NULL, NULL);
+                if (!stop_rc) stop_rc = x4_live_media_close(live);
+                if (!stop_rc) live = NULL;
+                else { live_error = stop_rc; live_retained = 1; printf("XCloud4: medios retienen recursos, cierre 0x%08x\n", (unsigned)stop_rc); }
+            }
         }
         if (screen.page != 3 && media_active) {
             x4_audio_stop(&audio);
@@ -133,8 +177,27 @@ reopen_interface:;
         }
         x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
-        if (screen.page == 6)
-            x4_session_draw(&session, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+        if (screen.page == 6) {
+            if (live && x4_auth_busy(auth) && !closing && !session_back && !live_error &&
+                !live_status.video_error && session.state != X4_SESSION_STOPPING &&
+                x4_live_media_draw(live, x4_display_pixels(&display)))
+                x4_live_overlay(&live_status, live_muted, x4_display_pixels(&display));
+            else {
+                X4SessionSnapshot shown = session;
+                if (live_error && !x4_auth_busy(auth)) {
+                    shown.state = X4_SESSION_ERROR;
+                    shown.error = live_error;
+                    shown.http_status = 0;
+                    shown.ready_seen = shown.connection_authorized = 0;
+                    shown.rtc_connected = 0;
+                    snprintf(shown.stage, sizeof(shown.stage), "no se pudieron preparar o cerrar los medios nativos");
+                    if (catalog_selected < catalog.count)
+                        snprintf(shown.title_name, sizeof(shown.title_name), "%s", catalog.titles[catalog_selected].name);
+                }
+                x4_session_draw(&shown, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+                x4_live_status_draw(&live_status, live_error, x4_display_pixels(&display));
+            }
+        }
         else if (screen.page == 4 || closing)
             x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
         else if (screen.page == 5)
@@ -150,6 +213,12 @@ reopen_interface:;
      * cleaning the UI. Ordinary OPTIONS keeps rendering while it cancels. */
     x4_auth_cancel(auth);
     while (x4_auth_busy(auth)) sceKernelUsleep(100000);
+    if (live) {
+        int live_rc = x4_auth_set_media_callback(auth, NULL, NULL);
+        if (!live_rc) live_rc = x4_live_media_close(live);
+        if (!live_rc) live = NULL;
+        else live_error = live_rc;
+    }
     printf("XCloud4: cerrar acceso Microsoft\n");
     int auth_rc = x4_auth_close(auth);
     if (auth_rc >= 0) auth = NULL;

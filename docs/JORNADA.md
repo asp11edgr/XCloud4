@@ -161,6 +161,36 @@ Every listed PKG is **6619136 bytes**. Each was transferred to `/data/pkg/XCloud
 
 ## GitHub and continuing work
 
-The owner requested publication, selecting a **private** repository. The connected account previously observed was `asapedgr`; live authentication/visibility must be checked during publication. Keep SDK, credentials, private keys, logs and generated packages outside source history. Packages are stored separately from source.
+The owner requested publication, selecting a **private** repository. The earlier connected account was observed as `asapedgr`; live publication used the verified account **`asp11edgr`**. The private repository is [asp11edgr/XCloud4](https://github.com/asp11edgr/XCloud4). English documentation was published on `main` at `aa6d913`, and the confirmed 0.6.2 release/package was published separately. Keep SDK, credentials, private keys, logs and generated packages outside source history. Packages are stored separately from source.
 
 The owner clarified that English applies to GitHub content, while the PS4 interface stays Spanish. After briefly preserving 0.6.2, the owner authorized the next streaming stage and reiterated use of Claude. Current work targets real WebRTC negotiation, H.264 reception and Opus/AudioOut, with actual console results still required before calling that milestone complete.
+
+Native live media source now includes bounded RTP queues/reordering, H.264 single-NAL/STAP-A/FU-A reconstruction, native decoder output validation and Opus/AudioOut integration. A static review repaired SSRC switching, false loss recovery on late/foreign packets, damaged-unit parameter caching, valid Opus payload rejection, output-buffer lifetime and teardown ownership. These source changes are not evidence of working live playback. See [live media design and limits](MULTIMEDIA_EN_VIVO.md). The external Opus 1.5.2 archive hash was verified, and its exact `COPYING` was retained under `docs/licenses`.
+
+## 0.7.0: native WebRTC/media development package
+
+Claude Opus 5.5 contributed transport/media analysis and implementation before its usage limit paused further calls. Codex completed integration, native media lifetime review, SDK ABI adapters and dependency porting. The pinned libdatachannel static build reached 100%; Mbed TLS and Opus archives were installed outside Git. The final dependency trees are preserved by the source exporter, including modified MPL files, original licenses and reproducible port configuration.
+
+The full application compiled, linked, converted to SELF and packaged successfully in Lubuntu. Static ELF inspection recorded **104 imports**, **34 constructor entries** and **8 bytes of TLS**. This establishes build/structure evidence only; native execution of those imports and live media require the owner's PS4 result.
+
+Package `XCloud4-0.7.0.pkg` is **8847360 bytes**, SHA-256 `80860ced1f18ef794fc628736864d5b4c894c9bea344759d4bbfcfdc84c6cf19`. Its upload and FTP retrieval matched that hash. No completed `v0.7.0` milestone or published 0.7 release is claimed.
+
+The corresponding dependency-source archive is prepared locally as `XCloud4-0.7.0-dependency-sources.tar.gz`, **83532544 bytes**, SHA-256 `0e48073b43a94e68c109cf76ca08fdfb7c3e967f0908f2f72e732fb843624d68`. Its manifest covers **9367 files**, and each recorded source hash matched the archive. It includes all pinned submodules, Opus 1.5.2, the actual overlays/configuration, seven native streaming adapters and retained notices. Generated libraries/build caches, Git metadata and local credentials/logs are excluded. Original upstream public test fixtures are retained as source. See [0.7.0 development notes](RELEASE_NOTES_0.7.0.md).
+
+### First 0.7.0 console result: local RTC creation failure
+
+The owner installed/tried 0.7.0. Xbox preparation and authorization succeeded: `/connect` HTTP 202 and Provisioned state HTTP 200. Native entropy and NetCtl initialization returned zero. Local RTC opening then returned **-2 before SDP, ICE or RTP**. The remote session was deleted with HTTP 200. This is a local RTC creation failure; it does not establish a media connection or explain a server negotiation failure, and it is distinct from the earlier Passport permission refusal. Instrumentation and repair of that creation path are underway. Actual live video/audio remains unconfirmed.
+
+## 0.7.1: local initialization diagnostics
+
+Version 0.7.1 adds bounded initialization-stage labels and numeric native/Mbed TLS errors to narrow the local RTC failure. Diagnostic vendor changes touch `src/capi.cpp`, `src/impl/init.cpp` and `src/impl/tls.cpp`; native adapters report matching stage/error categories. Account credentials, SDP and ICE values are not logged. Claude Opus 5.5 completed its read-only review in 29 turns without an error, recommending an explicit pool bound before initialization.
+
+The diagnostic package compiled and packaged successfully. `XCloud4-0.7.1.pkg` is **8847360 bytes**, SHA-256 `6769f0b3a93f87143a1d4511b7f0a3657e8a60cfe393c4a5704fd1c17fdefe7d`; its upload and FTP retrieval matched. Its actual console log reached thread-pool creation requesting **200112 workers**, then numeric **system error 1** before the pool-ready checkpoint. SDP, ICE and media were not reached. This identified the initialization stage; no live video/audio result or completed 0.7.1 milestone is claimed. The corresponding dependency source is captured separately from the immutable 0.7.0 snapshot. See [0.7.1 diagnostic notes](RELEASE_NOTES_0.7.1.md).
+
+Source archive `XCloud4-0.7.1-dependency-sources.tar.gz` is **83536524 bytes**, SHA-256 `46501c565b2bf1782c8dbf971c13f474b32f4ccf76a86083f343207ecbdf9891`. All **9367** manifest source hashes matched. The captured libdatachannel modification list includes the three diagnostic files as well as earlier port changes. Native adapters and the updated reproducible patch script are included. The exporter selects the package version and refuses existing-output replacement, keeping 0.7.0 intact.
+
+## 0.7.2: bounded RTC worker initialization
+
+ABI inspection traced 0.7.1's count to the prebuilt SDK libc++ CPU-count probe calling `sysconf(84)`. Native FreeBSD selector 84 denotes `_SC_THREAD_CPUTIME`, whose `_POSIX_THREAD_CPUTIME` value is **200112L**; native CPU-count selectors are 57/58. Version 0.7.2 explicitly calls `rtcSetThreadPoolSize(4)` before peer-connection initialization and checks its result. Additional `src/impl/threadpool.cpp` diagnostics record how many workers were actually created, including the count at failure. The native process-ID syscall 20 implementation is retained.
+
+`XCloud4-0.7.2.pkg` compiled and packaged successfully: **8847360 bytes**, SHA-256 `f2d8cf6e606435927f98ddcd2ae274fed795787468e2bbe8bc7d2bfb9dfbc66a`. Its upload and FTP retrieval matched. The owner's console result is pending; actual game video/audio and a completed 0.7.2 milestone are not claimed. Matching patched sources are exported separately, retaining previous immutable snapshots. See [0.7.2 notes](RELEASE_NOTES_0.7.2.md).

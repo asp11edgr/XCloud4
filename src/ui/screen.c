@@ -25,7 +25,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.6.2", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.2", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -246,6 +246,9 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
     case X4_SESSION_READY: title = "XBOX PREPARO LA SESION"; break;
     case X4_SESSION_AUTHORIZING: title = "AUTORIZANDO LA CONEXION..."; break;
     case X4_SESSION_AUTHORIZED: title = "XBOX ACEPTO LA CONEXION"; break;
+    case X4_SESSION_NEGOTIATING: title = "NEGOCIANDO IMAGEN Y SONIDO..."; break;
+    case X4_SESSION_CONNECTING: title = "CONECTANDO EL JUEGO POR WEBRTC..."; break;
+    case X4_SESSION_STREAMING: title = "RECIBIENDO PAQUETES DEL JUEGO"; break;
     case X4_SESSION_STOPPING: title = "CERRANDO LA SESION EN XBOX..."; break;
     case X4_SESSION_CLOSED: title = "SESION CERRADA"; break;
     case X4_SESSION_CANCELLED: title = "SOLICITUD CANCELADA"; break;
@@ -256,10 +259,10 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
     x4_text(p, 126, 448, 4, title, s->ready_seen && !s->cleanup_failed && s->state != X4_SESSION_ERROR ? GREEN : WHITE);
     x4_text(p, 126, 523, 3, s->stage, MUTED);
     if (s->state == X4_SESSION_AUTHORIZED) {
-        snprintf(line, sizeof(line), "CIERRE EN %u SEGUNDOS. RECEPCION DEL JUEGO PENDIENTE.", s->seconds_left);
+        snprintf(line, sizeof(line), "PREPARANDO LA CONEXION DE IMAGEN Y SONIDO.");
         x4_text(p, 126, 587, 3, line, WHITE);
     } else if (s->state == X4_SESSION_READY) {
-        snprintf(line, sizeof(line), "LA SESION SE CERRARA EN %u SEGUNDOS.", s->seconds_left);
+        snprintf(line, sizeof(line), "PREPARANDO LA AUTORIZACION DE ESTA SESION.");
         x4_text(p, 126, 587, 3, line, WHITE);
     } else if (s->connection_authorized && !busy)
         x4_text(p, 126, 587, 3, "XBOX ACEPTO EL PERMISO PARA CONECTAR ESTA SESION.", GREEN);
@@ -269,7 +272,9 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
         snprintf(line, sizeof(line), "TIEMPO TRANSCURRIDO: %u SEGUNDOS.", s->elapsed_seconds);
         x4_text(p, 126, 587, 3, line, MUTED);
     }
-    x4_text(p, 126, 655, 3, "LA RECEPCION DE IMAGEN Y SONIDO SIGUE EN PREPARACION.", MUTED);
+    snprintf(line, sizeof(line), "SDP HTTP %d   ICE HTTP %d   WEBRTC %s", s->sdp_http_status,
+        s->ice_http_status, s->rtc_connected ? "CONECTADO" : "EN ESPERA");
+    x4_text(p, 126, 650, 3, line, MUTED);
     if (s->cleanup_failed) {
         snprintf(line, sizeof(line), "CIERRE SIN CONFIRMAR: 0X%08X   HTTP %d",
             (unsigned)s->cleanup_error, s->cleanup_http_status);
@@ -279,5 +284,33 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
         x4_text(p, 126, 722, 3, line, WHITE);
     }
     x4_text(p, 84, 867, 3, "CIRCULO  CERRAR Y VOLVER AL CATALOGO     OPTIONS  SALIR", WHITE);
-    x4_text(p, 84, 1004, 2, "ESTA ETAPA AUTORIZA LA CONEXION Y CIERRA LA SESION. TODAVIA NO TRANSMITE EL JUEGO.", MUTED);
+    x4_text(p, 84, 1004, 2, "EL JUEGO APARECE AL DECODIFICAR LA PRIMERA IMAGEN. CIRCULO CIERRA LA SESION.", MUTED);
+}
+
+void x4_live_status_draw(const X4LiveMediaSnapshot *m, int error, uint32_t *p)
+{
+    char line[160];
+    snprintf(line, sizeof(line), "H264: %llu PAQUETES, %llu IMAGENES   OPUS: %llu PAQUETES, %llu BLOQUES",
+        (unsigned long long)m->video_packets, (unsigned long long)m->video_frames,
+        (unsigned long long)m->audio_packets, (unsigned long long)m->audio_frames);
+    x4_text(p, 126, 790, 2, line, m->video_ready ? GREEN : MUTED);
+    if (error || m->video_error || m->audio_error) {
+        snprintf(line, sizeof(line), "MEDIOS: 0X%08X  VIDEO: 0X%08X  AUDIO: 0X%08X", (unsigned)error,
+            (unsigned)m->video_error, (unsigned)m->audio_error);
+        x4_text(p, 84, 922, 2, line, WHITE);
+    }
+}
+void x4_live_overlay(const X4LiveMediaSnapshot *m, int muted, uint32_t *p)
+{
+    char line[160];
+    x4_rect(p, 0, 1000, X4_WIDTH, 80, BG);
+    snprintf(line, sizeof(line), "%u X %u   IMAGENES %llu   OPUS %llu   AUDIO %s", m->width, m->height,
+        (unsigned long long)m->video_frames, (unsigned long long)m->audio_frames,
+        m->audio_error ? "ERROR" : muted ? "SILENCIADO" : m->audio_playing ? "ACTIVO" : "EN ESPERA");
+    x4_text(p, 36, 1015, 2, line, WHITE);
+    if (m->audio_error) {
+        snprintf(line, sizeof(line), "AUDIO 0X%08X", (unsigned)m->audio_error);
+        x4_text(p, 1500, 1015, 2, line, WHITE);
+    }
+    x4_text(p, 36, 1047, 2, "CUADRADO SONIDO   CIRCULO CERRAR SESION   OPTIONS SALIR", MUTED);
 }

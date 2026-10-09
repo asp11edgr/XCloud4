@@ -54,4 +54,39 @@ Generated module binaries stay outside Git. A native system module obtained over
 
 ## WebRTC dependencies under development
 
-Pinned library candidates and external compilation status are documented in [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). They were not included in the confirmed 0.6.2 package. Any later integration must add the corresponding license texts, source references and modification notices before distribution.
+Version 0.7 development integrates the following pinned sources. They were not included in the confirmed 0.6.2 package. Exact upstream license/attribution files are retained under `docs/licenses` and must accompany the later package. Archive compilation and native source-object builds do not establish a working live game stream.
+
+| Component | Pinned source | License/notice retained |
+|---|---|---|
+| libdatachannel 0.24.6 | [bdc5ff28e9d3b863144c94a677ecf5bf043aaf15](https://github.com/paullouisageneau/libdatachannel/tree/bdc5ff28e9d3b863144c94a677ecf5bf043aaf15) | [MPL-2.0](docs/licenses/libdatachannel-MPL-2.0.txt) |
+| libjuice 1.7.4 | [b89c792e3612faf2f12cf35bcc56857313a06be3](https://github.com/paullouisageneau/libjuice/tree/b89c792e3612faf2f12cf35bcc56857313a06be3) | [MPL-2.0](docs/licenses/libjuice-MPL-2.0.txt) |
+| usrsctp, libdatachannel fork | [fec583d54493f879d2ae44a743423bf8a04371ab](https://github.com/paullouisageneau/usrsctp/tree/fec583d54493f879d2ae44a743423bf8a04371ab) | [BSD 3-Clause](docs/licenses/usrsctp-LICENSE.md) |
+| libsrtp | [d33b8ffb1491a0b4b58a206889f09800cf7310ab](https://github.com/cisco/libsrtp/tree/d33b8ffb1491a0b4b58a206889f09800cf7310ab) | [BSD 3-Clause](docs/licenses/libsrtp-LICENSE.txt) |
+| nlohmann/json | [55f93686c01528224f448c19128836e7df245f72](https://github.com/nlohmann/json/tree/55f93686c01528224f448c19128836e7df245f72) | [MIT](docs/licenses/nlohmann-json-MIT.txt) |
+| plog | [94899e0b926ac1b0f4750bfbd495167b4a6ae9ef](https://github.com/SergiusTheBest/plog/tree/94899e0b926ac1b0f4750bfbd495167b4a6ae9ef) | [MIT](docs/licenses/plog-MIT.txt) |
+| Mbed TLS 3.6.7 | [068ff080b369adfac81509f9b57b2afabaf82dc5](https://github.com/Mbed-TLS/mbedtls/tree/068ff080b369adfac81509f9b57b2afabaf82dc5) | [Apache-2.0 OR GPL-2.0-or-later, both original texts](docs/licenses/MbedTLS-dual-license.txt) |
+| Mbed TLS framework, build helper | [dde0c4a0e448a0552f18817dcea633bb851fd288](https://github.com/Mbed-TLS/mbedtls-framework/tree/dde0c4a0e448a0552f18817dcea633bb851fd288) | [Exact dual-license text](docs/licenses/MbedTLS-framework-LICENSE.txt) |
+
+Mbed TLS's bundled Everest code is Apache-2.0; its exact [upstream README](docs/licenses/MbedTLS-everest-README.md) and Apache text in the Mbed TLS license are retained. The inspected interface credits INRIA and Microsoft Corporation. Bundled p256-m is Apache-2.0 OR GPL-2.0-or-later and authored by Manuel Pégourié-Gonnard; both its [Mbed TLS attribution README](docs/licenses/MbedTLS-p256-m-README.md) and [upstream README](docs/licenses/p256-m-upstream-README.md) are retained. These components are pinned by the Mbed TLS revision, rather than a guessed independent upstream revision.
+
+libdatachannel/libjuice source headers retain Paul-Louis Ageneau's copyright notices. usrsctp's license retains Randall Stewart/Michael Tuexen attribution; libsrtp's retains Cisco Systems attribution. Other file-specific notices remain in the corresponding source. Copied notice hashes and locations are recorded in [the license inventory](docs/licenses/README.md).
+
+### OpenOrbis port modifications and corresponding source
+
+`scripts/webrtc/prepare_port.py` describes reproducible source changes and SDK header overlays for the pinned checkout: native BSD socket/attribute ABI, optional thread naming, native entropy, nonblocking sockets and portable SCTP support. The port uses `openorbis.cmake`, `mbedtls-user-config.h` and the original XCloud4 `rtc_net.c` adapter. No installed SDK is modified. Source headers and applicable licenses are retained.
+
+When distributing a 0.7 PKG containing these libraries, provide the complete corresponding dependency-source archive alongside it: patched pinned trees including submodules, their original notices, generated overlays, configuration and the exact port script. Original public source links alone do not describe modified files. `scripts/webrtc/export_source.sh` produces `XCloud4-VERSION-dependency-sources.tar.gz` from the actual patched build trees and records their pins, modified paths and file hashes. It selects the package version (or explicit `X4_SOURCE_VERSION`) and refuses to replace existing snapshots. Each checkpoint has separate corresponding source: 0.7.1 adds fixed initialization labels and numeric diagnostics in `src/capi.cpp`, `src/impl/init.cpp`, `src/impl/tls.cpp` and native adapters; 0.7.2 additionally records actual worker creation in `src/impl/threadpool.cpp` and bounds the application RTC pool. Publication of matching source must accompany any distributed package. Recipients must have access to that source. Generated build caches, `.git`, SDK binaries, locally generated credentials, account tokens and runtime logs are excluded; original public upstream test fixtures remain included. No completed live playback result is claimed here.
+
+## SDK C++ runtime
+
+Version 0.7 links the OpenOrbis SDK's `libc++.a` and `libc++abi.a`. The installed libc++ header reports `_LIBCPP_VERSION 11000` and identifies **Apache-2.0 WITH LLVM-exception**. Official LLVM 11.0.0 [libc++ license](docs/licenses/LLVM-libcxx-11-LICENSE.TXT) and [libc++abi license](docs/licenses/LLVM-libcxxabi-11-LICENSE.TXT), including legacy notices and LLVM exceptions, are retained. [libc++ source license](https://github.com/llvm/llvm-project/blob/llvmorg-11.0.0/libcxx/LICENSE.TXT), [libc++abi source license](https://github.com/llvm/llvm-project/blob/llvmorg-11.0.0/libcxxabi/LICENSE.TXT).
+
+The exact upstream build revision of the prebuilt SDK archives was not established; the version observation does not prove an exact LLVM 11.0.0 source match. The toolchain distribution itself is fixed at OpenOrbis v0.5.4. These runtime notices do not change XCloud4's GPL-3.0-only license.
+
+## Opus 1.5.2 — live audio integration under development
+
+The live audio implementation links against an externally built static Opus decoder from the official **1.5.2** source release. The archive is `opus-1.5.2.tar.gz`, verified SHA-256 `65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1`. [Official release/source download](https://opus-codec.org/release/stable/2024/04/12/libopus-1_5_2.html).
+
+Opus uses a BSD 3-Clause license. The exact release `COPYING`, including its copyright and patent-license references, is retained as [Opus-BSD-3-Clause.txt](docs/licenses/Opus-BSD-3-Clause.txt). The external library source and generated archive stay outside this Git repository; any source/configuration modifications must be recorded when distributing the library. Opus was not included in the confirmed 0.6.2 package. Native live audio has not yet been confirmed on PS4.
+
+`src/media/live_media.c` and `src/audio/live_audio.c` implement original bounded RTP reception and decoding integration. Protocol references are [RFC 6184: H.264 RTP payloads](https://www.rfc-editor.org/rfc/rfc6184) and [RFC 7587: Opus RTP payloads](https://www.rfc-editor.org/rfc/rfc7587). No RFC source code was copied.

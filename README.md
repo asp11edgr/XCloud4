@@ -12,6 +12,16 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
+## Development package: 0.7.2 bounded RTC initialization
+
+The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
+
+The 0.7.1 diagnostics located failure during creation of a thread pool incorrectly requesting **200112 workers**, followed by numeric system error 1 before initialization completed. ABI inspection traced that count to the SDK C++ runtime's CPU-count probe using the wrong native `sysconf` selector.
+
+`XCloud4-0.7.2.pkg` explicitly requests **four RTC workers before initialization** and reports how many are actually created. It compiled, packaged and passed transfer/retrieval integrity checks. **Its console result is pending and actual live video/audio remains unconfirmed**; 0.6.2 remains the latest completed console milestone.
+
+The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 notes](docs/RELEASE_NOTES_0.7.2.md), [0.7.1 diagnostics](docs/RELEASE_NOTES_0.7.1.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
+
 ## Confirmed progress
 
 | Version | Result on the owner's PS4 |
@@ -52,12 +62,13 @@ Use the existing Lubuntu VM in VirtualBox, after [preparing the environment](doc
 ```bash
 cd "$HOME/Projects/XCloud4"
 source "$HOME/.config/xcloud4/env.sh"
+bash scripts/webrtc/build_native.sh  # first build of the pinned external dependencies
 make -j2
 export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The confirmed 0.6.2 source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.6.2.pkg`. Later development versions may change the package name.
+Current development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.2.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
@@ -67,10 +78,11 @@ The legacy OpenOrbis packager needs isolated OpenSSL 1.1 libraries. Prepare them
 
 - `src/core`: entry point and lifecycle.
 - `src/auth`: native HTTPS, Microsoft account, Xbox catalog, session preparation and authorization.
-- `src/streaming`: WebRTC integration under development.
-- `src/video`: VideoOut and the local H.264/Videodec2 sample.
+- `src/streaming`: WebRTC negotiation, native transport and SDK ABI adapters.
+- `src/media`: bounded RTP queues, H.264 depacketization and live media state.
+- `src/video`: VideoOut, local H.264 sample and native live Videodec2 integration.
 - `src/input`: DualShock 4 reading and reconnection.
-- `src/audio`: AudioOut PCM sample; live Opus reception is under development.
+- `src/audio`: AudioOut PCM sample and live Opus decoding/output integration.
 - `src/ui`: Spanish home, controller, project, local media, account, catalog and session views.
 - `docs`: architecture, decisions, preparation, references and evidence.
 - `scripts`: environment and local build tools.

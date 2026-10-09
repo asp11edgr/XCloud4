@@ -44,11 +44,14 @@ typedef int (*X4XboxPassport)(void *context, X4Http *http, char *out, size_t cap
  * `offering` ("xgpuweb" or "xgpuwebf2p", no fallback) -> default region POST
  * /v5/sessions/cloud/play for title->id -> GET .../state every 2 s until
  * ReadyToConnect/Provisioned (180 s) -> passport provider -> POST
- * .../connect once -> AUTHORIZED held at most 45 s -> DELETE. No SDP or ICE.
+ * .../connect once -> real RTC SDP/ICE exchange -> receive authenticated
+ * RTP and keep the session alive until cancel or failure -> DELETE.
  * The DELETE is attempted once on every path that obtained a validated
  * session path, cancelled or not. Opens and closes its own HTTPS context and
  * wipes every credential before returning the final view kept in the
  * workspace. passport is required. */
 const X4SessionSnapshot *x4_xbox_session(X4XboxWork *work, const char *microsoft_token,
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
-    X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context);
+    X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
+    X4SessionMediaCallback media_callback, void *media_user,
+    _Atomic int *keyframe_requested);

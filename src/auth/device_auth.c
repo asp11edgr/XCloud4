@@ -83,6 +83,9 @@ struct X4Auth {
     Shared shared;
     X4CatalogSnapshot catalog;
     X4SessionSnapshot session;
+    X4SessionMediaCallback media_callback;
+    void *media_user;
+    _Atomic int keyframe_requested;
 };
 
 static uint64_t now(void)
@@ -740,7 +743,8 @@ static void session_run(X4Auth *a)
             a->session_title.name[0] ? a->session_title.name : a->session_title.id, a->session_offering, NULL);
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
-            &a->cancel, session_progress, a, passport_provider, a);
+            &a->cancel, session_progress, a, passport_provider, a, a->media_callback, a->media_user,
+            &a->keyframe_requested);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);
@@ -827,6 +831,7 @@ X4Auth *x4_auth_create(void)
     }
     atomic_init(&a->cancel, 0);
     atomic_init(&a->finished, 1);
+    atomic_init(&a->keyframe_requested, 0);
     atomic_flag_clear(&a->lock);
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
@@ -923,6 +928,7 @@ int x4_auth_start_session(X4Auth *a, unsigned index)
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
+    atomic_store(&a->keyframe_requested, 0);
     expire_tokens(a);
     if (!a->token_expiry || now() >= a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
     /* Title and offering are copied privately before the worker exists. No
@@ -1056,11 +1062,32 @@ void x4_auth_session_snapshot(X4Auth *a, X4SessionSnapshot *out)
     if (busy && a->action == X4_AUTH_XBOX_SESSION && atomic_load(&a->cancel) &&
         (out->state == X4_SESSION_STARTING || out->state == X4_SESSION_WAITING ||
             out->state == X4_SESSION_READY || out->state == X4_SESSION_AUTHORIZING ||
-            out->state == X4_SESSION_AUTHORIZED || out->state == X4_SESSION_STOPPING)) {
+            out->state == X4_SESSION_AUTHORIZED || out->state == X4_SESSION_NEGOTIATING ||
+            out->state == X4_SESSION_CONNECTING || out->state == X4_SESSION_STREAMING ||
+            out->state == X4_SESSION_STOPPING)) {
         out->state = X4_SESSION_STOPPING;
         out->seconds_left = 0;
         copy_text(out->stage, sizeof(out->stage), "cerrando sesion...");
     }
+}
+
+int x4_auth_set_media_callback(X4Auth *a, X4SessionMediaCallback callback, void *user)
+{
+    if (!a) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    /* The finished release already proves every RTC callback stopped. Join
+     * the owner thread too before its registered receiver can be replaced
+     * or freed; on a native join failure leave the registration intact. */
+    int rc = join_worker(a);
+    if (rc) return rc;
+    a->media_callback = callback;
+    a->media_user = callback ? user : NULL;
+    return 0;
+}
+
+void x4_auth_request_keyframe(X4Auth *a)
+{
+    if (a) atomic_store(&a->keyframe_requested, 1);
 }
 
 int x4_auth_forget(X4Auth *a)

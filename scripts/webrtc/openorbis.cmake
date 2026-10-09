@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Cross compilation only. Native execution is not supported by this file.
 if(NOT DEFINED ENV{OO_PS4_TOOLCHAIN})
-    message(FATAL_ERROR "Carga ~/.config/xcloud4/env.sh antes de configurar")
+    message(FATAL_ERROR "Load ~/.config/xcloud4/env.sh before configuring")
 endif()
 set(X4_SDK "$ENV{OO_PS4_TOOLCHAIN}")
 set(CMAKE_SYSTEM_NAME FreeBSD)

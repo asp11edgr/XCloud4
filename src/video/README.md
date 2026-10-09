@@ -7,3 +7,5 @@
 The owner reported working video; the photo shows 217 / 240 frames, and Klog confirms the first frame and sample completion. Versions 0.2.1 and 0.2.2 preserve this video implementation.
 
 The confirmed sample does not decode an Xbox session. WebRTC reception, frame loss handling, synchronization and 720p performance remain subsequent work. See [native media](../../docs/MULTIMEDIA.md).
+
+The current development implementation, `live_h264.c`, accepts complete Annex B access units reconstructed from RTP, rotates persistent ONION inputs at a fixed decode pipeline depth of one, validates native NV12 output and converts it for display. The maximum configured size is 1280 × 720. Native live playback, decoder parameters and input-consumption behavior still require PS4 evidence; see [live media design](../../docs/MULTIMEDIA_EN_VIVO.md).

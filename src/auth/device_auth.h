@@ -55,8 +55,16 @@ typedef struct {
     char stage[80], user_code[32], verification_uri[256];
 } X4AuthSnapshot;
 
-/* Everything except x4_auth_cancel belongs to the main thread. */
+/* Everything except cancel/keyframe-request flags belongs to the main thread. */
 X4Auth *x4_auth_create(void);
+/* Main thread only, while no worker is busy. Registration persists across
+ * sign-ins. A completed worker is joined before replacing the registration;
+ * a join error preserves the old registration. The receiver context must
+ * outlive every session worker. */
+int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, void *user);
+/* Thread-safe request flag. The session owner consumes it and requests PLI;
+ * this never accesses the transport from the main/decoder thread. */
+void x4_auth_request_keyframe(X4Auth *auth);
 /* 0 when the worker was started. Refuses while busy, refuses a connection
  * check while a token is held, and refuses the catalog without a valid one.
  * Sign-in discards any old token and catalog. The catalog run publishes
@@ -70,14 +78,14 @@ void x4_auth_snapshot(X4Auth *auth, X4AuthSnapshot *out);
 /* Copy of the last catalog view; it holds no token, user hash or body. */
 void x4_auth_catalog_snapshot(X4Auth *auth, X4CatalogSnapshot *out);
 /* Prepares an Xbox cloud session for catalog title catalog_index with the
- * catalog's offering and authorizes its connection (see xbox_session.h); no
- * video, audio or input yet. Requires a READY catalog, a valid index, a
+ * catalog's offering and authorizes its connection (see xbox_session.h). A
+ * registered receiver obtains actual RTP once WebRTC connects. Requires a READY catalog, a valid index, a
  * valid Microsoft token and no running worker. Publishes STARTING before the
  * worker starts. The account stays AUTHORIZED and the catalog view is kept,
  * except when Microsoft refuses the renewal with invalid_grant: then the
  * local token and catalog are dropped and the account turns EXPIRED (no
  * global sign-out). x4_auth_cancel stops it; busy stays true through
- * AUTHORIZED and the remote cleanup until every credential is wiped and
+ * negotiation, streaming and remote cleanup until every credential is wiped and
  * HTTPS is closed. */
 int x4_auth_start_session(X4Auth *auth, unsigned catalog_index);
 /* Copy of the last session view; no token, session path or ID. */

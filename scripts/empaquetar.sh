@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 TITLE='XCloud4'
 TITLE_ID='XCLD00001'
 CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
-VERSION='00.62'
-PACKAGE_VERSION='0.6.2'
+VERSION='00.72'
+PACKAGE_VERSION='0.7.2'
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"
 # The PS4 startup loader requires the auxiliary OpenOrbis modules before main().
 # Keep compiled module binaries in an external local directory, never in Git.
@@ -39,6 +39,13 @@ done
 cp assets/icon0.png build/package/sce_sys/icon0.png
 cp LICENSE build/package/LICENSE.txt
 cp THIRD_PARTY_NOTICES.md build/package/THIRD_PARTY_NOTICES.md
+mkdir -p build/package/licenses
+LICENSE_FILES=(docs/licenses/*)
+cp "${LICENSE_FILES[@]}" build/package/licenses/
+PACKAGE_FILES='eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
+for license in "${LICENSE_FILES[@]}"; do
+    PACKAGE_FILES+=" licenses/${license##*/}"
+done
 SFO='build/package/sce_sys/param.sfo'
 "$TOOLS/PkgTool.Core" sfo_new "$SFO"
 entry() { "$TOOLS/PkgTool.Core" sfo_setentry "$SFO" "$1" --type "$2" --maxsize "$3" --value "$4"; }
@@ -56,7 +63,18 @@ DIST="$PWD/dist"
 (
     cd build/package
     "$TOOLS/create-gp4" -out xcloud4.gp4 --content-id="$CONTENT_ID" \
-        --files 'eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
+        --files "$PACKAGE_FILES"
+    # OpenOrbis v0.5.4 emits a fixed GP4 directory list. Declare the notices
+    # directory as well, so LibOrbisPkg can resolve each licensed file.
+    python3 - <<'PY'
+from pathlib import Path
+project = Path('xcloud4.gp4')
+text = project.read_text()
+if text.count('</rootdir>') != 1:
+    raise SystemExit('Expected one GP4 root directory declaration.')
+text = text.replace('</rootdir>', '<dir targ_name="licenses" />\n\t</rootdir>')
+project.write_text(text)
+PY
     "$TOOLS/PkgTool.Core" pkg_build xcloud4.gp4 "$DIST"
 )
 cp "dist/$CONTENT_ID.pkg" "dist/XCloud4-$PACKAGE_VERSION.pkg"

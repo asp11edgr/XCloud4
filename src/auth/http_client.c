@@ -53,7 +53,7 @@ static const char sessions_path[] = "/v5/sessions/cloud/";
 
 /* DEST_SESSION is produced only by classify_session, never by classify. */
 enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE, DEST_SESSION };
-enum SessionRoute { ROUTE_NONE, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_CONNECT, ROUTE_RESOURCE };
+enum SessionRoute { ROUTE_NONE, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_CONNECT, ROUTE_SDP, ROUTE_ICE, ROUTE_RESOURCE };
 
 /* Request inputs copied into one block. It must outlive the native request,
  * connection and template, so it is freed only after they were deleted. */
@@ -367,7 +367,7 @@ static bool session_id(const char *id, size_t n)
 }
 
 /* https://<region host>/v5/sessions/cloud/{play | <id> | <id>/state |
- * <id>/keepalive | <id>/connect}, nothing more. The host passes the same
+ * <id>/keepalive | <id>/connect | <id>/sdp | <id>/ice}, nothing more. The host passes the same
  * label checks as the /v2/titles region. */
 static enum SessionRoute classify_session(const char *url)
 {
@@ -390,6 +390,8 @@ static enum SessionRoute classify_session(const char *url)
     if (!strcmp(tail, "/state")) return ROUTE_STATE;
     if (!strcmp(tail, "/keepalive")) return ROUTE_KEEPALIVE;
     if (!strcmp(tail, "/connect")) return ROUTE_CONNECT;
+    if (!strcmp(tail, "/sdp")) return ROUTE_SDP;
+    if (!strcmp(tail, "/ice")) return ROUTE_ICE;
     return ROUTE_NONE;
 }
 
@@ -683,7 +685,7 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     h->stage = "URL rechazada";
     enum SessionRoute route = classify_session(url);
     if (route == ROUTE_NONE) return X4_HTTP_URL;
-    /* One method per route; the body rule is part of the allowlist. */
+    /* The method and body rule are both part of the route allowlist. */
     h->stage = "metodo rechazado";
     bool allowed = false;
     int native = X4_HTTP_METHOD_GET;
@@ -700,6 +702,12 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
         allowed = method == X4_SESSION_HTTP_POST && json && json[0];
         native = X4_HTTP_METHOD_POST;
         break;
+    case ROUTE_SDP:
+    case ROUTE_ICE:
+        allowed = (method == X4_SESSION_HTTP_GET && !json) ||
+            (method == X4_SESSION_HTTP_POST && json && json[0]);
+        native = method == X4_SESSION_HTTP_POST ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET;
+        break;
     case ROUTE_STATE:
         allowed = method == X4_SESSION_HTTP_GET && !json;
         native = X4_HTTP_METHOD_GET;
@@ -714,7 +722,7 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     if (!allowed) return X4_HTTP_ARGUMENT;
     size_t json_size = 0;
     int rc;
-    if (route == ROUTE_PLAY || route == ROUTE_CONNECT) {
+    if (json && json[0]) {
         h->stage = "cuerpo JSON rechazado";
         rc = check_json(json, &json_size);
         if (rc) return rc;

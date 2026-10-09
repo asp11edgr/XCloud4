@@ -1,15 +1,18 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
+#include <stddef.h>
+#include <stdint.h>
 
 /* Public view of one Xbox cloud session preparation. This milestone asks
  * Xbox to provision a cloud session, waits until the server reports it ready
  * to negotiate, then authorizes the connection: the Microsoft access is
  * renewed, a console-transfer token is obtained from Microsoft and sent to
- * the session's /connect. No WebRTC, SDP or ICE is sent and no game is
- * rendered. Every prepared session is deleted again before the worker
+ * the session's /connect. A real RTC peer then exchanges SDP and ICE;
+ * authenticated media packets go to the registered receiver. Every prepared session is deleted before the worker
  * releases its private credentials.
  *
  *   IDLE -> STARTING -> WAITING -> READY -> AUTHORIZING -> AUTHORIZED
+ *        -> NEGOTIATING -> CONNECTING -> STREAMING
  *        -> STOPPING -> CLOSED
  *   any active state -> STOPPING -> CANCELLED (user cancel, cleanup confirmed)
  *   any state -> ERROR (service/transport failure, deadline or failed cleanup)
@@ -33,6 +36,9 @@ enum X4SessionState {
     X4_SESSION_ERROR,
     X4_SESSION_AUTHORIZING,
     X4_SESSION_AUTHORIZED,
+    X4_SESSION_NEGOTIATING,
+    X4_SESSION_CONNECTING,
+    X4_SESSION_STREAMING,
 };
 
 /* Holds no token, session path, session ID or server body. stage is always
@@ -46,6 +52,14 @@ typedef struct {
     int cleanup_error, cleanup_http_status;
     int ready_seen, cleanup_failed;
     int connection_authorized, passport_http_status, connect_http_status;
+    int rtc_connected, sdp_http_status, ice_http_status, keepalive_http_status;
+    uint64_t video_packets, audio_packets;
     unsigned elapsed_seconds, seconds_left;
     char stage[80], region[80], offering[24], title_name[128];
 } X4SessionSnapshot;
+
+/* Authenticated, decrypted RTP. kind 0 is H264 video, kind 1 Opus audio.
+ * Borrowed pointer, valid only for the call on a transport thread. Copy
+ * immediately to a bounded queue; decoding/rendering must happen elsewhere.
+ * Caller keeps user alive until cancellation and worker join have completed. */
+typedef void (*X4SessionMediaCallback)(void *user, int kind, const uint8_t *rtp, size_t size);

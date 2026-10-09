@@ -81,6 +81,10 @@ enum X4HttpSessionMethod { X4_SESSION_HTTP_GET, X4_SESSION_HTTP_POST, X4_SESSION
  *   GET        /v5/sessions/cloud/<id>/state      (json NULL)
  *   POST       /v5/sessions/cloud/<id>/keepalive  (json "", empty body)
  *   POST JSON  /v5/sessions/cloud/<id>/connect    (non-empty JSON body)
+ *   GET        /v5/sessions/cloud/<id>/sdp        (json NULL)
+ *   POST JSON  /v5/sessions/cloud/<id>/sdp        (non-empty JSON body)
+ *   GET        /v5/sessions/cloud/<id>/ice        (json NULL)
+ *   POST JSON  /v5/sessions/cloud/<id>/ice        (non-empty JSON body)
  *   DELETE     /v5/sessions/cloud/<id>            (json NULL)
  * <id> is 1..128 of [A-Za-z0-9_-] (GUIDs included) and never "play" or
  * "active". No query, fragment, escape, dot segment, port or userinfo.

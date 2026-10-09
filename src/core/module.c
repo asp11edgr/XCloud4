@@ -34,13 +34,15 @@ static int loaded_handle(const char *name)
 }
 
 /* Some firmware modules do not report their library name through GetModuleInfo.
- * Probe only the two new networking APIs; existing media lookup is unchanged.
+ * Probe the reviewed network/random exports; media lookup is unchanged.
  * A Sysmodule success code is never a kernel module handle. */
 static int network_handle(const char *name, int dump)
 {
     const char *init, *term;
     if (!strcmp(name, "libSceSsl")) { init = "sceSslInit"; term = "sceSslTerm"; }
     else if (!strcmp(name, "libSceHttp")) { init = "sceHttpInit"; term = "sceHttpTerm"; }
+    else if (!strcmp(name, "libSceRandom")) { init = "sceRandomGetRandomNumber"; term = NULL; }
+    else if (!strcmp(name, "libSceNetCtl")) { init = "sceNetCtlGetInfo"; term = "sceNetCtlGetState"; }
     else return -1;
     OrbisKernelModule handles[256];
     size_t count = 0;
@@ -59,7 +61,7 @@ static int network_handle(const char *name, int dump)
         void *init_address = NULL, *term_address = NULL;
         /* Raw probes deliberately avoid an error log for every missing export. */
         if (sceKernelDlsym(handles[i], init, &init_address) >= 0 && init_address &&
-            sceKernelDlsym(handles[i], term, &term_address) >= 0 && term_address) {
+            (!term || (sceKernelDlsym(handles[i], term, &term_address) >= 0 && term_address))) {
             printf("XCloud4: API %s en %s h=0x%08x\n", init, base, (unsigned)handles[i]);
             if (!hits) {
                 found = (int)handles[i];
@@ -96,9 +98,11 @@ int x4_module_open(const char *name)
     uint32_t id = 0;
     int internal = 1;
     if (!strcmp(name, "libSceVideodec2")) { id = ORBIS_SYSMODULE_VIDEODEC2; internal = 0; }
+    else if (!strcmp(name, "libSceRandom")) { id = ORBIS_SYSMODULE_RANDOM; internal = 0; }
     else if (!strcmp(name, "libSceAudioOut")) id = ORBIS_SYSMODULE_INTERNAL_AUDIOOUT;
     else if (!strcmp(name, "libSceSystemService")) id = ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE;
     else if (!strcmp(name, "libSceNet")) id = ORBIS_SYSMODULE_INTERNAL_NET;
+    else if (!strcmp(name, "libSceNetCtl")) id = ORBIS_SYSMODULE_INTERNAL_NETCTL;
     else if (!strcmp(name, "libSceHttp")) id = ORBIS_SYSMODULE_INTERNAL_HTTP;
     else if (!strcmp(name, "libSceSsl")) id = ORBIS_SYSMODULE_INTERNAL_SSL;
     if (id) {
