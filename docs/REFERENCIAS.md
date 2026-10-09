@@ -35,3 +35,5 @@ Se consultaron las declaraciones de Http/Net/Ssl del SDK OpenOrbis v0.5.4 y ejem
 - Firmas de `sceHttpSetRecvTimeOut(id, usec)` y `sceHttpSetAutoRedirect(id, enabled)`, y opciones TLS: https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.cpp y https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.h.
 
 Las declaraciones ayudan a preparar la ABI; su uso real debe confirmarse en PS4 12.00. Los resultados de consola se registran en JORNADA.md.
+
+Para la 0.3.1 se consultó la ruta nativa de bibliotecas `/<sandbox>/common/lib/<nombre>.sprx` y el uso de `sceKernelGetFsSandboxRandomWord`: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c. La función está declarada en `orbis/libkernel.h` del SDK local. Se implementó un cargador propio con límites, comprobación de exportaciones y diagnósticos sin rutas completas; no se copió el código del proyecto de referencia.

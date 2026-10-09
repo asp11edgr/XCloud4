@@ -52,19 +52,19 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.2.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.3.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 
 ## Organización
 
 - `src/core`: entrada y ciclo de vida.
-- `src/auth`: autenticación pendiente.
+- `src/auth`: HTTPS y acceso Microsoft por código; comprobación en consola pendiente.
 - `src/streaming`: sesión y transporte pendientes.
 - `src/video`: VideoOut y muestra H.264 con Videodec2.
 - `src/input`: lectura y reconexión del DualShock 4.
 - `src/audio`: muestra PCM con AudioOut; Opus pendiente.
-- `src/ui`: inicio, control, proyecto e imagen y sonido.
+- `src/ui`: inicio, control, proyecto, imagen y sonido, y cuenta.
 - `docs`: decisiones, arquitectura, preparación y referencias.
 - `scripts`: herramientas de preparación y trabajo local.
 

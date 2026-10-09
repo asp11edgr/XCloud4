@@ -29,7 +29,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.3.0: interfaz, multimedia y acceso Microsoft\n");
+    printf("XCloud4 0.3.1: interfaz, multimedia y acceso Microsoft\n");
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;

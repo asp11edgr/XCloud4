@@ -78,6 +78,14 @@ En una tercera revisión de la integración, Claude no encontró defectos graves
 
 `XCloud4-0.3.0.pkg`: 6619136 bytes. SHA-256: `13d826e4b2e682f4ec40aeeaec0ecf4fc9b39b4d577ff08aff86416cd7485859`. Se copió a `/data/pkg/XCloud4-0.3.0.pkg`; la huella del archivo recuperado por FTP coincide. Se inició captura Klog para que el propietario instale, abra CUENTA y compruebe conexión antes del acceso por código. Resultados de esta versión en consola pendientes.
 
+## Fallo HTTPS de 0.3.0 y corrección 0.3.1
+
+La fotografía del propietario muestra `INICIO HTTPS (RED/TLS)`, detalle `0x80020002` y HTTP 0. Klog confirma `Sysmodule libSceSsl -> 0x00000000` seguido de `modulo libSceSsl -> 0x80020002`: la búsqueda por nombre no localiza el módulo y la ruta de respaldo devuelve ENOENT. Todavía no se envió la solicitud a Microsoft; no demuestra un fallo de cuenta, registro ni de negociación TLS. Las listas obtenidas por FTP sitúan Ssl/Http en `/system/priv/lib`, pero esa vista no garantiza acceso desde el sandbox de la aplicación.
+
+Claude Opus 5.5 analizó el registro y revisó la corrección concreta. La 0.3.1 conserva la búsqueda por nombre y añade la resolución de las parejas Init/Term para SSL y HTTP. Coincidencias con las mismas direcciones corresponden al mismo proveedor; direcciones distintas detienen la resolución por ambigüedad. Los sondeos también funcionan si no se obtiene el nombre del módulo. Se añadió la ruta común del sandbox usando la función declarada por OpenOrbis; no se imprime su identificador. Los respaldos existentes y la ruta privada nativa quedan como últimos intentos, con registro de cada resultado. Los medios conservan su orden de carga anterior. No se inventaron alias de bibliotecas ni se desactivó la validación TLS.
+
+La primera compilación detectó que OpenOrbis no declara `strnlen`; se sustituyó por un recorrido acotado. La versión final compiló y se empaquetó sin errores ni avisos. `XCloud4-0.3.1.pkg`: 6619136 bytes, SHA-256 `abb2ca847e67998e8534d51bc59441d9979d28c9424d4e8821486dd1be7c3022`. Se copió a `/data/pkg/XCloud4-0.3.1.pkg` y la huella del archivo recuperado por FTP coincide. No se ejecutaron pruebas automatizadas. Conexión HTTPS y acceso Microsoft reales pendientes de instalar y abrir esta versión en la consola.
+
 ## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

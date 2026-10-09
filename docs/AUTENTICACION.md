@@ -30,3 +30,7 @@ Este documento describe la siguiente implementación. No demuestra autenticació
 Se añade CUENTA al menú. X solicita acceso por código, cuadrado comprueba HTTPS con los metadatos públicos de Microsoft y triángulo borra la sesión local. Entrar en la pantalla no solicita un código automáticamente. Círculo cancela una solicitud pendiente y vuelve al menú; OPTIONS espera su cancelación manteniendo la interfaz antes de solicitar la salida nativa confirmada en 0.2.2.
 
 El intercambio de credenciales Xbox y el catálogo aún no forman parte de esta entrega. Una cuenta autorizada solo significa que se obtuvo un token Microsoft para los permisos solicitados. No demuestra inicio de un juego ni acceso cloud. No se ejecutaron pruebas automatizadas; los resultados en consola se documentarán por separado.
+
+## Corrección 0.3.1
+
+La 0.3.0 falló al localizar el módulo SSL, antes de enviar una solicitud HTTPS. La 0.3.1 amplía la localización por exportaciones y rutas nativas del sandbox. Está compilada y copiada a la PS4; queda pendiente comprobar CUENTA → cuadrado en la consola. No se ha obtenido todavía un código de autorización ni un token Microsoft desde la PS4.
