@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.9\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.10\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1376,6 +1376,31 @@ static void signal_error_shape(unsigned node, X4JsonSpan value)
         status_type, status_number_ok, status_number, details_type, message_type);
 }
 
+/* Primary Xbox clients model errorDetails.code as a public service code.
+ * Admit only a short ASCII identifier here, never a message or other field. */
+static void signal_public_error_code(X4JsonSpan details)
+{
+    char name[65] = {0};
+    X4JsonSpan code;
+    bool valid = false;
+    if (x4_json_type(details) == X4_JSON_T_OBJECT &&
+        x4_json_member(details, "code", &code) == 1 &&
+        x4_json_type(code) == X4_JSON_T_STRING &&
+        !x4_json_token(code, name, sizeof(name))) {
+        size_t length = strlen(name);
+        unsigned char first = (unsigned char)name[0];
+        valid = length >= 1 && length <= 64 &&
+            ((first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z'));
+        for (size_t i = 1; valid && i < length; ++i) {
+            unsigned char c = (unsigned char)name[i];
+            valid = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '_';
+        }
+    }
+    if (valid) printf("XCloud4: signal public error name=%s\n", name);
+    x4_secure_clear(name, sizeof(name));
+}
+
 static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, const char *suffix)
 {
     X4JsonSpan root={0}, details={0}, error={0};
@@ -1401,6 +1426,7 @@ static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, co
         signal_error_shape(0, root);
         if (details_type) signal_error_shape(1, details);
         if (error_type) signal_error_shape(2, error);
+        if (details_type == X4_JSON_T_OBJECT) signal_public_error_code(details);
         X4JsonSpan nested;
         if (details_type == X4_JSON_T_OBJECT && x4_json_member(details, "details", &nested) == 1 &&
             x4_json_type(nested) == X4_JSON_T_OBJECT) signal_error_shape(3, nested);
