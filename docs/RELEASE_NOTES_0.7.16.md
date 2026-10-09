@@ -66,3 +66,9 @@ The 0.7.16 package has been delivered for the owner to install. The log capture 
 - SHA-256: `f274e91489dde87e948616411fbde8129b6091d0cbffae16b5ef774b5682f3b3`.
 - Guest/PC hashes match. All **9368** manifest source hashes verify locally, covering **150852465 source bytes**, with **9779 archive entries** and no forbidden generated/private paths.
 - Archived notices and the complete C++ runtime source match the frozen repository bytes. The full application revision separately supplies the Makefile and candidate diagnostics. Earlier package/source snapshots stay immutable.
+
+## First console attempt
+
+The owner confirms that 0.7.16 remains open after the connection error: CE-34878-0 does not recur in this attempt. The capture identifies 0.7.16 and shows the corrected offer structure, then an **HTTP 200 / 1866-byte** SDP response containing **1504 decoded SDP bytes**. The answer is applied. Local ICE returns HTTP 202; remote ICE returns **HTTP 200 / 449 bytes**. The discarded IPv6 candidate is **class 1 / reason 12**, meaning syntactically valid hexadecimal IPv6 outside the Teredo prefix. This establishes why that candidate was omitted, without establishing whether its omission caused the failure.
+
+RTC reaches failed state, then disconnects/closes; the session ends with **0xFFFFF824**, zero video/audio and successful DELETE HTTP 200 without cleanup error. No timed-wait exception appears in the captured attempt. The preserved bounded extract contains **282 selected lines**, SHA-256 `a4dcd805790c5bc59d208962d830f43d1162d09afc3664921728426752238848`, outside Git. **The timed-wait closure is corrected for this tested path; the ICE/RTC connection failure and game media remain unresolved.**
