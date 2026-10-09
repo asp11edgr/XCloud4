@@ -36,7 +36,7 @@ El propietario y Klog confirmaron el catálogo real: 2733 títulos recibidos, 12
 
 ## Preparación de sesión — 0.5.0
 
-Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. Esta entrega todavía no recibe imagen, sonido ni control del juego. Su resultado remoto debe confirmarse en la consola. Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).
+Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. El propietario y Klog confirmaron preparación de AMONGUS, estado listo para negociar y cierre automático con HTTP 200, sin error. Esta entrega todavía no recibe imagen, sonido ni control del juego. Consulta [SESION_XBOX.md](docs/SESION_XBOX.md). Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).
 
 ## Catálogo Xbox — 0.4.0
 

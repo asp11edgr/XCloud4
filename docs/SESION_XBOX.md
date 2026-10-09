@@ -2,7 +2,15 @@
 
 ## Alcance
 
-Desde el catálogo, X solicita a Xbox la preparación del título seleccionado. La pantalla informa la respuesta del servicio y el cierre. Esta entrega no recibe ni presenta medios del juego, no envía controles y no negocia SDP/ICE. La preparación real está pendiente de confirmar en PS4.
+Desde el catálogo, X solicita a Xbox la preparación del título seleccionado. La pantalla informa la respuesta del servicio y el cierre. Esta entrega no recibe ni presenta medios del juego, no envía controles y no negocia SDP/ICE. La preparación y el cierre automático están confirmados en PS4 con 0.5.0.
+
+## Resultado confirmado el 8 de octubre de 2026
+
+El propietario envió una fotografía de AMONGUS con "XBOX PREPARO LA SESION", "XBOX LISTA PARA NEGOCIAR LA CONEXION" y 34 segundos restantes antes del cierre automático.
+
+Klog identifica XCloud4 0.5.0 y confirma creación con HTTP 202, espera de recursos con HTTP 200 y transición READY con la etapa "Xbox lista para negociar la conexion". Después registra el cierre DELETE con HTTP 200 y cuerpo vacío. El resultado final es CLOSED, error cero, `ready_seen=1`, `cleanup_failed=0` y cierre HTTP 200. La solicitud propia XCloud4/PS4/Orbis fue aceptada para esta preparación.
+
+Se conserva este hito con la etiqueta `v0.5.0`. No se ha confirmado autorización Passport de conexión, negociación WebRTC, imagen, audio ni mando dentro de un juego. Tampoco se comprobaron por separado la cancelación manual durante la creación, el cierre desde Círculo o el cierre de una sesión activa mediante OPTIONS.
 
 Se usa el flujo descrito por [GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs) y una implementación C para nuestro entorno. Las credenciales se obtienen mediante el registro propio de XCloud4. La solicitud describe el dispositivo como Sony PS4 / Orbis.
 

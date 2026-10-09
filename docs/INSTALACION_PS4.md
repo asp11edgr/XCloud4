@@ -6,7 +6,7 @@ Cerrar XCloud4 antes de instalar `XCloud4-0.5.0.pkg`, aceptar reemplazar la apli
 
 Si Xbox prepara la sesión, anotar el mensaje mostrado. Círculo debe esperar el cierre remoto y volver al catálogo. Si se deja abierta, una sesión lista se cierra después de 45 segundos. Si aparece un error, conservar su detalle numérico y estado HTTP para el diagnóstico. OPTIONS solicita cierre de la sesión antes de salir de la aplicación. Consulta [SESION_XBOX.md](SESION_XBOX.md).
 
-Resultados reales de esta versión pendientes de ejecutar en PS4.
+El propietario y Klog confirmaron preparación de AMONGUS y cierre automático de la sesión sin error. La cancelación con Círculo y el cierre de una sesión activa mediante OPTIONS no se comprobaron por separado. Todavía no se transmite un juego.
 
 ## Corrección de cierre 0.2.2
 

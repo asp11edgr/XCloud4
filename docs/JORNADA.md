@@ -116,6 +116,12 @@ La nueva entrega solicita `/v5/sessions/cloud/play` para el título elegido y co
 
 La 0.5.0 compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.5.0.pkg`: 6619136 bytes, SHA-256 `bda87ebf4f46faf427c5ee54724789cb41020f890f26417152071dce3a252440`. Se copió a `/data/pkg/XCloud4-0.5.0.pkg`; el archivo recuperado por FTP tiene la misma huella. Preparación de sesión y cierre reales pendientes de instalar y abrir esta versión en PS4. La base confirmada anterior sigue siendo `v0.4.0`.
 
-## Publicación al terminar la jornada
+## Resultado confirmado de la 0.5.0: sesión preparada y cerrada
+
+El propietario envió una fotografía de SESION DE JUEGO con AMONGUS, "XBOX PREPARO LA SESION", "XBOX LISTA PARA NEGOCIAR LA CONEXION" y 34 segundos restantes. Klog identifica la 0.5.0; después de los intercambios Xbox registra creación HTTP 202 (153 bytes), espera de recursos HTTP 200 (75 bytes), estado listo HTTP 200 (70 bytes) y READY. Al terminar el plazo registra STOPPING, DELETE HTTP 200 con cuerpo vacío, error cero y estado final CLOSED. El resultado conserva `ready_seen=1`, `cleanup_failed=0` y cierre HTTP 200.
+
+Quedan confirmadas la creación, preparación y eliminación automática de una sesión remota con la descripción propia XCloud4/PS4/Orbis. Se guarda el hito con `v0.5.0`; todavía no hay autorización Passport de conexión, SDP/ICE, WebRTC ni medios o mando dentro de un juego. Círculo, cancelación durante creación y OPTIONS con sesión activa no se comprobaron por separado. No se ejecutaron pruebas automatizadas. La búsqueda de títulos continúa aplazada. El siguiente trabajo de la etapa 4 es completar la autorización de conexión y adaptar un transporte WebRTC real.
+
+## GitHub al terminar la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.
