@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.10: nombre publico del rechazo SDP de Xbox\n");
+    printf("XCloud4 0.7.11: respuesta SDP antes del mantenimiento de sesion\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

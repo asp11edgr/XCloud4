@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.10\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.11\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1504,7 +1504,7 @@ static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
             gone ? "Xbox termino la sesion" : "Xbox no confirmo el mantenimiento de sesion");
         return false;
     }
-    w->next_keepalive = session_now() + X4_SESSION_KEEPALIVE_USEC;
+    w->next_keepalive = now + X4_SESSION_KEEPALIVE_USEC;
     return true;
 }
 
@@ -1551,7 +1551,6 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     w->sdp_polls=0;
     session_state(w, X4_SESSION_NEGOTIATING, "esperando respuesta SDP de Xbox", seconds_until(deadline, session_now()));
     for (;;) {
-        if (!signal_keepalive(w, deadline, end)) return false;
         size_t length = 0;
         int status = 0;
         ++w->sdp_polls;
@@ -1570,7 +1569,7 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
             x4_secure_clear(w->sdp, sizeof(w->sdp));
             if (rc < 0) { end_with(end, X4_SESSION_ERROR, rc, status, "WebRTC rechazo la respuesta SDP"); return false; }
             printf("XCloud4: respuesta SDP aplicada HTTP %d\n", status);
-            return true;
+            return signal_keepalive(w, deadline, end);
         }
         x4_secure_clear(w->exchange, sizeof(w->exchange));
         if (result < 0) {
@@ -1578,6 +1577,7 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
                 result == -2 ? "Xbox rechazo el intercambio SDP" : "respuesta SDP no valida");
             return false;
         }
+        if (!signal_keepalive(w, deadline, end)) return false;
         int waited = session_wait(w, session_now() + X4_SESSION_SDP_POLL_USEC, deadline);
         if (waited) {
             end_with(end, waited == 1 ? X4_SESSION_CANCELLED : X4_SESSION_ERROR,
