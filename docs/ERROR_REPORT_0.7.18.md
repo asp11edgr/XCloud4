@@ -36,6 +36,8 @@ The linked function begins at **0x000e27c0**, subtracts **0x10218 (66,072 bytes)
 
 The return-address push at that call targets the unmapped page. The corresponding actual dependency source declares **`byte buffer[65536]`** inside `SctpTransport::doRecv()`. The symbolic backtrace also resolves through a scheduled processor task, `packaged_task`, `ThreadPool::run()` and the C++ thread proxy.
 
+The source callback path is `UpcallCallback` → `handleUpcall` → `enqueueRecv` → `Processor` → `ThreadPool`. The installed SDK threading header passes a null attribute argument to `pthread_create`, and the actual linked thread constructor also passes **NULL attributes**. Thus the receive task runs in an RTC worker without an explicitly configured stack size. Available declarations and executable inspection do not establish the numeric native default or the worker mapped stack bounds.
+
 These observations strongly support **worker-stack exhaustion caused by the large local receive buffer** as a current hypothesis. They do not yet establish the configured or mapped worker stack size, exclude prior stack corruption, or prove that changing allocation/thread sizing repairs console behavior. The fault occurs at the call instruction; the evidence does not establish an invalid mutex object as the cause.
 
 ## Comparison and investigation scope
