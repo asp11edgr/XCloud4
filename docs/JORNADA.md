@@ -191,6 +191,28 @@ Source archive `XCloud4-0.7.1-dependency-sources.tar.gz` is **83536524 bytes**, 
 
 ## 0.7.2: bounded RTC worker initialization
 
-ABI inspection traced 0.7.1's count to the prebuilt SDK libc++ CPU-count probe calling `sysconf(84)`. Native FreeBSD selector 84 denotes `_SC_THREAD_CPUTIME`, whose `_POSIX_THREAD_CPUTIME` value is **200112L**; native CPU-count selectors are 57/58. Version 0.7.2 explicitly calls `rtcSetThreadPoolSize(4)` before peer-connection initialization and checks its result. Additional `src/impl/threadpool.cpp` diagnostics record how many workers were actually created, including the count at failure. The native process-ID syscall 20 implementation is retained.
+ABI inspection traced 0.7.1's count to the prebuilt SDK libc++ CPU-count probe calling `sysconf(84)`. Native FreeBSD selector 84 denotes `_SC_THREAD_CPUTIME`, whose `_POSIX_THREAD_CPUTIME` value is **200112L**; native CPU-count selectors are 57/58. Version 0.7.2 explicitly calls `rtcSetThreadPoolSize(4)` before peer-connection initialization and checks its result. Additional `src/impl/threadpool.cpp` diagnostics record how many workers were actually created, including the count at failure. The existing SDK thread-ID adapter is retained.
 
-`XCloud4-0.7.2.pkg` compiled and packaged successfully: **8847360 bytes**, SHA-256 `f2d8cf6e606435927f98ddcd2ae274fed795787468e2bbe8bc7d2bfb9dfbc66a`. Its upload and FTP retrieval matched. The owner's console result is pending; actual game video/audio and a completed 0.7.2 milestone are not claimed. Matching patched sources are exported separately, retaining previous immutable snapshots. See [0.7.2 notes](RELEASE_NOTES_0.7.2.md).
+`XCloud4-0.7.2.pkg` compiled and packaged successfully: **8847360 bytes**, SHA-256 `f2d8cf6e606435927f98ddcd2ae274fed795787468e2bbe8bc7d2bfb9dfbc66a`. Its upload and FTP retrieval matched. Matching patched sources are exported separately, retaining previous immutable snapshots. See [0.7.2 notes](RELEASE_NOTES_0.7.2.md).
+
+### Actual 0.7.2 console result
+
+The console capture confirms `rtcSetThreadPoolSize(4)` returned zero and workers **1, 2, 3 and 4** were created. Thread-pool, PSA, SCTP, DTLS, SRTP and ICE library initialization completed with zero status. Peer-connection creation returned handle **1**, and local track/data-channel creation succeeded. The previous worker-pool initialization failure is resolved in this capture.
+
+A new failure occurs at `rtcSetLocalDescription(pc, "offer")`: a runtime-error category and return **-2**, with no SDP callback captured at that point. No media was received. Successful library/object initialization does not establish ICE connectivity or a remote stream. Claude Opus 5.5 completed its read-only offer review in nine turns; queued callback delivery means its absence alone does not locate the internal failure stage. Bounded 0.7.3 diagnostics cover offer/ICE/certificate/network stages. See [the diagnostic package](RELEASE_NOTES_0.7.3.md).
+
+The immutable 0.7.2 source snapshot is **83536843 bytes**, SHA-256 `3932e6593bf76eb26851c4db8ee0448d9b76e9f95a68163022e975558251c3c0`; all **9367** source hashes matched. A later patch-script idempotence check changes no compiled provider code and will be captured with the next stable source snapshot.
+
+At the owner's request, twelve older PKG installer files (0.2.0 through 0.7.1) were removed from the console's `/data/pkg` directory. The subsequent listing confirmed only the 0.7.2 installer remains there. Development packages and corresponding sources remain preserved on the PC.
+
+## 0.7.3: offer and native network diagnostics
+
+The stable diagnostic changes add offer stages 20–26, ICE-agent results 30–33/35, certificate stages 40–45/48–49 and numeric UDP/socket/poll/resolver/interface results 50–63. Reproducible modifications cover libdatachannel peer-connection/ICE/certificate/TLS sources plus libjuice `agent.c`, `conn_poll.c` and `udp.c`. Native adapters report fixed labels and numeric values; the logger preserves `errno`. Account data, SDP, ICE values and certificate contents are not logged. The four-worker RTC policy is retained.
+
+Claude Opus 5.5 completed a read-only offer review in **9 turns**, successfully, without changing code or demonstrating a fix. The review identified generalized initialization exception masking and ambiguity from queued certificate/callback/gathering work. The final dependency libraries and full application compiled successfully, then packaged as `XCloud4-0.7.3.pkg`: **8847360 bytes**, SHA-256 `3290f527aa67d94f17eb345cba055b3f96718e67f147dec807b9a8caa4f5172a`. Upload and FTP retrieval matched that hash.
+
+### Actual 0.7.3 console result
+
+The capture records certificate DER **362 bytes** and certificate readiness. ICE-agent creation and local description return zero; the offer receives media count **3** and is committed. Gathering begins, with poll-pipe/poll-thread and bind-address resolution returning zero. Setting UDP flags through `F_SETFL` fails with **errno 13 (`EACCES`)**, then connection -1, gathering -2 and local-description request -2. Remote cleanup returns **HTTP 200**. The owner reports the same error view and the capture contains no received RTP.
+
+This isolates the operation that fails after successful certificate/local-offer preparation. It does not establish the exact cause of native denial or a working fix; ICE connectivity and live game video/audio remain unconfirmed. Matching sources were closed before further repair work as `XCloud4-0.7.3-dependency-sources.tar.gz`: **83543499 bytes**, SHA-256 `5c39a0ed1d50c39cc8bff12550f6e86ff7e6f13a55a4abab029e4ec086f857e9`, with all **9367** source hashes verified. Every earlier snapshot remains unchanged. See [0.7.3 notes](RELEASE_NOTES_0.7.3.md).
