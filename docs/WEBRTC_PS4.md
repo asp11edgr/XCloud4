@@ -139,6 +139,20 @@ Actual DNS succeeds (lookup0/elapsed11086 microseconds), with current SDP1286 by
 
 The exact dependency/adapter source archive is **83545064 bytes**, SHA-256 `b2ab42ea193254aa4aa71c891a3e53396850685418cc6c366783e3abfdd94235`; all **9367** hashes match, with identical guest/PC copies. Application checkpoint `0e328bf` contains the authentication diagnostics separately from the unchanged RTC/vendor trees. Earlier snapshots remain immutable. See [0.7.9 source and runtime evidence](RELEASE_NOTES_0.7.9.md).
 
+### 0.7.10 restricted service-code name
+
+The original authentication helper admits only the direct errorDetails object's string code after checking 1–64 ASCII characters: first a letter, then letters/digits/underscore. Invalid/absent/duplicated values stay silent and the 65-byte temporary buffer is always cleared. Message/body/top-level/nested/other strings remain hidden. Numeric diagnostics/classes 0–14 and all negotiation/media decisions are unchanged.
+
+Pinned CloudNow/OpenXbox references support identifier filtering and separate code/message fields; no implementation is copied. The helper is original with narrower bounds, and no exhaustive server enum or timing-based refusal cause is established. Product 0.7.10 uses PS4 APP_VER 00.80. Claude Opus 5.5 completed a focused read-only review successfully in 3 turns / 2 reads, without a material finding within the helper/JSON scope. The full application/package built without warnings/errors, and VM/PC/PS4 retrieval hashes match.
+
+Application checkpoint `0fbe73a` contains the authentication helper separately from the matching dependency/native-adapter archive: **83558285 bytes**, SHA-256 `4dc79943434d23a05840665254769984d905e0e0e1bb9e4a186fa4ec03b39a77`. All **9367** source hashes and the PC copy match; vendors/RTC/configuration remain unchanged, with corresponding notices updated. Earlier snapshots stay immutable. See [0.7.10 package/source evidence, pins and metadata](RELEASE_NOTES_0.7.10.md).
+
+The first console capture records DNS lookup0/12356 microseconds/nonzero1 and SDP1285 bytes/two candidates/three media and BUNDLE entries. POST returns HTTP202, followed by **38** pending HTTP204 polls. Keepalive starts at **30379 ms**, then returns **HTTP410/118 bytes** at **30670 ms**, root code class2/SessionNotActive with no errorDetails. The new name helper is not entered; cleanup returns HTTP200 and no RTP/video/audio is received.
+
+A second attempt on the same installed version records SDP1285 bytes/two candidates and **37** pending HTTP204 polls. Keepalive starts at **30187 ms**, then returns HTTP410/118 bytes at **30480 ms**, root code class2/SessionNotActive without errorDetails. The name helper is again not entered; cleanup returns HTTP200 with no RTP/media. The underlying earlier logical SDP refusal remains uncaptured and no correction is established.
+
+Both attempts pass ReadyToConnect, accepted connect202 and Provisioned before SDP; failure occurs during subsequent negotiation/polling. WaitingForResources is handled as waiting under the initial **180-second provisioning limit**. Extended queue duration/UI remain incomplete and are [recorded for improvement](MEJORAS_FUTURAS.md); no actual server wait-time estimate is established here.
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.

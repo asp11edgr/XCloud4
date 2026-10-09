@@ -312,3 +312,29 @@ Native DNS succeeds (lookup **0**, elapsed **11086 microseconds**), with current
 The diagnostic records SDP route **1**, errorDetails object(type **1**), code string(type **3**) classified **1 (unrecognized)**, and message string type **3**. No root-code/status/nested-details value is reported. No raw string is logged, so the exact refusal category is still unknown. Remote deletion returns **HTTP 200**, with no RTP, video or audio received. The diagnostic improves structural evidence without establishing a server correction or complete stream.
 
 The application runtime checkpoint is `0e328bf`. Its authentication change is paired with an immutable dependency/native-adapter source archive: **83545064 bytes**, SHA-256 `b2ab42ea193254aa4aa71c891a3e53396850685418cc6c366783e3abfdd94235`. All **9367** manifest hashes matched; PC/guest hashes are identical, with no forbidden generated/Git/log/local-credential paths. Pinned vendors/RTC/configuration remain unchanged, original public upstream fixtures are retained, and every earlier snapshot is preserved. See [0.7.9 source and console evidence](RELEASE_NOTES_0.7.9.md).
+
+## 0.7.10: restricted service error name
+
+The original 26-line helper reads only the direct errorDetails object's string code and validates 1–64 ASCII characters: first a letter, then letters/digits/underscore. Only a valid identifier is printed locally. Invalid/absent/duplicated fields remain silent; the 65-byte temporary buffer is cleared on every path. Message/body/top-level/nested/other strings stay hidden. Previous numeric diagnostics/classes 0–14 and all parsing/negotiation/keepalive/retry/cleanup/media decisions remain unchanged.
+
+Interface research uses pinned CloudNow and OpenXbox sources, without copying implementations; XCloud4's helper imposes narrower direct-field/ASCII/length bounds. No exhaustive server code list or timing-based refusal cause is established. Product 0.7.10 uses package APP_VER 00.80 after 00.79; the Spanish UI/product version remains separate from that field.
+
+Claude Opus 5.5 completed the focused read-only helper/JSON review successfully in **3 turns / 2 reads**, without a material finding. Bounds, controls, duplicate fields, constant output format and temporary-buffer clearing were reviewed. The earlier broad attempt reached its turn limit without a result, and is not recorded as a successful review.
+
+The full application/package built without warnings/errors: `XCloud4-0.7.10.pkg`, **8912896 bytes**, SHA-256 `c3a8e1cd1bf8d78c15f8c7bec9e73470afc0e1fe14053692357bd15fc5d82ffe`. VM/PC/PS4 retrieval hashes match. The 0.7.9 documentation checkpoint was committed/pushed at `032b715`; its logical refusal is the diagnostic target, with no game media received.
+
+Application checkpoint `0fbe73a` supplies the authentication helper separately from the closed dependency/native-adapter source archive: **83558285 bytes**, SHA-256 `4dc79943434d23a05840665254769984d905e0e0e1bb9e4a186fa4ec03b39a77`. All **9367** manifest hashes matched; PC and guest archive hashes are identical, with no forbidden generated/Git/log/local-credential paths. Vendors, RTC adapters and configuration are unchanged, with corresponding notices updated. Every earlier snapshot stays immutable. See [0.7.10 package/source evidence and fixed references](RELEASE_NOTES_0.7.10.md).
+
+### First 0.7.10 console attempt
+
+Native DNS succeeds (lookup **0**, elapsed **12356 microseconds**, nonzero-address boolean **1**). Current SDP is **1285 bytes / two candidates**, with three media sections and three BUNDLE entries. Xbox accepts submission with **HTTP 202**, followed by **38** pending answer polls returning **HTTP 204**.
+
+Keepalive is attempted at **30379 ms**, then returns **HTTP 410 / 118 bytes** at **30670 ms**, root-code class **2 (`SessionNotActive`)** and no errorDetails. The new restricted-name helper is **not entered**. Remote deletion returns **HTTP 200**, with no RTP, video or audio. This attempt does not capture the earlier HTTP200/243-byte logical SDP refusal or demonstrate a correction.
+
+### Second 0.7.10 console attempt and queue limit
+
+The owner repeats the same installed version. SDP is **1285 bytes / two candidates**, followed by **37** pending HTTP204 polls. Keepalive is attempted at **30187 ms**, then returns **HTTP410 / 118 bytes** at **30480 ms**, root-code class **2 (`SessionNotActive`)**, without errorDetails. The restricted-name helper is again not entered. Remote deletion returns **HTTP200**, with no RTP/video/audio. Both attempts identify an inactive session, while the earlier logical SDP refusal remains uncaptured; no correction is established.
+
+Both attempts pass `ReadyToConnect`, `/connect` HTTP202 and `Provisioned` before SDP. Their failure occurs in the subsequent negotiation/polling stage. Source inspection confirms `WaitingForResources` is handled as waiting, with initial provisioning bounded to **180 seconds (three minutes)**. Extended queue waiting duration and UI need improvement; no server estimate is established by these captures. That bounded backlog item is [recorded separately](MEJORAS_FUTURAS.md).
+
+The package and immutable source snapshots are unchanged.
