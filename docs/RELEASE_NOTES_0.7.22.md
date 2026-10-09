@@ -1,6 +1,6 @@
 # XCloud4 0.7.22 — SSE2 color conversion
 
-Product **0.7.22**, PS4 **APP_VER 00.92**, application identifier **XCLD00001**, has frozen conversion source and a successful native build. The PS4 interface remains Spanish; repository and release content remain English. **Fresh Claude source review, compiled instruction audit, matching-source verification and VM/PC/retrieved-PS4 package integrity are confirmed. The console result remains pending.**
+Product **0.7.22**, PS4 **APP_VER 00.92**, application identifier **XCLD00001**, has frozen conversion source and a successful native build. The PS4 interface remains Spanish; repository and release content remain English. **At packaging, fresh Claude source review, compiled instruction audit, matching-source verification and VM/PC/retrieved-PS4 package integrity were confirmed; the console result was pending.** The later hardware result is recorded in the dated addendum below.
 
 ## Reason
 
@@ -41,3 +41,9 @@ The fresh actual Claude Opus 5.5 review completed successfully with no material 
 The compiled VM source matches **67** frozen PC runtime/build/script/notice/license files. Sixteen selected export files also match exactly. The dependency archive contains patched dependency sources, recipes and native adapters; its PC copy passed complete manifest, exclusion and privacy checks. The full application, including media/main source, is preserved separately in Git at the corresponding release checkpoint.
 
 The verified 0.7.21 package/source evidence remains preserved. Its source-only review does not validate this conversion change. No automated tests have been added or run. Native copy, draw/presentation time, keyframe recovery, complete controls and external closure remain relevant limits beyond this checkpoint's conversion scope.
+
+## Hardware addendum — 2026-10-09
+
+The owner reports better video but continuing choppiness and greater control-to-image delay; input latency has not been measured. The preserved **24-interval / 120.487-second** sustained sample records **2350 new image draws**, averaging **19.504 per second**, with **3.001 ms conversion** and **29.337 ms copy** per image. The conversion-region comparison against the separate 0.7.21 sample is about **6.686×**; it is not a controlled benchmark or an FPS multiplier. The `damaged` counter records access-unit resets/discards, not physical damaged frames.
+
+See the [0.7.22 measured result and limitations](ERROR_REPORT_0.7.22.md). Original review metadata, package/source hashes and published artifacts remain unchanged. The owner-selected next checkpoint requests 540p; its delivered dimensions and performance are unverified.

@@ -41,7 +41,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.22: conversion de imagen SSE2 y tiempos de video\n");
+    printf("XCloud4 0.7.23: perfil de imagen 540p para fluidez\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

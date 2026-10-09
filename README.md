@@ -12,11 +12,17 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest prepared development checkpoint: 0.7.22
+## Latest prepared development checkpoint: 0.7.23
 
-The implemented **0.7.22**, PS4 **APP_VER 00.92**, converts eight pixels at a time with original SSE2 code, preserving the previous integer color coefficients, rounding and bounded scalar tail. Native output memory, decoder rings, allocations and ownership remain unchanged. The previous staging change substantially improves video, but its current cost is still about **29.354 ms to copy + 20.068 ms to convert each image**. The native build, final source inventory and compiled instruction audit are verified, fresh actual Claude **Opus 5.5** review returned PASS, and VM/PC/retrieved-PS4 package hashes match. The 0.7.22 console result remains **pending**. No resulting FPS or smoothness is established. See the [0.7.22 implementation, review and artifact evidence](docs/RELEASE_NOTES_0.7.22.md).
+The owner selected a **960 × 540** video request for **0.7.23**, PS4 **APP_VER 00.93**, to prioritize fluency. The implementation updates the two fixed RTC startup capability/dimension messages and adds a numeric request diagnostic; **30 FPS / 5000 kbps** and the existing native media/input pipeline remain unchanged. The native build, final compiled-profile audit, complete matching-source inventory, fresh actual Claude **Opus 5.5** PASS and VM/PC/retrieved-PS4 package hashes are verified. The console result remains **pending**. Requested dimensions must still be checked against actual decoded width, height and pitch. See the [0.7.23 request, review and artifact evidence](docs/RELEASE_NOTES_0.7.23.md).
 
-## Latest tested development checkpoint: 0.7.21
+## Latest tested development checkpoint: 0.7.22
+
+Product **0.7.22**, PS4 **APP_VER 00.92**, converts eight pixels at a time with original SSE2 code. The owner reports better video but continuing choppiness and greater control-to-image delay; that delay has not been measured. A sustained **120.487-second** sample records **19.504 new image draws per second**, **3.001 ms conversion** and **29.337 ms copy** per image. Conversion is about **6.686×** faster than the separate 0.7.21 sample's conversion region; this is not a controlled benchmark or an FPS multiplier. Copy remains the largest measured local stage.
+
+The native build, final source inventory, compiled-code audit, fresh actual Claude **Opus 5.5** PASS and VM/PC/retrieved-PS4 package hashes are verified. The [published 0.7.22 development release](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.22) preserves its artifacts. See the [0.7.22 measured result and limits](docs/ERROR_REPORT_0.7.22.md) and [release evidence](docs/RELEASE_NOTES_0.7.22.md). Panel FPS, absolute video age, wire-level input acknowledgment and the complete control matrix are unverified.
+
+## Previous tested development checkpoint: 0.7.21
 
 Product **0.7.21**, PS4 **APP_VER 00.91**, copies validated native NV12 output into persistent CPU storage before RGB conversion, with runtime-selected SSE4.1 streaming reads and a baseline SSE2 fallback. Native type 3 output and existing buffer bounds remain. The owner confirms video is much better than 0.7.20 but still choppy, and confirms the D-pad and sticks work; the earlier D-pad concern was retracted. Other buttons, local chords and release/cancellation paths have not been fully checked.
 
@@ -151,7 +157,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The current 0.7.22 development source successfully produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.22.pkg`; the native build and VM/PC package integrity are verified. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The current 0.7.23 development source successfully produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.23.pkg`; the native build and VM/PC package integrity are verified. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

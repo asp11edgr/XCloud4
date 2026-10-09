@@ -471,8 +471,9 @@ static void start_channels(X4Rtc *rtc)
     rc |= startup_message(message, "/streaming/properties/clientappinstallidchanged", "{\"clientAppInstallId\":\"f9ac8684-1032-4131-bb47-d2f58da9bb93\"}");
     rc |= startup_message(message, "/streaming/characteristics/orientationchanged", "{\"orientation\":0}");
     rc |= startup_message(message, "/streaming/characteristics/touchinputenabledchanged", "{\"touchInputEnabled\":false}");
-    rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", "{\"supportsCustomResolution\":true,\"supportsHevc\":false,\"supportsHdr\":false,\"supportsFps\":30,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":5000,\"video\":{\"width\":1280,\"height\":720,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":5000}}");
-    rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", "{\"horizontal\":1280,\"vertical\":720,\"preferredWidth\":1280,\"preferredHeight\":720,\"safeAreaLeft\":0,\"safeAreaTop\":0,\"safeAreaRight\":1280,\"safeAreaBottom\":720,\"supportsCustomResolution\":true}");
+    printf("XCloud4: RTC video request width=960 height=540 max_fps=30 bitrate_kbps=5000\n");
+    rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", "{\"supportsCustomResolution\":true,\"supportsHevc\":false,\"supportsHdr\":false,\"supportsFps\":30,\"maxWidth\":960,\"maxHeight\":540,\"maxBitrateKbps\":5000,\"video\":{\"width\":960,\"height\":540,\"maxWidth\":960,\"maxHeight\":540,\"maxBitrateKbps\":5000}}");
+    rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", "{\"horizontal\":960,\"vertical\":540,\"preferredWidth\":960,\"preferredHeight\":540,\"safeAreaLeft\":0,\"safeAreaTop\":0,\"safeAreaRight\":960,\"safeAreaBottom\":540,\"supportsCustomResolution\":true}");
     if (rc < 0) fail(rtc, -42);
     else {atomic_store(&rtc->startup_complete,true);printf("XCloud4: RTC canales Xbox preparados\n");}
 }
