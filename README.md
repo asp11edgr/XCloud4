@@ -12,7 +12,7 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development package: 0.7.3 offer and network diagnostics
+## Development package: 0.7.4 direct native nonblocking request
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -21,6 +21,8 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 `XCloud4-0.7.2.pkg` explicitly requests **four RTC workers before initialization**. The console capture confirms all four workers were created; the thread pool and PSA/SCTP/DTLS/SRTP/ICE library initialization completed, and local peer-connection, track and data-channel creation succeeded. Requesting the local SDP offer then returned **-2 with a runtime-error category**, with no SDP callback captured at that point. Callback delivery is queued, so its absence does not identify the exact internal failure stage.
 
 `XCloud4-0.7.3.pkg` adds fixed offer, certificate, ICE-agent, UDP/socket and interface-query diagnostics. The console capture confirms certificate generation, local ICE description and offer commit. Gathering then fails when setting UDP socket flags with `F_SETFL`: **errno 13 (`EACCES`)**, followed by connection/gathering errors and return -2. Remote cleanup succeeds with HTTP 200; no RTP is received. **Actual live video/audio remains unconfirmed.** Claude Opus 5.5 completed a read-only offer review in nine turns. See [0.7.3 notes](docs/RELEASE_NOTES_0.7.3.md).
+
+`XCloud4-0.7.4.pkg` restores direct BSD `FIONBIO` nonblocking setup for UDP/TCP, with numeric result diagnostics. Dependency/application builds, package integrity and static request/import inspection are confirmed. The console attempt also rejects direct `FIONBIO` with **errno 13 (`EACCES`)**; certificate/local-offer preparation succeeds, remote cleanup returns HTTP 200 and no RTP is received. **The socket failure remains unresolved and live video/audio is unconfirmed.** Claude Opus 5.5 completed a read-only socket review in five turns. See [0.7.4 notes](docs/RELEASE_NOTES_0.7.4.md).
 
 The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
@@ -36,6 +38,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.6.2 | Passport authorization, `/connect` acceptance and automatic deletion work with the temporary reference client. |
 | 0.7.2, partial | Four RTC workers, library initialization and local peer-connection/tracks/channels succeed; local SDP offer generation still fails before media. |
 | 0.7.3, partial | Certificate, local ICE description and offer commit succeed; gathering fails on UDP `F_SETFL` with `EACCES`, cleanup succeeds, no RTP received. |
+| 0.7.4, partial | Direct `FIONBIO` also fails with `EACCES`; certificate/local offer and cleanup succeed, no RTP received. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
@@ -72,7 +75,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Current development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.3.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+Current development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.4.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

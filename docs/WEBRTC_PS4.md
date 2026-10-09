@@ -79,6 +79,16 @@ The actual 0.7.3 capture records certificate DER **362 bytes** and readiness, IC
 
 The immutable matching source snapshot is **83543499 bytes**, SHA-256 `5c39a0ed1d50c39cc8bff12550f6e86ff7e6f13a55a4abab029e4ec086f857e9`; all **9367** manifest source hashes matched. It preserves the exact 0.7.3 provider changes before later repairs. See [0.7.3 notes](RELEASE_NOTES_0.7.3.md).
 
+### 0.7.4 direct socket nonblocking request
+
+libjuice UDP/TCP now use direct BSD `FIONBIO`, defined through the existing SDK `_IOW('f', 126, int)` encoding, **`0x8004667e`**, with a four-byte integer argument. Numeric event 64 records zero or actual socket errno; a rejected setup closes the socket and fails. Pipe `F_SETFL` handling and the four-worker policy remain in place. The [FreeBSD descriptor source](https://raw.githubusercontent.com/freebsd/freebsd-src/releng/9.0/sys/kern/kern_descrip.c) shows `F_SETFL` also requesting asynchronous mode, but attributing the PS4 denial specifically to that extra request remains a hypothesis. Existing `fcntl` constants were verified.
+
+The final dependency/application/package build succeeded, and the transferred/retrieved package hash matched. Static ELF/OELF inspection verifies the ioctl request, pointer to integer one and native `_ioctl` import mapping. Claude Opus 5.5 completed a read-only socket review in **5 turns**, without identifying a defect within that review. Neither static inspection nor review establishes hardware success.
+
+The actual 0.7.4 capture records certificate DER **359 bytes**, local-offer media count **3** and commit, then direct `FIONBIO` **errno 13 (`EACCES`)**. Connection/gathering/local-description results are -1/-2/-2, remote cleanup returns HTTP 200, and no RTP is received. The direct request does not resolve the socket denial; its exact native cause remains unconfirmed. Native network API/descriptor compatibility is being investigated. Live game video/audio remains unconfirmed.
+
+Matching 0.7.4 source is preserved separately: **83543344 bytes**, SHA-256 `6bf845b53bdeab0898b33d3d1e07876661c24324f7a4ad6a06c4bfa18d311c31`; all **9367** manifest hashes matched. It captures this failed attempt before subsequent repairs, with every previous archive unchanged. See [0.7.4 notes and primary ABI references](RELEASE_NOTES_0.7.4.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.
