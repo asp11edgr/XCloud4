@@ -10,9 +10,11 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 **Actual game video, game audio and game input are not present in this confirmed version.** Development has reached WebRTC negotiation and native media integration. Successful connection authorization alone does not establish a media connection.
 
-The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
+The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
 ## Development checkpoint: 0.7.16
+
+**Latest console result:** the application stays open after connection failure, a valid Xbox SDP answer is applied, and session cleanup succeeds. The RTC connection still fails with **0xFFFFF824**, with no game video/audio received. Read the [current error report](docs/ERROR_REPORT_0.7.16.md) and download the [0.7.16 development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.16). This is a development build, with live game media and game input still unresolved.
 
 The owner resumed development after the 0.7.14 pause and authorized three changes together: omit undefined receiving-track SSRC declarations, create audio MID 0 before video MID 1 as PSBox does, and expand valid Teredo candidates into IPv4 UDP routes. The full 0.7.15 package, focused Claude review and matching source integrity are confirmed. **Two console attempts now apply a valid Xbox SDP answer**, then RTC fails with no media and cleanup succeeds. An uncaught `condition_variable timed_wait failed` exception subsequently closes the application with CE-34878-0. See [0.7.15 scope and evidence](docs/RELEASE_NOTES_0.7.15.md). The preserved 0.7.14 refusal remains historical evidence; combining the new changes limits attribution.
 

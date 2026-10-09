@@ -41,7 +41,7 @@ The previous numeric IPv6 class 1 could not distinguish ordinary IPv6 from a rej
 | 13 | Zero decoded Teredo port |
 | 14 | Excluded decoded IPv4 range |
 
-These categories describe validation decisions and do not themselves establish the cause of ICE/RTC failure. Build, review, matching source integrity and console results will be recorded when available. No automated implementation tests are added or run.
+These categories describe validation decisions and do not themselves establish the cause of ICE/RTC failure. Build, review, matching source integrity and the first console result are recorded below. No automated implementation tests are added or run.
 
 ## Build and focused review
 
@@ -58,7 +58,7 @@ The full application compiled, linked, converted to SELF and packaged. The link 
 
 ## Console status
 
-The 0.7.16 package has been delivered for the owner to install. The log capture is connected. A corrected linked constant and successful build do not confirm that the console stays open, that ICE connects or that media is received. The previous RTC failure remains under investigation.
+The owner installed and tried the verified 0.7.16 package. The application stays open after the connection error in this attempt; the RTC connection still fails and no game media is received. See the first console attempt below and the [current error report](ERROR_REPORT_0.7.16.md). This build is a development prerelease.
 
 ## Matching dependency/native-adapter source
 
@@ -72,3 +72,7 @@ The 0.7.16 package has been delivered for the owner to install. The log capture 
 The owner confirms that 0.7.16 remains open after the connection error: CE-34878-0 does not recur in this attempt. The capture identifies 0.7.16 and shows the corrected offer structure, then an **HTTP 200 / 1866-byte** SDP response containing **1504 decoded SDP bytes**. The answer is applied. Local ICE returns HTTP 202; remote ICE returns **HTTP 200 / 449 bytes**. The discarded IPv6 candidate is **class 1 / reason 12**, meaning syntactically valid hexadecimal IPv6 outside the Teredo prefix. This establishes why that candidate was omitted, without establishing whether its omission caused the failure.
 
 RTC reaches failed state, then disconnects/closes; the session ends with **0xFFFFF824**, zero video/audio and successful DELETE HTTP 200 without cleanup error. No timed-wait exception appears in the captured attempt. The preserved bounded extract contains **282 selected lines**, SHA-256 `a4dcd805790c5bc59d208962d830f43d1162d09afc3664921728426752238848`, outside Git. **The timed-wait closure is corrected for this tested path; the ICE/RTC connection failure and game media remain unresolved.**
+
+## Public publication
+
+The owner authorized making the repository public with this update and an English error report on 2026-10-09. The published runtime target is `2f2bbf8444fc7c6bfb9496ca351b6ca0cb5cc33e`; subsequent documentation commits record the console result and public status. Package and dependency-source bytes remain unchanged. Only sanitized numeric evidence is included in the public error report; raw logs, account data and local credentials remain outside the repository.

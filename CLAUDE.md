@@ -14,5 +14,5 @@ Native PS4 client using OpenOrbis v0.5.4, C23 and Clang/LLD 21. Target hardware:
 - The owner requested **Claude Opus 5.5**. Select `claude-opus-5-5` explicitly for Claude Code work. Review hypotheses remain unconfirmed until supported by source, generated artifacts or console evidence.
 - Do not add or run tests unless the owner explicitly requests them. Do not claim hardware behavior from successful compilation.
 - Keep credentials, device codes, tokens, private keys, SDK files, generated packages and private logs outside Git.
-- The owner authorized **private GitHub publication**. Repository documentation and GitHub content must be English; **the PS4 UI stays Spanish**.
+- The owner authorized **public GitHub publication** on 2026-10-09, replacing the earlier private-repository preference. Repository documentation and GitHub content must be English; **the PS4 UI stays Spanish**. Publish only prepared source and verified release artifacts; credentials and raw private console logs stay outside Git.
 - Title search is recorded in `docs/MEJORAS_FUTURAS.md` for a later update. Do not implement it in the current streaming stage.

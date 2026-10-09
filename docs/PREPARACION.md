@@ -49,7 +49,7 @@ Headers, libraries, Linux tools, linker script and licenses were extracted. `Pkg
 - SDK log: `/home/edgarg/.local/share/xcloud4/sdk-*.log`.
 - Tool installation log: `/tmp/xcloud4-herramientas.log`.
 
-Preparation initialized Git on `main`. The owner subsequently authorized private GitHub publication with English repository documentation; the PS4 UI stays Spanish.
+Preparation initialized Git on `main`. The owner initially authorized private GitHub publication, then authorized public publication with the latest update and error report on 2026-10-09. Repository documentation is English; the PS4 UI stays Spanish.
 
 ## Access from Windows
 

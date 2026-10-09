@@ -4,7 +4,9 @@
 
 The owner and console logs confirm **0.6.2** through Microsoft authorization, Xbox catalog, remote preparation, Passport HTTP 200, `/connect` HTTP 202 and automatic DELETE HTTP 200, with no cleanup error. Actual WebRTC game video/audio and input are the next milestone. The owner authorized continued work toward real video and audio.
 
-Repository documentation and GitHub content are English; the PS4 interface remains Spanish. The GitHub repository must be private. Historical entries below distinguish preparation, static review, compilation and subsequent console confirmation. No automated tests were added or run during these milestones.
+Repository documentation and GitHub content are English; the PS4 interface remains Spanish. On October 9, 2026, the owner authorized making the repository public with the latest update and an error report, replacing the earlier private-repository preference. Historical entries below retain the policy and results observed at their checkpoints. No automated tests were added or run during these milestones.
+
+The latest tested development checkpoint is **0.7.16**: a valid Xbox SDP answer is applied, then RTC fails with **0xFFFFF824** and no game media. The application stays open and deletes the session successfully. See the [public error report](ERROR_REPORT_0.7.16.md) and [0.7.16 release notes](RELEASE_NOTES_0.7.16.md) for sanitized evidence, the corrected preceding crash and exact artifact hashes.
 
 ## Initial environment and application
 
