@@ -86,6 +86,12 @@ Claude Opus 5.5 analizó el registro y revisó la corrección concreta. La 0.3.1
 
 La primera compilación detectó que OpenOrbis no declara `strnlen`; se sustituyó por un recorrido acotado. La versión final compiló y se empaquetó sin errores ni avisos. `XCloud4-0.3.1.pkg`: 6619136 bytes, SHA-256 `abb2ca847e67998e8534d51bc59441d9979d28c9424d4e8821486dd1be7c3022`. Se copió a `/data/pkg/XCloud4-0.3.1.pkg` y la huella del archivo recuperado por FTP coincide. No se ejecutaron pruebas automatizadas. Conexión HTTPS y acceso Microsoft reales pendientes de instalar y abrir esta versión en la consola.
 
+## Resultado confirmado de la 0.3.1: cuenta Microsoft autorizada
+
+El propietario envió una fotografía de CUENTA con `CUENTA MICROSOFT AUTORIZADA`. Klog identifica `XCloud4 0.3.1`, localiza `sceSslInit` en `libSceSsl2.sprx` (handle `0x3a`), inicializa Net con retorno cero y registra `HTTPS listo (Net/Ssl/Http)`. La consulta de conexión termina en estado 3, HTTP 200, error cero. La solicitud de código recibe HTTP 200; después de las consultas de espera, el intercambio de token recibe HTTP 200 y termina en estado 4 (`X4_AUTH_AUTHORIZED`), error cero.
+
+La fotografía y el registro coinciden: funciona la conexión HTTPS y el acceso Microsoft mediante el registro propio de XCloud4 en PS4 12.00. Los registros contienen estados y tamaños, nunca códigos ni tokens. Se conserva esta entrega con la etiqueta `v0.3.1`. La sesión Microsoft permanece solo en memoria y se pierde al cerrar la aplicación. Este resultado todavía no confirma una sesión Xbox, derechos de juego, catálogo ni streaming. La siguiente etapa es el intercambio de credenciales Xbox y el acceso al catálogo real.
+
 ## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

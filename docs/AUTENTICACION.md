@@ -33,4 +33,4 @@ El intercambio de credenciales Xbox y el catálogo aún no forman parte de esta 
 
 ## Corrección 0.3.1
 
-La 0.3.0 falló al localizar el módulo SSL, antes de enviar una solicitud HTTPS. La 0.3.1 amplía la localización por exportaciones y rutas nativas del sandbox. Está compilada y copiada a la PS4; queda pendiente comprobar CUENTA → cuadrado en la consola. No se ha obtenido todavía un código de autorización ni un token Microsoft desde la PS4.
+La 0.3.0 falló al localizar el módulo SSL, antes de enviar una solicitud HTTPS. La 0.3.1 amplía la localización por exportaciones y rutas nativas del sandbox. El propietario confirmó con una fotografía la cuenta Microsoft autorizada. Klog confirma comprobación de conexión con HTTP 200 y finalización del acceso en `X4_AUTH_AUTHORIZED`, HTTP 200, error cero. El token permanece en memoria durante esta ejecución. Sesión Xbox, catálogo y juegos siguen pendientes.

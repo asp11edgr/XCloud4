@@ -28,7 +28,7 @@ OPTIONS prepara la solicitud de salida mediante SystemService antes de cerrar re
 
 Se prepara la pantalla CUENTA con conexión HTTPS y acceso por código. Usa el registro **XCloud4** creado por el propietario, para cuentas personales y con flujos de cliente público habilitados. X solicita un código, cuadrado comprueba la conexión, triángulo elimina la sesión local y círculo cancela/vuelve. Los tokens quedan en memoria durante esta ejecución y se borran al cerrar. La muestra y salida nativa conservan la base confirmada 0.2.2.
 
-Conexión y autorización de esta entrega pendientes de comprobar en la PS4. Credenciales de Xbox, catálogo y sesión de juego aún no están implementados. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
+La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada por fotografía del propietario y Klog: conexión HTTPS con HTTP 200 y cuenta Microsoft autorizada mediante el registro propio de XCloud4, sin error. La sesión permanece en memoria hasta cerrar la aplicación. Credenciales de Xbox, catálogo y sesión de juego aún no están implementados. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
 
 ## Etapas
 
@@ -59,7 +59,7 @@ El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aislada
 ## Organización
 
 - `src/core`: entrada y ciclo de vida.
-- `src/auth`: HTTPS y acceso Microsoft por código; comprobación en consola pendiente.
+- `src/auth`: HTTPS y acceso Microsoft por código, confirmados en consola con 0.3.1.
 - `src/streaming`: sesión y transporte pendientes.
 - `src/video`: VideoOut y muestra H.264 con Videodec2.
 - `src/input`: lectura y reconexión del DualShock 4.
