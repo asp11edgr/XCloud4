@@ -400,3 +400,15 @@ The owner repeats the same installed version. Native DNS lookup returns **0** in
 The new keyword diagnostic records **valid 1**, raw JSON span **156 bytes**, decoded message **154 bytes**, mask **`0x00010400`**. Only **bit 10 (`command`)** and **bit 16 (`PerformSdpExchangeV1Command`)** are set; no message contents are printed. The message references the SDP exchange command, with no precise underlying cause established by lexical presence. This is a logical refusal, not a successful answer. ICE/RTC/video/audio counters stay **zero**, remote deletion returns **HTTP 200** and no game media is received. Package/source/NOTICE snapshots are unchanged across both distinct attempts.
 
 The 0.7.12 documentation checkpoint was committed/pushed at `04a3058d70ffdb0f3bf775f17935651e2b182da0`; private draft `dev-0.7.12` has verified matching package/source/sidecar assets. Earlier snapshots remain immutable. See [0.7.13 package, source and diagnostic scope](RELEASE_NOTES_0.7.13.md).
+
+## 0.7.14: nested SDP diagnostics
+
+The original signal_remote_sdp helper now records parsed exchange type/length, direct SDP member/type/span, existing decoder success/decoded length/nonempty result and a fixed prefix class. Status/debugInfo member/type/span and messageType member/type/fixed class are numeric; the 32-byte temporary token buffer is securely cleared. DebugInfo is not decoded/interpreted, and no remote text/SDP/credentials are printed. The original direct nonempty SDP validation and all protocol/RTC/media decisions remain unchanged. Both distinct 0.7.13 outcomes remain preserved above.
+
+Product 0.7.14 uses APP_VER 00.84. Claude Opus 5.5's focused static review completed successfully in **3 turns / 2 reads**, with no material finding in the visible helper scope. The member-function excerpt was truncated; independent inspection of complete x4_json_member confirms failed/duplicate lookups clear output spans.
+
+The full VM package build succeeded: `XCloud4-0.7.14.pkg`, **8912896 bytes**, SHA-256 `891d1077c4d949534353023eafe27f0d4c7ec68839dba8fdb567fd6ac0602dc8`. VM, PC and PS4 retrieval hashes match. Application revision `285ed7edff1e26fe524a0ee8368b8cb133fce78c` supplies the authentication diagnostic separately from the immutable dependency/native-adapter archive: **83561616 bytes**, SHA-256 `55592c70d91bb259aed346273a2eb0cc23afb153e315538daea33dd2a8dc2c4d`. All **9367** manifest hashes matched locally, covering **150843700 source bytes**; the copied PC archive matches the guest hash and contains byte-identical frozen NOTICE. Generated artifacts/Git metadata/local credentials/logs are excluded, public upstream fixtures remain and every earlier snapshot is preserved.
+
+The verified package is available on the PS4; console results remain pending. A parsed exchange or fixed header class does not establish an accepted remote answer or game media.
+
+The 0.7.13 documentation checkpoint was committed/pushed at `846b07f5ccc3bda69e7890d7dbab7d09be0b218a`; its private draft has three verified matching package/source/sidecar assets. Earlier snapshots stay immutable. See [0.7.14 frozen enum scope](RELEASE_NOTES_0.7.14.md).

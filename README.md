@@ -12,7 +12,7 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development work: 0.7.13 fixed message categories
+## Development work: 0.7.14 nested SDP diagnostics
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -41,6 +41,8 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 `XCloud4-0.7.12.pkg` adds one bounded, diagnostic-only SDP request after a specific inactive-session keepalive failure, discarding the response and preserving the original failure. Full build, matching source and VM/PC/PS4 retrieval hashes are confirmed. The console returns a logical SDP refusal with the exact public code **`ConnectionExchangeFailed`** after a successful keepalive. The existing restricted-name helper captures it; the new terminal GET is **not entered**, because keepalive succeeds. Cleanup succeeds, with **no RTP/game media**. The public category does not establish the underlying cause. Claude Opus 5.5 completed the focused read-only review in three turns / two reads. Product 0.7.12 uses **APP_VER 00.82**. See [0.7.12 scope, package, source and console evidence](docs/RELEASE_NOTES_0.7.12.md).
 
 `XCloud4-0.7.13.pkg` summarizes a direct errorDetails message using fixed keyword bits and lengths, while keeping message contents private. Full build, matching source and VM/PC/PS4 retrieval hashes are confirmed. **Two attempts have distinct outcomes:** a 2458-byte HTTP 200 response fails validation before remote SDP application, without keyword output; a later 243-byte response reports **`ConnectionExchangeFailed`**, with mask **`0x00010400`** identifying the terms `command` and `PerformSdpExchangeV1Command`. Those terms identify the referenced operation, not its underlying failure cause. Cleanup succeeds in both attempts, with **no RTP/game media**. Peer inspection and Claude Opus 5.5's focused read-only review completed without a material finding. Product 0.7.13 uses **APP_VER 00.83**. See [0.7.13 both attempts and exact evidence](docs/RELEASE_NOTES_0.7.13.md).
+
+`XCloud4-0.7.14.pkg` classifies a parsed nested exchange's direct SDP and other field shapes using numeric diagnostics, without changing the accepted SDP rule or printing remote text. Claude Opus 5.5's focused read-only review completed in three turns / two reads. Full build, matching source and VM/PC/PS4 retrieval hashes are confirmed. Product 0.7.14 uses **APP_VER 00.84**. **Console evidence is pending; no valid remote answer, corrected negotiation or game media is established.** See [0.7.14 package, source and limits](docs/RELEASE_NOTES_0.7.14.md).
 
 The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
@@ -104,7 +106,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.13 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.13.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The 0.7.14 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.14.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
