@@ -60,3 +60,9 @@ An initial, unpublished pre-follow-up package/source snapshot is preserved priva
 ## Console status
 
 **Awaiting the owner's 0.7.17 installation and connection attempt.** Correct clock selection, successful compilation and matching artifact hashes do not establish ICE connectivity, game media or controller transmission. The [0.7.16 error report](ERROR_REPORT_0.7.16.md) remains the current observed failure report until new console evidence is captured.
+
+## First console attempt
+
+The owner installed 0.7.17 and reports a session error. The new capture confirms answer application (HTTP 200, 1866 response bytes, 1504 decoded SDP bytes), ICE HTTP 202/200, one native-wrapper candidate call/cache addition from three received items, ICE completed state **3**, DTLS connected state **2**, and SRTP key derivation stages **0/1**. The peer enters failed state **4**, then disconnects/closes; game RTP/video/audio remain zero and DELETE returns HTTP 200 without cleanup error. No timed-wait exception appears in this extract.
+
+This is verified connection-stage progress. The current diagnostics do not isolate the failing SCTP initialization operation. Raw logs remain private. See the [0.7.17 current error report](ERROR_REPORT_0.7.17.md) for numeric evidence and limits. Package/source assets and their digests remain unchanged.
