@@ -4,12 +4,12 @@ This development checkpoint addresses the worker-pool initialization problem loc
 
 ## Observed cause and changes
 
-The 0.7.1 console log requested **200112 workers**, then reported numeric **system error 1** before the pool-ready checkpoint. ABI inspection traced this count to the prebuilt SDK libc++ CPU-count probe using `sysconf(84)`: native FreeBSD selector 84 denotes `_SC_THREAD_CPUTIME`, with `_POSIX_THREAD_CPUTIME=200112L`, while native CPU-count selectors are 57/58.
+The 0.7.1 console log requested **200112 workers**, then reported numeric **system error 1** before the pool-ready checkpoint. ABI inspection traced this count to the prebuilt SDK libc++ CPU-count probe using `sysconf(84)`: native FreeBSD selector 84 denotes `_SC_THREAD_CPUTIME`, with `_POSIX_THREAD_CPUTIME=200112L`, while native CPU-count selectors are 57/58. See the primary [selector definitions](https://github.com/freebsd/freebsd-src/blob/releng/9.0/include/unistd.h) and [sysconf implementation](https://github.com/freebsd/freebsd-src/blob/releng/9.0/lib/libc/gen/sysconf.c).
 
 - Call `rtcSetThreadPoolSize(4)` before peer-connection initialization and stop on a negative result.
 - Record actual created-worker counts and the count reached if worker creation fails.
 - Preserve fixed initialization labels and numeric diagnostics without logging account credentials, SDP or ICE values.
-- Retain native process-ID syscall 20 and create a separate matching source snapshot.
+- Retain the existing SDK thread-ID adapter and create a separate matching source snapshot.
 
 Claude Opus 5.5 completed a read-only review in **29 turns**, without an error, and recommended the explicit worker limit before initialization. This is a targeted correction based on the observed initialization failure; it has not yet demonstrated working native transport or playback.
 
