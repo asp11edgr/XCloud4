@@ -374,3 +374,29 @@ Keepalive at **29723 ms** returns **HTTP 200 / 37 bytes**. The next SDP request 
 The new terminal GET is **not entered**, because keepalive succeeds. The diagnostic comes from normal SDP polling and identifies a logical refusal despite HTTP 200. Remote deletion returns **HTTP 200**, with no RTP, video or audio received; the owner reports the session error. The public category is now identified, with no corrected negotiation, server lifetime or game playback established. Package/source/NOTICE snapshots remain unchanged.
 
 The 0.7.11 documentation checkpoint was committed/pushed at `5491dce1c14393360bbaa82fd340b34b95b2c6f3`. Its private draft `dev-0.7.11` has matching package/source/sidecar assets. Every earlier snapshot stays immutable. See [0.7.12 build and diagnostic scope](RELEASE_NOTES_0.7.12.md).
+
+## 0.7.13: fixed message categories
+
+Following the actual ConnectionExchangeFailed capture, Claude Opus 5.5 completed a read-only analysis in **7 turns / 5 reads**. It did not establish the precise refusal cause and suggested bounded keyword categories. Review of the new helper is a separate step.
+
+The frozen original diagnostic reads only a direct errorDetails object/message string, with strict duplicate/type validation, into a 1025-byte temporary buffer. It accepts 1–1024 decoded ASCII bytes with CR/LF/TAB allowed and skips decoding above a 6146-byte raw JSON span. Output contains only validity, raw/decoded lengths and a fixed 18-bit keyword mask; every path clears the buffer. Explicit ASCII case folding/word boundaries prevent ICE from matching inside service/device, with whitespace permitted in fixed phrases. Message text, arbitrary response data, SDP and credentials remain hidden. Lexical term presence is not causal proof. Existing public-code/numeric diagnostics, business parsing, network/media settings and heartbeat cadence remain unchanged.
+
+Product 0.7.13 uses APP_VER 00.83. RTC peer inspection and Claude Opus 5.5's focused new-code review (**3 turns / 2 reads**) completed without a material finding in the reviewed helper/decoder scope.
+
+The full application/package built without warnings/errors: `XCloud4-0.7.13.pkg`, **8912896 bytes**, SHA-256 `4f2e4568435ae1e2e354d4655ad51db9b28eabe827c581a64d8c27afb9edd0b4`. VM, PC and PS4 retrieval hashes match. Application revision `1d3a3d13cc73aa1cfdd3b3e313a778cc4694fa49` supplies the authentication diagnostic separately from the immutable dependency/native-adapter archive: **83562288 bytes**, SHA-256 `9d54b7c68564b06ea5d2da8cd4654a5045e1669d2d5386cfe06140790c574037`. All **9367** manifest hashes matched locally, covering **150842717 source bytes**; the copied PC archive matches the guest hash. Generated artifacts/Git metadata/local credentials/logs are excluded, public upstream fixtures remain and every earlier snapshot is preserved.
+
+### First 0.7.13 console attempt
+
+The console identifies the installed application as 0.7.13. Native DNS lookup returns **0** in **15948 microseconds**, with the nonzero-address boolean **1**. The current offer is **1286 bytes / two candidates / three media sections / three BUNDLE entries**. After accepted SDP submission, **33** pending answer polls return **HTTP 204**.
+
+Keepalive at **29459 ms** succeeds with **HTTP 200 / 37 bytes**. The next SDP request returns **HTTP 200 / 2458 bytes**, without public-code/errorDetails/message-keyword output. The final stage reports an invalid SDP response, **X4_AUTH_E_RESPONSE / 0xFFFFF82A**, before applying remote SDP. A valid answer is not established by that response's size/status; schema/decoder validation needs investigation. The earlier ConnectionExchangeFailed category is not identified in this attempt, and no message mask is observed.
+
+Remote deletion returns **HTTP 200**, with no RTP, video or audio received; the owner reports the session error. No corrected negotiation or game playback is established. Package/source/NOTICE snapshots remain unchanged.
+
+### Second 0.7.13 console attempt
+
+The owner repeats the same installed version. Native DNS lookup returns **0** in **10484 microseconds**. The current offer is **1286 bytes / two candidates**; POST returns **HTTP 202**, followed by **38** pending HTTP 204 polls. Keepalive dispatched at **29758 ms** succeeds with **HTTP 200 / 37 bytes**. Normal SDP GET then returns **HTTP 200 / 243 bytes**, poll **39**, at **30872 ms**, with direct public code **`ConnectionExchangeFailed`**.
+
+The new keyword diagnostic records **valid 1**, raw JSON span **156 bytes**, decoded message **154 bytes**, mask **`0x00010400`**. Only **bit 10 (`command`)** and **bit 16 (`PerformSdpExchangeV1Command`)** are set; no message contents are printed. The message references the SDP exchange command, with no precise underlying cause established by lexical presence. This is a logical refusal, not a successful answer. ICE/RTC/video/audio counters stay **zero**, remote deletion returns **HTTP 200** and no game media is received. Package/source/NOTICE snapshots are unchanged across both distinct attempts.
+
+The 0.7.12 documentation checkpoint was committed/pushed at `04a3058d70ffdb0f3bf775f17935651e2b182da0`; private draft `dev-0.7.12` has verified matching package/source/sidecar assets. Earlier snapshots remain immutable. See [0.7.13 package, source and diagnostic scope](RELEASE_NOTES_0.7.13.md).
