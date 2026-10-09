@@ -30,8 +30,8 @@ typedef struct {
     uint64_t audio_dropped_frames;         /* Opus errors and latency trims */
     uint64_t audio_underflows;             /* silence blocks while playing (not real frames) */
     uint64_t keyframe_requests;
-    /* Video main-thread diagnostics; durations are cumulative microseconds,
-     * maxima are since the previous five-second diagnostic report. */
+    /* Video-owner diagnostics; durations are cumulative microseconds.
+     * Worker maxima reset when it acknowledges the last report boundary. */
     uint64_t video_decode_calls, video_decoded_frames, video_no_picture_calls;
     uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
     uint64_t video_copy_calls, video_copy_us, video_copy_max_us, video_copy_bytes;
@@ -39,6 +39,10 @@ typedef struct {
     uint64_t video_draw_calls, video_draw_new, video_draw_repeat, video_draw_us, video_draw_max_us;
     uint64_t video_present_calls, video_present_us, video_present_max_us;
     uint64_t video_picture_age_us, video_picture_gap_max_us;
+    uint64_t video_au_submitted, video_publications, video_publication_superseded;
+    uint64_t video_publication_generation, video_worker_idle_yields;
+    /* Sum/max ingress dwell of popped packets, and current oldest sample. */
+    uint64_t video_queue_age_us, video_queue_age_max_us, video_queue_oldest_age_us;
     uint64_t video_queue_full, video_queue_push_contended, video_queue_pop_contended;
     uint32_t video_queue_depth, video_queue_highwater;
     uint32_t width, height;                /* last decoded picture, 0 until real video */
@@ -48,6 +52,10 @@ typedef struct {
 
 /* Ownership contract:
  * - create/start/tick/draw/snapshot/set_muted/close run on the main thread.
+ * - one worker owns video initialization, RTP ordering/AUs, Decode,
+ *   copy/conversion and native teardown. A triple RGB mailbox transfers only
+ *   completed pictures; draw claims a slot without holding the gate while
+ *   reading pixels. Native output buffers never cross to the main thread.
  * - receive may run on any transport thread; it copies at most
  *   X4_LIVE_RTP_MAX bytes into a bounded queue and never retains `rtp`.
  * - close may only be called after the transport callbacks have stopped
@@ -63,23 +71,29 @@ int x4_live_media_set_payload_type(X4LiveMedia *media, int kind, int payload_typ
 int x4_live_media_start(X4LiveMedia *media);
 /* Signature matches X4RtcMediaCallback: kind 0 video, 1 audio. */
 void x4_live_media_receive(void *context, int kind, const uint8_t *rtp, size_t size);
-/* Pumps ordered complete AUs without skipping predictive frames. Processing
- * yields between packets after 6 ms or two Decode calls; native calls cannot
- * be interrupted. Converts the last validated output before returning. */
+/* Nonblocking main-thread maintenance/reporting; does not Decode or copy.
+ * The worker yields between packets after 16 ms or four Decode calls and
+ * converts its last validated output. Native calls cannot be interrupted. */
 void x4_live_media_tick(X4LiveMedia *media);
+/* Main-thread query: a completed publication has not yet been presented.
+ * UI changes can force draw even when this returns false. */
+bool x4_live_media_has_new_picture(X4LiveMedia *media);
 /* Draws the last real picture scaled with aspect ratio into a 1920x1080
  * framebuffer with black bars. Returns 1 when drawn, 0 when no real picture
  * exists yet (the framebuffer is untouched). */
 int x4_live_media_draw(X4LiveMedia *media, uint32_t *pixels);
-/* Record a completed main-thread display call, including its VSYNC wait. */
+/* After a successful display call containing a live draw, record its VSYNC
+ * wait and confirm that drawn generation as presented. UI-only flips must
+ * not call this function. Failed flips never advance presented generation. */
 void x4_live_media_note_present(X4LiveMedia *media, uint64_t elapsed_us);
 void x4_live_media_snapshot(const X4LiveMedia *media, X4LiveMediaSnapshot *snapshot);
 void x4_live_media_set_muted(X4LiveMedia *media, bool muted);
 /* Thread-safe: returns true once per pending keyframe request so the
  * transport owner can call x4_rtc_request_keyframe. */
 bool x4_live_media_take_keyframe_request(X4LiveMedia *media);
-/* Returns 0 when everything was released. A negative result means a native
- * teardown failed and its allocations were deliberately retained. */
+/* Stops/joins the owner before freeing storage. Returns 0 when released.
+ * A native video teardown failure is latched: future close calls retain the
+ * context and return that error; main never retries native video teardown. */
 int x4_live_media_close(X4LiveMedia *media);
 
 /* ---- Helpers shared by src/media, src/audio live modules (not UI API). ---- */
@@ -103,6 +117,9 @@ typedef struct {
     uint32_t head, count, capacity;
     uint16_t *sizes;
     uint8_t *data;
+    /* Optional video-only ingress timestamps; audio leaves this NULL. */
+    uint64_t *arrivals;
+    atomic_uint_fast64_t oldest_arrival;
     atomic_uint depth, highwater;
     atomic_uint_fast64_t full, push_contended, pop_contended;
 } X4LiveRing;

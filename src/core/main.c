@@ -30,6 +30,12 @@ int main(void)
     X4LiveMediaSnapshot live_status = {0};
     int live_error = 0, live_muted = 0;
     int live_retained = 0;
+    bool live_presented = false;
+    int overlay_key[10] = {0};
+    uint64_t overlay_at = 0;
+    uint64_t input_previous = 0, input_report_at = 0;
+    uint64_t input_intervals = 0, input_interval_us = 0, input_interval_max_us = 0;
+    uint64_t idle_present_skips = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
 reopen_interface:;
     int rc = x4_display_open(&display);
@@ -41,10 +47,34 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.23: perfil de imagen 540p para fluidez\n");
+    printf("XCloud4 0.7.24: video en trabajador y presentacion de imagen nueva\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
+        uint64_t input_at = sceKernelGetProcessTime();
         x4_controller_read(&controller, frame);
+        /* Local pad sampling cadence, not Xbox RTT or end-to-end latency. */
+        if (screen.page == 6 && x4_auth_busy(auth)) {
+            if (input_previous) {
+                uint64_t elapsed = input_at - input_previous;
+                ++input_intervals;
+                input_interval_us += elapsed;
+                if (elapsed > input_interval_max_us) input_interval_max_us = elapsed;
+            }
+            input_previous = input_at;
+            if (!input_report_at) input_report_at = input_at;
+            if (input_at - input_report_at >= 5000000) {
+                printf("XCloud4 input: samples=%llu mean_us=%llu max_us=%llu idle_flips_skipped=%llu\n",
+                    (unsigned long long)input_intervals,
+                    (unsigned long long)(input_intervals ? input_interval_us / input_intervals : 0),
+                    (unsigned long long)input_interval_max_us,
+                    (unsigned long long)idle_present_skips);
+                input_report_at = input_at;
+                input_intervals = input_interval_us = input_interval_max_us = idle_present_skips = 0;
+            }
+        } else {
+            input_previous = input_report_at = 0;
+            input_intervals = input_interval_us = input_interval_max_us = idle_present_skips = 0;
+        }
         int previous_page = screen.page;
         /* Keep Xbox button ownership across transient RTC disconnects. A
          * momentary status change must never turn B/Menu into local exit. */
@@ -131,6 +161,7 @@ reopen_interface:;
                 if (catalog_selected >= catalog.count) catalog_selected = catalog.count - 1;
                 if ((controller.pressed & ORBIS_PAD_BUTTON_CROSS) &&
                     catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth)) {
+                    live_presented = false;
                     live_error = 0;
                     if (live) {
                         live_error = x4_auth_set_media_callback(auth, NULL, NULL);
@@ -201,11 +232,24 @@ reopen_interface:;
                 atomic_store(&audio.muted, !atomic_load(&audio.muted));
             x4_video_tick(&video);
         }
-        /* A real game picture covers the framebuffer. Avoid repainting the
-         * full menu behind it on every iteration. */
-        bool drew_live = screen.page == 6 && live && x4_auth_busy(auth) && !closing && !session_back &&
+        /* Keep scanout unchanged between completed pictures. A real UI
+         * transition or periodic status refresh still redraws the entire
+         * inactive framebuffer, so two-buffer reuse never mixes old pixels. */
+        bool live_visible = screen.page == 6 && live && x4_auth_busy(auth) && !closing && !session_back &&
             !live_error && !live_status.video_error && session.state != X4_SESSION_STOPPING &&
-            x4_live_media_draw(live, x4_display_pixels(&display));
+            live_status.video_ready;
+        int next_overlay_key[10] = {screen.page, live_muted, live_status.audio_error,
+            live_status.audio_playing, session.input_error, session.input_ready,
+            session.rtc_connected, session.state, screen.exit_error, controller.data.connected};
+        uint64_t draw_at = sceKernelGetProcessTime();
+        bool overlay_changed = memcmp(overlay_key, next_overlay_key, sizeof(overlay_key)) != 0;
+        if (live_visible && live_presented && !overlay_changed && draw_at - overlay_at < 500000 &&
+            !x4_live_media_has_new_picture(live)) {
+            ++idle_present_skips;
+            sceKernelUsleep(2000);
+            continue;
+        }
+        bool drew_live = live_visible && x4_live_media_draw(live, x4_display_pixels(&display));
         if (!drew_live) x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
         if (screen.page == 6) {
@@ -234,8 +278,12 @@ reopen_interface:;
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         uint64_t present_begin = sceKernelGetProcessTime();
         rc = x4_display_present(&display);
-        if (live && !live_retained)
+        if (rc == 0 && drew_live && live && !live_retained) {
             x4_live_media_note_present(live, sceKernelGetProcessTime() - present_begin);
+            memcpy(overlay_key, next_overlay_key, sizeof(overlay_key));
+            overlay_at = draw_at;
+            live_presented = true;
+        } else live_presented = false;
         if (rc < 0) {
             printf("XCloud4: error de presentacion: 0x%08x\n", (unsigned)rc);
             break;
@@ -276,6 +324,9 @@ reopen_interface:;
     screen.exit_requested = 0;
     screen.page = 0;
     media_active = 0;
+    live_presented = false;
+    overlay_at = input_previous = input_report_at = 0;
+    input_intervals = input_interval_us = input_interval_max_us = idle_present_skips = 0;
     closing = 0;
     session_back = 0;
     game_controls = 0;

@@ -99,13 +99,15 @@ int x4_live_video_stop(X4LiveVideo *v)
         int rc = release(remaining[i]); if (rc < 0) return stage(v, "LIBERAR MEMORIA", rc);
     }
     free(s->staging); s->staging = NULL;
-    free(v->pixels); v->pixels = NULL;
+    /* RGB mailbox storage belongs to media and survives teardown failure. */
+    v->pixels = NULL;
     free(s); v->state = NULL;
     return 0;
 }
 
-int x4_live_video_start(X4LiveVideo *v)
+int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
 {
+    if (!v || !pixels || pixel_capacity < (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) return -7;
     if (v->state) { int rc = x4_live_video_stop(v); if (rc < 0) return rc; }
     memset(v, 0, sizeof(*v));
     VideoState *s = calloc(1, sizeof(*s));
@@ -172,8 +174,7 @@ int x4_live_video_start(X4LiveVideo *v)
     s->streaming_copy = __get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 19));
     printf("XCloud4: video NV12 copy mode=%u capacity=%zu source_alignment=16\n",
         s->streaming_copy ? 1u : 0u, s->staging_size);
-    v->pixels = calloc(X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(*v->pixels));
-    if (!v->pixels) { rc = stage(v, "IMAGEN RGB", -5); goto fail; }
+    v->pixels = pixels;
     printf("XCloud4: video RGB convert mode=2 block_pixels=8 scalar_tail_max=7\n");
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
     if (stage(v, "CREAR DECODER", rc) < 0) goto fail;
@@ -184,6 +185,13 @@ fail:
     /* Keep the original failure label unless cleanup itself fails. */
     x4_live_video_stop(v);
     return rc;
+}
+
+int x4_live_video_set_target(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
+{
+    if (!v || !v->state || !pixels || pixel_capacity < (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) return -7;
+    v->pixels = pixels;
+    return 0;
 }
 
 static unsigned clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : (unsigned)v; }
