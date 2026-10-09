@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 TITLE='XCloud4'
 TITLE_ID='XCLD00001'
 CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
-VERSION='00.12'
-PACKAGE_VERSION='0.1.2'
+VERSION='00.20'
+PACKAGE_VERSION='0.2.0'
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"
 # The PS4 startup loader requires the auxiliary OpenOrbis modules before main().
 # Keep compiled module binaries in an external local directory, never in Git.
@@ -29,7 +29,9 @@ HOSTLIBS="${X4_HOSTLIBS:-$HOME/.local/share/xcloud4/hostlibs}"
 if [[ -d "$HOSTLIBS/usr/lib/x86_64-linux-gnu" ]]; then
     export LD_LIBRARY_PATH="$HOSTLIBS/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-mkdir -p build/package/sce_sys build/package/sce_module dist
+[[ -s assets/sample.h264 ]] || { echo 'Falta assets/sample.h264; ejecuta scripts/generar-muestra.sh.' >&2; exit 1; }
+mkdir -p build/package/sce_sys build/package/sce_module build/package/assets dist
+cp assets/sample.h264 build/package/assets/sample.h264
 cp build/eboot.bin build/package/eboot.bin
 for module in "${RUNTIME_FILES[@]}"; do
     cp "$X4_RUNTIME_MODULES/$module" "build/package/sce_module/$module"
@@ -54,7 +56,7 @@ DIST="$PWD/dist"
 (
     cd build/package
     "$TOOLS/create-gp4" -out xcloud4.gp4 --content-id="$CONTENT_ID" \
-        --files 'eboot.bin sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
+        --files 'eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
     "$TOOLS/PkgTool.Core" pkg_build xcloud4.gp4 "$DIST"
 )
 cp "dist/$CONTENT_ID.pkg" "dist/XCloud4-$PACKAGE_VERSION.pkg"

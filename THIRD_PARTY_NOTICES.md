@@ -12,6 +12,20 @@ Versión fijada para la preparación: v0.5.4.
 
 El SDK se instala fuera del repositorio de XCloud4, en `~/.local/share/xcloud4/OpenOrbis/PS4Toolchain`.
 
+### Declaraciones de Videodec2
+
+`src/video/videodec2_abi.h` adapta las estructuras públicas de la propuesta #213 de OpenOrbis, de Backporter, bajo la licencia GPL-3.0 del repositorio. Fuente fijada: `9b9e82a2ec4e8cd3c34a086ca82339032cf69da0`, archivo `include/orbis/_types/Videodec2.h`.
+
+- Propuesta: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/pull/213
+- Fuente correspondiente: https://github.com/Backporter/OpenOrbis-PS4-Toolchain/blob/9b9e82a2ec4e8cd3c34a086ca82339032cf69da0/include/orbis/_types/Videodec2.h
+- Licencia conservada: `docs/licenses/OpenOrbis-GPL-3.0.txt`.
+
+El SDK v0.5.4 tiene declaraciones incompletas para esta API. Se conserva la estructura de salida de 48 bytes de la propuesta y se resuelven las funciones al abrir la muestra. Las implementaciones de carga, manejo de memoria, lectura de la muestra, conversión NV12 y reproducción PCM son propias de XCloud4. No se ha copiado la implementación de Moonlight PS4.
+
+### Muestra local
+
+`assets/sample.h264` es un patrón sintético generado con FFmpeg 8.0.1 y libx264 en Lubuntu, mediante `scripts/generar-muestra.sh`. No contiene material de un juego, música ni imágenes de terceros. FFmpeg y libx264 solo se utilizan en la PC; sus ejecutables y bibliotecas no se incluyen en el PKG. Los tonos PCM se generan en XCloud4.
+
 ## Referencias futuras
 
 GreenVita (MPL-2.0), Better xCloud (MIT) y Moonlight PS4 (licencia del código propio pendiente de aclarar) se consideran referencias de investigación. No se ha incorporado su código. Las versiones revisadas y los archivos de interés están en `docs/REFERENCIAS.md`.

@@ -38,6 +38,14 @@ Claude Code Pro se utilizó para dos revisiones estáticas con Sonnet 5. Se cont
 
 El usuario pidió utilizar Opus 5.5. La versión 2.1.220 rechazó ese modelo porque requiere 2.1.280 o posterior; Claude Code se actualizó mediante WinGet a 2.1.292. Dos revisiones posteriores registran efectivamente `claude-opus-5-5`. La primera rechazó el cambio propuesto sobre GOT/RELRO por no resolver su propia hipótesis y eliminar una sección que requiere el conversor. La segunda, con el registro real, confirmó que la dependencia ausente es la explicación respaldada por la evidencia y señaló que la aceptación del módulo agregado sigue pendiente. Ninguna revisión sustituye la ejecución real en PS4.
 
-## GitHub
+## Preparación de la muestra 0.2.0
+
+Se agregó la tercera opción IMAGEN Y SONIDO con muestra H.264 sintética, Videodec2 cargado al entrar, buffers de memoria directa, conversión NV12 a RGB y tonos PCM de 48 kHz mediante AudioOut en un hilo nativo. X repite, cuadrado conserva el silencio y círculo vuelve. Son una imagen y tonos independientes, sin conexión con Xbox ni demostración de sincronización WebRTC. Las estructuras ABI se adaptaron de la propuesta GPL OpenOrbis #213 con fuente fijada y atribución; no se copió la implementación de Moonlight.
+
+Claude Code Pro realizó una revisión estática con `claude-opus-5-5`, confirmada en `modelUsage` del resultado. Se contrastaron sus propuestas con tipos y formatos reales y se aplicaron correcciones sobre capacidad de enumeración de módulos, nombres con extensión, aceptación de buffers, fallos de mapeo y estado del audio. Los límites de esta revisión están en `MULTIMEDIA.md`. No se ejecutaron pruebas automatizadas.
+
+El paquete final se compiló y generó en Lubuntu sin errores de compilación. El GP4 incluye la muestra, el ejecutable y ambos auxiliares OpenOrbis. Tamaño: 6619136 bytes. SHA-256: `a67ddc21d3d2e5fc2e700ec24407862f83238c6c2b5f3e633171c531671f0a5d`. Se copió a `/data/pkg/XCloud4-0.2.0.pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalar, abrir IMAGEN Y SONIDO e informar el resultado mientras se captura Klog. Inicio y reproducción de la 0.2.0 pendientes; la base 0.1.2 sigue conservada.
+
+## Publicación pendiente
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

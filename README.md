@@ -2,13 +2,19 @@
 
 Cliente nativo experimental de Xbox Cloud Gaming para PS4 Fat con firmware 12.00 y GoldHEN.
 
-## Versión inicial — 0.1.2
+## Base confirmada — 0.1.2
 
 Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. La 0.1.0 se instaló en PS4 12.00 pero falló por Fios2 ausente; la 0.1.1 pasó ese bloqueo y falló por libc ausente. Ambos resultados se confirmaron en el registro de la consola.
 
 La 0.1.2 incluye las dos dependencias. El registro confirma el inicio del programa y el propietario confirmó que aparecen las opciones CONTROL y PROYECTO y que ambas funcionan. Esta confirmación cubre el inicio y las dos vistas; no se han comprobado por separado todos los valores de botones, palancas y gatillos. Conexión con Xbox, reproducción de video y audio siguen pendientes.
 
 El entorno de trabajo elegido es la máquina virtual de Lubuntu existente en VirtualBox. Se mantiene su red NAT para descargar herramientas y preparar compilaciones.
+
+## Nueva etapa — 0.2.0
+
+Agrega IMAGEN Y SONIDO al menú: una muestra local H.264 de ocho segundos, 640 × 368, con decodificación mediante Videodec2 y presentación NV12 convertida a RGB. Reproduce tonos suaves alternados entre izquierda y derecha, mediante AudioOut a 48 kHz. X repite la muestra, cuadrado silencia y círculo vuelve al inicio. La carga de estas bibliotecas se realiza al entrar en la muestra, para conservar el inicio de la interfaz sin depender del reproductor.
+
+La 0.2.0 está compilada y empaquetada en Lubuntu. La reproducción real en la PS4 está pendiente de confirmación. Todavía no incluye cuenta Microsoft, catálogo, WebRTC ni juegos de Xbox. La 0.1.2 se conserva con la etiqueta `v0.1.2` y su paquete separado.
 
 ## Etapas
 
@@ -32,7 +38,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.1.2.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.0.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 
@@ -41,10 +47,10 @@ El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aislada
 - `src/core`: entrada y ciclo de vida.
 - `src/auth`: autenticación pendiente.
 - `src/streaming`: sesión y transporte pendientes.
-- `src/video`: salida de pantalla con VideoOut; decodificación pendiente.
+- `src/video`: VideoOut y muestra H.264 con Videodec2.
 - `src/input`: lectura y reconexión del DualShock 4.
-- `src/audio`: integración pendiente.
-- `src/ui`: pantalla de inicio, control y estado del proyecto.
+- `src/audio`: muestra PCM con AudioOut; Opus pendiente.
+- `src/ui`: inicio, control, proyecto e imagen y sonido.
 - `docs`: decisiones, arquitectura, preparación y referencias.
 - `scripts`: herramientas de preparación y trabajo local.
 

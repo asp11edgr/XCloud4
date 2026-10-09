@@ -10,7 +10,7 @@ LD := ld.lld
 CFLAGS := --target=x86_64-pc-freebsd12-elf -std=c23 -fPIC -funwind-tables -O2 -g -Wall -Wextra -MMD -MP -c -isysroot $(SDK) -isystem $(SDK)/include
 LDFLAGS := -m elf_x86_64 -pie --script $(SDK)/link.x --eh-frame-hdr -L$(SDK)/lib
 LIBS := -lc -lkernel -lSceVideoOut -lScePad -lSceUserService
-SOURCES := $(wildcard src/core/*.c src/ui/*.c src/video/*.c src/input/*.c)
+SOURCES := $(wildcard src/core/*.c src/ui/*.c src/video/*.c src/input/*.c src/audio/*.c)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 
 .PHONY: all package

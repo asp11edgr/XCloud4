@@ -1,4 +1,14 @@
-# Instalar la versión inicial
+# Instalar XCloud4
+
+## Nueva muestra 0.2.0
+
+Paquete: `XCloud4-0.2.0.pkg`, mismo identificador `XCLD00001`. Compilado y empaquetado en Lubuntu; reproducción en PS4 pendiente. Conserva CONTROL y PROYECTO y agrega IMAGEN Y SONIDO. Incluye un clip H.264 sintético de ocho segundos y tonos PCM suaves alternados entre izquierda y derecha. No inicia juegos ni sesión de Xbox.
+
+Por red: cerrar XCloud4, abrir GoldHEN → Debug Settings → Package Source: HDD o ALL → Package Installer → `XCloud4-0.2.0.pkg`. Aceptar reemplazar XCloud4 cuando lo pida. Para USB, copiar este mismo paquete a la raíz de una unidad que la PS4 ya reconozca y elegirlo en Package Installer.
+
+Después de instalar, abrir IMAGEN Y SONIDO con la cruceta y X. Debe aparecer una imagen de colores en movimiento y tonos alternados. X repite; cuadrado silencia o activa el sonido; círculo vuelve; OPTIONS sale. La pantalla informa el estado y códigos de error para diagnosticar el resultado real. La imagen y los tonos son demostraciones independientes; la sincronización de una transmisión WebRTC queda pendiente.
+
+## Base funcional conservada
 
 Paquete: `XCloud4-0.1.2.pkg`. Identificador: `XCLD00001`. Esta es una aplicación inicial con pantalla y control; aún no inicia sesiones ni juegos de Xbox. Incluye Fios2 y libc, módulos auxiliares de OpenOrbis ausentes en los paquetes anteriores. El propietario confirmó el inicio y funcionamiento de las opciones CONTROL y PROYECTO en su PS4 12.00 con GoldHEN v2.4b18.7.
 
