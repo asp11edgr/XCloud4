@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.19\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.20\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -92,6 +92,8 @@ struct X4XboxWork {
     X4Rtc *rtc;
     X4SessionMediaCallback media_callback;
     void *media_user;
+    X4GamepadSource gamepad_source;
+    void *gamepad_user;
     _Atomic int *keyframe_requested;
     uint64_t next_keepalive;
     uint64_t sdp_sent_at;
@@ -2158,6 +2160,10 @@ static bool signal_rtc_view(X4XboxWork *w, SessionEnd *end, X4RtcSnapshot *view,
     w->session.rtc_connected = view->state == X4_RTC_CONNECTED;
     w->session.video_packets = view->video_packets;
     w->session.audio_packets = view->audio_packets;
+    w->session.input_ready = view->input_ready;
+    w->session.input_error = view->input_error;
+    w->session.input_packets = view->input_packets;
+    w->session.input_dropped = view->input_dropped;
     if (view->error || view->state == X4_RTC_FAILED || view->state == X4_RTC_CLOSED) {
         end_with(end, X4_SESSION_ERROR, view->error ? view->error : X4_AUTH_E_SESSION, 0, "fallo la conexion WebRTC");
         return false;
@@ -2182,6 +2188,8 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
     w->rtc = x4_rtc_open(&rc);
     if (!w->rtc) { end_with(end, X4_SESSION_ERROR, rc ? rc : X4_AUTH_E_SESSION, 0, "no se pudo iniciar WebRTC nativo"); return; }
     x4_rtc_set_media_callback(w->rtc, w->media_callback, w->media_user);
+    rc = x4_rtc_set_gamepad_source(w->rtc, w->gamepad_source, w->gamepad_user);
+    if (rc) printf("XCloud4: iniciar envio de control fallo 0x%08x\n", (unsigned)rc);
     if (!signal_sdp(w, deadline, end)) goto done;
     session_state(w, X4_SESSION_CONNECTING, "negociando ruta ICE con Xbox", seconds_until(deadline, session_now()));
     uint64_t next_ice = session_now(), connected_at = 0, last_keyframe = 0, disconnected_at = 0;
@@ -2228,7 +2236,14 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
 done:
     /* This joins transport callbacks before caller may release its media
      * receiver. It precedes remote DELETE and auth.finished publication. */
-    x4_rtc_close(w->rtc);
+    int close_rc = x4_rtc_close(w->rtc);
+    if (close_rc) {
+        printf("XCloud4: transporte retiene recursos, join control 0x%08x\n", (unsigned)close_rc);
+        session_state(w, X4_SESSION_STOPPING, "esperando cierre seguro del control", 0);
+        /* A failed join retains RTC and the provider. Keep this worker busy
+         * and Auth/media alive; never publish finished or free them early. */
+        do { sceKernelUsleep(100000); close_rc = x4_rtc_close(w->rtc); } while (close_rc);
+    }
     w->rtc = NULL;
     w->session.rtc_connected = 0;
     x4_secure_clear(w->sdp, sizeof(w->sdp));
@@ -2297,7 +2312,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
     X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
     X4SessionMediaCallback media_callback, void *media_user,
-    _Atomic int *keyframe_requested)
+    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user)
 {
     memset(&w->result, 0, sizeof(w->result));
     memset(&w->session, 0, sizeof(w->session));
@@ -2311,6 +2326,8 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->passport_context = passport_context;
     w->media_callback = media_callback;
     w->media_user = media_user;
+    w->gamepad_source = gamepad_source;
+    w->gamepad_user = gamepad_user;
     w->keyframe_requested = keyframe_requested;
     w->local_candidates = w->remote_candidates = 0;
     w->provisioned = false;
@@ -2355,14 +2372,18 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->passport_context = NULL;
     w->media_callback = NULL;
     w->media_user = NULL;
+    w->gamepad_source = NULL;
+    w->gamepad_user = NULL;
     w->keyframe_requested = NULL;
     memset(w->result.titles, 0, sizeof(w->result.titles));
     printf("XCloud4: sesion Xbox fin estado=%d http=%d error=0x%08x lista=%d autorizada=%d passport=%d "
-        "connect=%d sdp=%d ice=%d rtc=%d video=%llu audio=%llu limpieza=%d/%d/0x%08x\n",
+        "connect=%d sdp=%d ice=%d rtc=%d video=%llu audio=%llu input=%llu/%llu/0x%08x limpieza=%d/%d/0x%08x\n",
         (int)w->session.state, w->session.http_status, (unsigned)w->session.error, w->session.ready_seen,
         w->session.connection_authorized, w->session.passport_http_status, w->session.connect_http_status,
         w->session.sdp_http_status, w->session.ice_http_status, w->session.rtc_connected,
         (unsigned long long)w->session.video_packets, (unsigned long long)w->session.audio_packets,
+        (unsigned long long)w->session.input_packets, (unsigned long long)w->session.input_dropped,
+        (unsigned)w->session.input_error,
         w->session.cleanup_failed, w->session.cleanup_http_status, (unsigned)w->session.cleanup_error);
     return &w->session;
 }

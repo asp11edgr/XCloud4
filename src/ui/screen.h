@@ -16,4 +16,4 @@ void x4_auth_draw(const X4AuthSnapshot *auth, int busy, int closing, uint32_t *p
 void x4_catalog_draw(const X4CatalogSnapshot *catalog, unsigned selected, int busy, uint32_t *pixels);
 void x4_session_draw(const X4SessionSnapshot *session, int busy, int closing, uint32_t *pixels);
 void x4_live_status_draw(const X4LiveMediaSnapshot *media, int error, uint32_t *pixels);
-void x4_live_overlay(const X4LiveMediaSnapshot *media, int muted, uint32_t *pixels);
+void x4_live_overlay(const X4LiveMediaSnapshot *media, const X4SessionSnapshot *session, int muted, uint32_t *pixels);

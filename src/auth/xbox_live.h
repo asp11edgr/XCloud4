@@ -3,6 +3,7 @@
 #include "http_client.h"
 #include "xbox_catalog.h"
 #include "xbox_session.h"
+#include "../input/gamepad.h"
 #include <stdatomic.h>
 #include <stddef.h>
 
@@ -54,4 +55,4 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *work, const char *microsoft
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
     X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
     X4SessionMediaCallback media_callback, void *media_user,
-    _Atomic int *keyframe_requested);
+    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user);

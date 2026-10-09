@@ -12,7 +12,15 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest tested development checkpoint: 0.7.19
+## Latest prepared development checkpoint: 0.7.20
+
+Product **0.7.20**, PS4 **APP_VER 00.90**, adds real Xbox gamepad-report sending, reduces repeated CPU video drawing work and records numeric performance timings. Input uses a **38-byte report**, sent at no more than **60 Hz** when the Xbox channel is ready and has no queued data. The sender reads the latest controller state; a source older than **250 ms**, disconnection or cancellation produces neutral input. OPTIONS maps to Xbox Menu and the touchpad click maps to Xbox View. Hold **L1 + R1** with OPTIONS to exit, CIRCLE to return to the catalog, SQUARE to mute, or the touchpad to send Xbox Guide. PS remains a system button; SHARE has no mapping through the current SDK Pad interface.
+
+Video scaling caches coordinate mappings, and live playback skips the full menu repaint. Decoding checks a **6 ms / two Decode-call limit between operations** and converts the latest pending output; an individual native call can exceed that budget. No predictive frame dropping is introduced. Five-second numeric summaries are prepared to measure decoded/converted/drawn work and durations; **achieved FPS has not been measured**. The presentation path now imports `sceGnmSubmitDone()` and calls it after a successful flip submission, before waiting for scanout. This addresses the missing graphics-completion notification reported in 0.7.19 as a proposed external-close repair, with its hardware result still pending.
+
+The native build, matching source and VM/PC/PS4 package hashes are verified. Actual Claude Code **Opus 5.5** identified two source issues; both were corrected and a fresh focused review returned PASS. Console game controls, performance improvement and external closure are **not yet confirmed for 0.7.20**. The matching-source exporter includes the portable gamepad header. See [0.7.20 scope, review and verified assets](docs/RELEASE_NOTES_0.7.20.md). The PS4 interface remains Spanish.
+
+## Previous tested development checkpoint: 0.7.19
 
 Version **0.7.19**, PS4 **APP_VER 00.89**, moves the native SCTP receive scratch buffer to owned heap storage, allocated once per receive invocation inside the existing exception handler. Its **65,536-byte capacity**, receive lock, pending counter, notification/message copies and end-of-record handling are preserved. Other targets retain the upstream automatic array; no new worker-stack attributes are introduced.
 
@@ -30,7 +38,7 @@ Version **0.7.17** corrects a concrete local timing incompatibility: libjuice se
 
 ## Previous development checkpoint: 0.7.16
 
-**Latest console result:** the application stays open after connection failure, a valid Xbox SDP answer is applied, and session cleanup succeeds. The RTC connection still fails with **0xFFFFF824**, with no game video/audio received. Read the [current error report](docs/ERROR_REPORT_0.7.16.md) and download the [0.7.16 development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.16). This is a development build, with live game media and game input still unresolved.
+**0.7.16 console result:** the application stays open after connection failure, a valid Xbox SDP answer is applied, and session cleanup succeeds. The RTC connection still fails with **0xFFFFF824**, with no game video/audio received. Read the [current error report](docs/ERROR_REPORT_0.7.16.md) and download the [0.7.16 development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.16). This is a development build, with live game media and game input still unresolved.
 
 The owner resumed development after the 0.7.14 pause and authorized three changes together: omit undefined receiving-track SSRC declarations, create audio MID 0 before video MID 1 as PSBox does, and expand valid Teredo candidates into IPv4 UDP routes. The full 0.7.15 package, focused Claude review and matching source integrity are confirmed. **Two console attempts now apply a valid Xbox SDP answer**, then RTC fails with no media and cleanup succeeds. An uncaught `condition_variable timed_wait failed` exception subsequently closes the application with CE-34878-0. See [0.7.15 scope and evidence](docs/RELEASE_NOTES_0.7.15.md). The preserved 0.7.14 refusal remains historical evidence; combining the new changes limits attribution.
 
@@ -66,7 +74,7 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 
 `XCloud4-0.7.14.pkg` classifies a parsed nested exchange's direct SDP and other field shapes using numeric diagnostics, without changing the accepted SDP rule or printing remote text. Full build, focused Claude review, matching source and transfer integrity are confirmed. The console again reports **`ConnectionExchangeFailed`**, message mask **`0x00010400`** (`command` / `PerformSdpExchangeV1Command`), after successful keepalive. The new nested-field helper is **not entered**, because the logical outer error occurs first. Cleanup succeeds, with ICE/RTC/video/audio counters at zero. **The root cause remains unknown; no valid remote answer or game media is established.** Product 0.7.14 uses **APP_VER 00.84**. See [0.7.14 actual capture and paused status](docs/RELEASE_NOTES_0.7.14.md).
 
-The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
+The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller reports are implemented in the prepared 0.7.20 source; console response remains pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
 ## Confirmed progress
 
@@ -92,6 +100,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.7.13, two attempts | A 2458-byte response fails validation; a later refusal identifies ConnectionExchangeFailed and the SDP command name, not its cause. Cleanup succeeds, no media. |
 | 0.7.14, paused | ConnectionExchangeFailed repeats with the SDP command mask; nested helper not entered, cleanup succeeds, ICE/RTC/media zero. |
 | 0.7.15, partial | Two valid Xbox SDP answers applied; RTC fails and cleanup succeeds with zero media, followed by an uncaught timed-wait exception/application crash. |
+| 0.7.19, first live media | Connected SCTP/WebRTC, decoded Opus and a 1280×720 H.264 game image; owner confirms good audio and very slow video. Gamepad sending was absent. External closure caused a graphics-suspension timeout; a separate ARK attempt ended after roughly five minutes with RTC failure and successful remote cleanup. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
@@ -130,7 +139,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The current 0.7.19 development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.19.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The current 0.7.20 development source is prepared to produce `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.20.pkg`; its native build is still in progress. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

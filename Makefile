@@ -20,7 +20,7 @@ RTC_LIBS := $(X4_WEBRTC_ROOT)/build-datachannel/libdatachannel-static.a \
     $(X4_WEBRTC_PREFIX)/lib/libmbedtls.a $(X4_WEBRTC_PREFIX)/lib/libmbedx509.a \
     $(X4_WEBRTC_PREFIX)/lib/libmbedcrypto.a $(X4_WEBRTC_PREFIX)/lib/libeverest.a \
     $(X4_WEBRTC_PREFIX)/lib/libp256m.a $(X4_WEBRTC_PREFIX)/lib/libopus.a
-LIBS := -lScePosix -lc -lkernel -lSceVideoOut -lScePad -lSceUserService -lc++ -lc++abi -lunwind -lm
+LIBS := -lScePosix -lc -lkernel -lSceVideoOut -lSceGnmDriver -lScePad -lSceUserService -lc++ -lc++abi -lunwind -lm
 SOURCES := $(wildcard src/core/*.c src/ui/*.c src/video/*.c src/input/*.c src/audio/*.c src/auth/*.c src/streaming/*.c src/media/*.c)
 # Rebuild this complete LLVM 11 object with native ETIMEDOUT=60. The SDK's
 # precompiled object compares against 110. Explicit objects precede -lc++;

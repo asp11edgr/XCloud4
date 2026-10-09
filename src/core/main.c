@@ -23,6 +23,7 @@ int main(void)
     X4SessionSnapshot session = {0};
     unsigned catalog_selected = 0;
     int session_back = 0;
+    int game_controls = 0;
     int media_active = 0;
     int closing = 0;
     X4LiveMedia *live = NULL;
@@ -40,12 +41,37 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.19: recepcion SCTP con bufer en memoria dinamica\n");
+    printf("XCloud4 0.7.20: control Xbox, dibujo de video y diagnostico de tiempos\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;
-        if (!closing) x4_screen_update(&screen, controller.pressed, controller.data.buttons);
+        /* Keep Xbox button ownership across transient RTC disconnects. A
+         * momentary status change must never turn B/Menu into local exit. */
+        if (!x4_auth_busy(auth) || screen.page != 6) game_controls = 0;
+        else if (session.rtc_connected) game_controls = 1;
+        bool game_input = screen.page == 6 && game_controls && x4_auth_busy(auth) &&
+            !closing && !session_back && !live_error;
+        bool chord = (controller.data.buttons & (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1)) ==
+            (ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1);
+        bool local_action = game_input && chord && (controller.data.buttons &
+            (ORBIS_PAD_BUTTON_OPTIONS | ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_SQUARE));
+        bool guide_action = game_input && chord && (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
+        X4GamepadFrame gamepad = {0};
+        if (game_input) x4_controller_gamepad(&controller, &gamepad);
+        if (local_action || guide_action) {
+            memset(&gamepad, 0, sizeof(gamepad));
+            gamepad.connected = controller.data.connected;
+            if (guide_action && !local_action) gamepad.buttons = X4_GAMEPAD_NEXUS;
+        }
+        x4_auth_set_gamepad(auth, &gamepad);
+        if (!closing) {
+            uint32_t ui_pressed = controller.pressed;
+            if (game_input) ui_pressed &= ~ORBIS_PAD_BUTTON_OPTIONS;
+            x4_screen_update(&screen, ui_pressed, controller.data.buttons);
+            if (game_input && chord && (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS))
+                screen.exit_requested = 1;
+        }
         if ((previous_page == 4 || previous_page == 5 || previous_page == 6) && screen.page != previous_page)
             x4_auth_cancel(auth);
         if (screen.exit_requested) {
@@ -78,7 +104,7 @@ reopen_interface:;
         x4_auth_catalog_snapshot(auth, &catalog);
         x4_auth_session_snapshot(auth, &session);
         if (!closing && screen.page == 6 && previous_page == 6) {
-            if (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) {
+            if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || chord)) {
                 x4_auth_cancel(auth);
                 session_back = 1;
             }
@@ -124,7 +150,7 @@ reopen_interface:;
                     live_muted = 0;
                     rc = live_error;
                     if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live);
-                    if (!rc) rc = x4_auth_start_session(auth, catalog_selected);
+                    if (!rc) { game_controls = 0; rc = x4_auth_start_session(auth, catalog_selected); }
                     if (rc && !live_error) live_error = rc;
                     x4_auth_session_snapshot(auth, &session);
                     if (rc == 0 || session.state == X4_SESSION_ERROR || live_error) {
@@ -142,7 +168,7 @@ reopen_interface:;
             if (x4_auth_busy(auth)) {
                 if (x4_live_media_take_keyframe_request(live)) x4_auth_request_keyframe(auth);
                 if (live_status.video_error) x4_auth_cancel(auth);
-                if (screen.page == 6 && (controller.pressed & ORBIS_PAD_BUTTON_SQUARE)) {
+                if (screen.page == 6 && (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && (!game_input || chord)) {
                     live_muted = !live_muted;
                     x4_live_media_set_muted(live, live_muted != 0);
                 }
@@ -175,13 +201,16 @@ reopen_interface:;
                 atomic_store(&audio.muted, !atomic_load(&audio.muted));
             x4_video_tick(&video);
         }
-        x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
+        /* A real game picture covers the framebuffer. Avoid repainting the
+         * full menu behind it on every iteration. */
+        bool drew_live = screen.page == 6 && live && x4_auth_busy(auth) && !closing && !session_back &&
+            !live_error && !live_status.video_error && session.state != X4_SESSION_STOPPING &&
+            x4_live_media_draw(live, x4_display_pixels(&display));
+        if (!drew_live) x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
         if (screen.page == 6) {
-            if (live && x4_auth_busy(auth) && !closing && !session_back && !live_error &&
-                !live_status.video_error && session.state != X4_SESSION_STOPPING &&
-                x4_live_media_draw(live, x4_display_pixels(&display)))
-                x4_live_overlay(&live_status, live_muted, x4_display_pixels(&display));
+            if (drew_live)
+                x4_live_overlay(&live_status, &session, live_muted, x4_display_pixels(&display));
             else {
                 X4SessionSnapshot shown = session;
                 if (live_error && !x4_auth_busy(auth)) {
@@ -203,7 +232,10 @@ reopen_interface:;
         else if (screen.page == 5)
             x4_catalog_draw(&catalog, catalog_selected, x4_auth_busy(auth), x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
+        uint64_t present_begin = sceKernelGetProcessTime();
         rc = x4_display_present(&display);
+        if (live && !live_retained)
+            x4_live_media_note_present(live, sceKernelGetProcessTime() - present_begin);
         if (rc < 0) {
             printf("XCloud4: error de presentacion: 0x%08x\n", (unsigned)rc);
             break;
@@ -246,6 +278,7 @@ reopen_interface:;
     media_active = 0;
     closing = 0;
     session_back = 0;
+    game_controls = 0;
     if (!auth) auth = x4_auth_create();
     sceKernelUsleep(250000);
     goto reopen_interface;

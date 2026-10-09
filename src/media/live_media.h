@@ -30,6 +30,16 @@ typedef struct {
     uint64_t audio_dropped_frames;         /* Opus errors and latency trims */
     uint64_t audio_underflows;             /* silence blocks while playing (not real frames) */
     uint64_t keyframe_requests;
+    /* Video main-thread diagnostics; durations are cumulative microseconds,
+     * maxima are since the previous five-second diagnostic report. */
+    uint64_t video_decode_calls, video_decoded_frames, video_no_picture_calls;
+    uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
+    uint64_t video_tick_calls, video_tick_us, video_tick_max_us, video_tick_packets;
+    uint64_t video_draw_calls, video_draw_new, video_draw_repeat, video_draw_us, video_draw_max_us;
+    uint64_t video_present_calls, video_present_us, video_present_max_us;
+    uint64_t video_picture_age_us, video_picture_gap_max_us;
+    uint64_t video_queue_full, video_queue_push_contended, video_queue_pop_contended;
+    uint32_t video_queue_depth, video_queue_highwater;
     uint32_t width, height;                /* last decoded picture, 0 until real video */
     int video_error, audio_error;          /* last failure, 0 when none */
     bool started, video_ready, audio_ready, audio_playing, waiting_keyframe;
@@ -52,12 +62,16 @@ int x4_live_media_set_payload_type(X4LiveMedia *media, int kind, int payload_typ
 int x4_live_media_start(X4LiveMedia *media);
 /* Signature matches X4RtcMediaCallback: kind 0 video, 1 audio. */
 void x4_live_media_receive(void *context, int kind, const uint8_t *rtp, size_t size);
-/* Pumps queued video RTP, reorders, depacketizes and decodes complete AUs. */
+/* Pumps ordered complete AUs without skipping predictive frames. Processing
+ * yields between packets after 6 ms or two Decode calls; native calls cannot
+ * be interrupted. Converts the last validated output before returning. */
 void x4_live_media_tick(X4LiveMedia *media);
 /* Draws the last real picture scaled with aspect ratio into a 1920x1080
  * framebuffer with black bars. Returns 1 when drawn, 0 when no real picture
  * exists yet (the framebuffer is untouched). */
-int x4_live_media_draw(const X4LiveMedia *media, uint32_t *pixels);
+int x4_live_media_draw(X4LiveMedia *media, uint32_t *pixels);
+/* Record a completed main-thread display call, including its VSYNC wait. */
+void x4_live_media_note_present(X4LiveMedia *media, uint64_t elapsed_us);
 void x4_live_media_snapshot(const X4LiveMedia *media, X4LiveMediaSnapshot *snapshot);
 void x4_live_media_set_muted(X4LiveMedia *media, bool muted);
 /* Thread-safe: returns true once per pending keyframe request so the
@@ -88,6 +102,8 @@ typedef struct {
     uint32_t head, count, capacity;
     uint16_t *sizes;
     uint8_t *data;
+    atomic_uint depth, highwater;
+    atomic_uint_fast64_t full, push_contended, pop_contended;
 } X4LiveRing;
 int x4_live_ring_init(X4LiveRing *ring, uint32_t capacity);
 void x4_live_ring_free(X4LiveRing *ring);
@@ -132,5 +148,6 @@ int x4_live_reorder_insert(X4LiveReorder *reorder, const uint8_t *packet, size_t
                            uint16_t sequence, uint64_t now);
 /* Returns the next in-order packet, or NULL. When a hole is abandoned, the
  * number of skipped sequence numbers is added to *lost. The pointer stays
- * valid until the next insert/reset. */
+ * valid until the next insert/reset. now=0 suppresses only time expiry;
+ * the depth/window bounds still apply while queued ingress is inserted. */
 const uint8_t *x4_live_reorder_next(X4LiveReorder *reorder, uint64_t now, size_t *size, uint32_t *lost);

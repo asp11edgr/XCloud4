@@ -3,6 +3,8 @@
 #include "display.h"
 #include <string.h>
 #include <orbis/VideoOut.h>
+#include <orbis/GnmDriver.h>
+#include <stdio.h>
 int x4_display_open(X4Display *d)
 {
     memset(d, 0, sizeof(*d));
@@ -40,6 +42,13 @@ uint32_t *x4_display_pixels(X4Display *d) { return d->buffers[d->index]; }
 int x4_display_present(X4Display *d)
 {
     int rc = sceVideoOutSubmitFlip(d->handle, d->index, ORBIS_VIDEO_OUT_FLIP_VSYNC, d->frame);
+    if (rc < 0) return rc;
+    /* Complete this frame's graphics submission before waiting for scanout.
+     * The 0.7.19 external suspension fault explicitly reported missing
+     * submitDone. This does not replace VideoOut's buffer-ownership wait. */
+    rc = sceGnmSubmitDone();
+    if (d->frame == 1 || rc < 0)
+        printf("XCloud4: Gnm submitDone result=0x%08x\n", (unsigned)rc);
     if (rc < 0) return rc;
     /* Bound the wait and never rewrite a buffer still being scanned out. */
     for (unsigned attempt = 0; attempt < 2000; ++attempt) {

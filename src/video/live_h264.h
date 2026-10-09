@@ -8,9 +8,16 @@ typedef struct {
     uint32_t *pixels;
     unsigned width, height;
     uint64_t frames;
+    /* Main-thread cumulative timings in sceKernelGetProcessTime microseconds. */
+    uint64_t decode_calls, decoded_frames, no_picture_calls, decode_us, decode_max_us;
+    uint64_t convert_us, convert_max_us;
+    uint64_t last_picture_time_us, picture_gap_max_us;
     int error;
     char stage[48];
 } X4LiveVideo;
 int x4_live_video_start(X4LiveVideo *);
 int x4_live_video_feed(X4LiveVideo *, const uint8_t *, size_t, uint64_t pts);
+/* Publish the last validated native picture of this batch. A feed converts
+ * first if its output reservation would overwrite that pending picture. */
+int x4_live_video_convert_pending(X4LiveVideo *);
 int x4_live_video_stop(X4LiveVideo *);

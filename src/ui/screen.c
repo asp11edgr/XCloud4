@@ -25,7 +25,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.7.19", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.20", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -300,17 +300,18 @@ void x4_live_status_draw(const X4LiveMediaSnapshot *m, int error, uint32_t *p)
         x4_text(p, 84, 922, 2, line, WHITE);
     }
 }
-void x4_live_overlay(const X4LiveMediaSnapshot *m, int muted, uint32_t *p)
+void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted, uint32_t *p)
 {
     char line[160];
     x4_rect(p, 0, 1000, X4_WIDTH, 80, BG);
-    snprintf(line, sizeof(line), "%u X %u   IMAGENES %llu   OPUS %llu   AUDIO %s", m->width, m->height,
+    snprintf(line, sizeof(line), "%u X %u   IMAGENES %llu   OPUS %llu   AUDIO %s   CONTROL %s", m->width, m->height,
         (unsigned long long)m->video_frames, (unsigned long long)m->audio_frames,
-        m->audio_error ? "ERROR" : muted ? "SILENCIADO" : m->audio_playing ? "ACTIVO" : "EN ESPERA");
+        m->audio_error ? "ERROR" : muted ? "SILENCIADO" : m->audio_playing ? "ACTIVO" : "EN ESPERA",
+        s->input_error ? "ERROR" : s->input_ready ? "ENVIANDO" : "EN ESPERA");
     x4_text(p, 36, 1015, 2, line, WHITE);
     if (m->audio_error) {
         snprintf(line, sizeof(line), "AUDIO 0X%08X", (unsigned)m->audio_error);
         x4_text(p, 1500, 1015, 2, line, WHITE);
     }
-    x4_text(p, 36, 1047, 2, "CUADRADO SONIDO   CIRCULO CERRAR SESION   OPTIONS SALIR", MUTED);
+    x4_text(p, 36, 1047, 2, "L1+R1: CUADRADO SONIDO / CIRCULO CATALOGO / OPTIONS SALIR / TOUCHPAD GUIA", MUTED);
 }

@@ -78,11 +78,13 @@ struct X4Auth {
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
     _Atomic int cancel, finished;
-    /* Guards nothing but copies of shared, catalog and session. */
+    /* Guards copies of shared/catalog/session and the input mailbox only. */
     atomic_flag lock;
     Shared shared;
     X4CatalogSnapshot catalog;
     X4SessionSnapshot session;
+    X4GamepadFrame gamepad;
+    uint64_t gamepad_updated;
     X4SessionMediaCallback media_callback;
     void *media_user;
     _Atomic int keyframe_requested;
@@ -108,6 +110,36 @@ static void lock(X4Auth *a)
 static void unlock(X4Auth *a)
 {
     atomic_flag_clear_explicit(&a->lock, memory_order_release);
+}
+
+void x4_auth_set_gamepad(X4Auth *a, const X4GamepadFrame *frame)
+{
+    if (!a) return;
+    X4GamepadFrame next = {0};
+    if (frame) next = *frame;
+    uint64_t t = now();
+    lock(a);
+    a->gamepad = next;
+    a->gamepad_updated = t;
+    unlock(a);
+}
+
+/* Called only by the RTC-owned sender, outside its gate. Auth stays alive
+ * until that sender has joined and the session worker has completed. */
+static bool gamepad_source(void *user, X4GamepadFrame *out)
+{
+    X4Auth *a = user;
+    if (!a || !out) return false;
+    uint64_t t = now(), updated;
+    lock(a);
+    *out = a->gamepad;
+    updated = a->gamepad_updated;
+    unlock(a);
+    if (!updated || t < updated || t - updated > 250000 || atomic_load(&a->cancel)) {
+        memset(out, 0, sizeof(*out));
+        return false;
+    }
+    return out->connected;
 }
 
 static void publish(X4Auth *a, enum X4AuthState state, int error, int status, const char *stage,
@@ -744,7 +776,7 @@ static void session_run(X4Auth *a)
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
             &a->cancel, session_progress, a, passport_provider, a, a->media_callback, a->media_user,
-            &a->keyframe_requested);
+            &a->keyframe_requested, gamepad_source, a);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);

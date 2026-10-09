@@ -4,6 +4,7 @@
 #include "../core/module.h"
 #include <orbis/libkernel.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,8 @@ typedef struct {
     Memory compute, cpu, gpu, shared, input[INPUT_RING], output[RING];
     size_t frame_size;
     unsigned input_slot, slot;
+    OrbisVideodec2OutputInfo pending;
+    bool pending_valid;
 } VideoState;
 
 static int stage(X4LiveVideo *v, const char *name, int rc)
@@ -168,7 +171,7 @@ fail:
 
 static unsigned clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : (unsigned)v; }
 
-static int picture(X4LiveVideo *v, VideoState *s, const OrbisVideodec2OutputInfo *o)
+static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
 {
     if (o->isErrorFrame) return -7;
     if (!o->isValid) return 0;
@@ -180,6 +183,15 @@ static int picture(X4LiveVideo *v, VideoState *s, const OrbisVideodec2OutputInfo
     for (unsigned i = 0; i < RING; ++i)
         if (o->pFrameBuffer == s->output[i].p && length <= s->output[i].size) owned = 1;
     if (!owned) return -7;
+    return 1;
+}
+
+int x4_live_video_convert_pending(X4LiveVideo *v)
+{
+    VideoState *s = v ? v->state : NULL;
+    if (!s || !s->pending_valid || v->error) return 0;
+    const OrbisVideodec2OutputInfo *o = &s->pending;
+    uint64_t begin = sceKernelGetProcessTime();
     const uint8_t *yplane = o->pFrameBuffer;
     const uint8_t *uvplane = yplane + (size_t)o->framePitch * o->frameHeight;
     for (unsigned y = 0; y < o->frameHeight; ++y) {
@@ -194,7 +206,14 @@ static int picture(X4LiveVideo *v, VideoState *s, const OrbisVideodec2OutputInfo
             v->pixels[y * o->frameWidth + x] = 0xff000000u | (b << 16) | (g << 8) | r;
         }
     }
+    s->pending_valid = false;
     v->width = o->frameWidth; v->height = o->frameHeight;
+    uint64_t completed = sceKernelGetProcessTime(), elapsed = completed - begin;
+    v->convert_us += elapsed;
+    if (elapsed > v->convert_max_us) v->convert_max_us = elapsed;
+    if (v->last_picture_time_us && completed - v->last_picture_time_us > v->picture_gap_max_us)
+        v->picture_gap_max_us = completed - v->last_picture_time_us;
+    v->last_picture_time_us = completed;
     if (++v->frames == 1) printf("XCloud4: primera imagen H264 %ux%u pitch=%u\n", o->frameWidth, o->frameHeight, o->framePitch);
     return 0;
 }
@@ -207,15 +226,26 @@ int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64
     Memory *compressed = &s->input[s->input_slot];
     memcpy(compressed->p, bytes, size);
     Memory *m = &s->output[s->slot];
+    /* Native pictures live in our fixed output ring. Preserve the last valid
+     * one before reusing its reservation, even after no-picture Decode calls.
+     * Otherwise only the newest valid output of a batch needs conversion. */
+    if (s->pending_valid && s->pending.pFrameBuffer == m->p)
+        x4_live_video_convert_pending(v);
     OrbisVideodec2FrameBuffer frame = {.thisSize = sizeof(frame), .pFrameBuffer = m->p, .frameBufferSize = s->frame_size};
     OrbisVideodec2OutputInfo output = {.thisSize = sizeof(output)};
     OrbisVideodec2InputData input = {.thisSize = sizeof(input), .pAuData = compressed->p,
         .auSize = size, .ptsData = pts, .dtsData = pts};
+    uint64_t begin = sceKernelGetProcessTime();
     int rc = s->Decode(s->decoder, &input, &frame, &output);
+    uint64_t elapsed = sceKernelGetProcessTime() - begin;
+    ++v->decode_calls; v->decode_us += elapsed;
+    if (elapsed > v->decode_max_us) v->decode_max_us = elapsed;
     if (rc < 0) return stage(v, "DECODIFICAR JUEGO H264", rc);
     s->input_slot = (s->input_slot + 1) % INPUT_RING;
     if (frame.isAccepted) s->slot = (s->slot + 1) % RING;
-    rc = picture(v, s, &output);
+    rc = validate_picture(s, &output);
     if (rc < 0) return stage(v, "FORMATO DE IMAGEN", rc);
+    if (rc > 0) { s->pending = output; s->pending_valid = true; ++v->decoded_frames; }
+    else ++v->no_picture_calls;
     return 0;
 }

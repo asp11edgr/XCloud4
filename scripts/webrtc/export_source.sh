@@ -154,6 +154,7 @@ for name in ('rtc_native.c', 'rtc_native.h', 'rtc_net.c', 'rtc_transport.h'):
 for source in sorted(streaming.iterdir()):
     if source.is_file() and source.suffix in ('.c', '.h', '.cpp', '.cc', '.cxx', '.hpp'):
         add(source, 'src/streaming/' + source.name)
+add(project / 'src/input/gamepad.h', 'src/input/gamepad.h')
 
 # Record the exact file bytes first and verify every original after the copy.
 # A simultaneous vendor edit makes the export fail instead of producing a
@@ -184,8 +185,8 @@ manifest = {'format': 1, 'target': 'OpenOrbis PS4 firmware 12.00', 'version': ve
 
 This archive contains the exact patched dependency working trees and native
 port configuration captured from the build host. It includes pinned
-submodules, original licenses, SDK ABI overlay headers and native streaming
-adapters. It does not contain SDK binaries, generated libraries, Git metadata,
+submodules, original licenses, SDK ABI overlay headers, native streaming
+adapters and their portable gamepad header. It does not contain SDK binaries, generated libraries, Git metadata,
 build caches, locally generated credentials, account tokens or runtime logs.
 Original public upstream test fixtures are retained as source material.
 

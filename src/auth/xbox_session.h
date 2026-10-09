@@ -54,6 +54,8 @@ typedef struct {
     int connection_authorized, passport_http_status, connect_http_status;
     int rtc_connected, sdp_http_status, ice_http_status, keepalive_http_status;
     uint64_t video_packets, audio_packets;
+    int input_ready, input_error;
+    uint64_t input_packets, input_dropped;
     unsigned elapsed_seconds, seconds_left;
     char stage[80], region[80], offering[24], title_name[128];
 } X4SessionSnapshot;

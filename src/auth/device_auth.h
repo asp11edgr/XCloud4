@@ -2,6 +2,7 @@
 #pragma once
 #include "xbox_catalog.h"
 #include "xbox_session.h"
+#include "../input/gamepad.h"
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
@@ -55,7 +56,8 @@ typedef struct {
     char stage[80], user_code[32], verification_uri[256];
 } X4AuthSnapshot;
 
-/* Everything except cancel/keyframe-request flags belongs to the main thread. */
+/* Public operations belong to main except the synchronized input source and
+ * cancel/keyframe-request flags. */
 X4Auth *x4_auth_create(void);
 /* Main thread only, while no worker is busy. Registration persists across
  * sign-ins. A completed worker is joined before replacing the registration;
@@ -65,6 +67,11 @@ int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, vo
 /* Thread-safe request flag. The session owner consumes it and requests PLI;
  * this never accesses the transport from the main/decoder thread. */
 void x4_auth_request_keyframe(X4Auth *auth);
+/* Main publishes a copied normalized controller state each UI iteration.
+ * The RTC sender reads it under a short gate; stale states (>250 ms) and
+ * cancellation produce neutral reports. No controller or token pointer is
+ * shared with the sender. */
+void x4_auth_set_gamepad(X4Auth *auth, const X4GamepadFrame *frame);
 /* 0 when the worker was started. Refuses while busy, refuses a connection
  * check while a token is held, and refuses the catalog without a valid one.
  * Sign-in discards any old token and catalog. The catalog run publishes

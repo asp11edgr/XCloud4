@@ -53,3 +53,34 @@ void x4_controller_close(X4Controller *c)
     if (c->handle >= 0) scePadClose(c->handle);
     c->handle = -1;
 }
+
+static int16_t axis(uint8_t value)
+{
+    int n = (int)value - 128;
+    return (int16_t)(n >= 0 ? n * 32767 / 127 : n * 32767 / 128);
+}
+
+void x4_controller_gamepad(const X4Controller *c, X4GamepadFrame *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    if (!c || !c->data.connected || c->error) return;
+    out->connected = true;
+    static const struct { uint32_t ps; uint16_t xbox; } map[] = {
+        {ORBIS_PAD_BUTTON_CROSS, X4_GAMEPAD_A}, {ORBIS_PAD_BUTTON_CIRCLE, X4_GAMEPAD_B},
+        {ORBIS_PAD_BUTTON_SQUARE, X4_GAMEPAD_X}, {ORBIS_PAD_BUTTON_TRIANGLE, X4_GAMEPAD_Y},
+        {ORBIS_PAD_BUTTON_OPTIONS, X4_GAMEPAD_MENU}, {ORBIS_PAD_BUTTON_TOUCH_PAD, X4_GAMEPAD_VIEW},
+        {ORBIS_PAD_BUTTON_UP, X4_GAMEPAD_UP}, {ORBIS_PAD_BUTTON_DOWN, X4_GAMEPAD_DOWN},
+        {ORBIS_PAD_BUTTON_LEFT, X4_GAMEPAD_LEFT}, {ORBIS_PAD_BUTTON_RIGHT, X4_GAMEPAD_RIGHT},
+        {ORBIS_PAD_BUTTON_L1, X4_GAMEPAD_LB}, {ORBIS_PAD_BUTTON_R1, X4_GAMEPAD_RB},
+        {ORBIS_PAD_BUTTON_L3, X4_GAMEPAD_L3}, {ORBIS_PAD_BUTTON_R3, X4_GAMEPAD_R3},
+    };
+    for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); ++i)
+        if (c->data.buttons & map[i].ps) out->buttons |= map[i].xbox;
+    out->left_x = axis(c->data.leftStick.x);
+    out->left_y = (int16_t)-axis(c->data.leftStick.y);
+    out->right_x = axis(c->data.rightStick.x);
+    out->right_y = (int16_t)-axis(c->data.rightStick.y);
+    out->left_trigger = (uint16_t)c->data.analogButtons.l2 * 257u;
+    out->right_trigger = (uint16_t)c->data.analogButtons.r2 * 257u;
+}

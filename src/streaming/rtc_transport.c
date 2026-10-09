@@ -14,6 +14,9 @@
 #define MID_CAP 32u
 #define CANDIDATE_COUNT 64u
 #define CALLBACK_SLOTS 64u
+#define INPUT_INTERVAL_USEC 16667u
+
+_Static_assert(sizeof(double) == 8, "Xbox input uses a float64 timestamp");
 
 typedef struct { char candidate[CANDIDATE_CAP], mid[MID_CAP]; } Candidate;
 typedef struct { X4Rtc *context; unsigned active; } CallbackSlot;
@@ -35,6 +38,15 @@ struct X4Rtc {
     void *media_user;
     bool handshake_ack, startup_sent;
     uint64_t started_at;
+    X4GamepadSource input_source;
+    void *input_user;
+    OrbisPthread input_thread;
+    bool input_thread_started;
+    int input_join_error;
+    uint32_t input_sequence;
+    atomic_bool input_stop, input_ready, input_metadata_sent, startup_complete;
+    atomic_int input_error;
+    atomic_uint_fast64_t input_packets, input_dropped;
 };
 
 static void lock(atomic_flag *flag) { while (atomic_flag_test_and_set_explicit(flag, memory_order_acquire)) {} }
@@ -342,6 +354,92 @@ static void uuid(char output[37])
 }
 static int send_text(int channel, const char *text) { return rtcSendMessage(channel, text, -1); }
 
+static void input_u16(uint8_t *p, uint16_t value)
+{ p[0]=(uint8_t)value; p[1]=(uint8_t)(value>>8); }
+static void input_u32(uint8_t *p, uint32_t value)
+{ for(unsigned i=0;i<4;++i)p[i]=(uint8_t)(value>>(8*i)); }
+
+static void input_header(X4Rtc *rtc, uint8_t *packet, uint16_t type)
+{
+    lock(&rtc->data_gate);
+    uint32_t sequence = ++rtc->input_sequence; /* Defined uint32 wrap. */
+    unlock(&rtc->data_gate);
+    uint64_t t=sceKernelGetProcessTime();
+    double milliseconds=t>=rtc->started_at ? (double)(t-rtc->started_at)/1000.0 : 0.0;
+    uint64_t bits;
+    memcpy(&bits,&milliseconds,sizeof(bits));
+    input_u16(packet,type);input_u32(packet+2,sequence);
+    for(unsigned i=0;i<8;++i)packet[6+i]=(uint8_t)(bits>>(8*i));
+}
+
+/* Single-controller Xbox input 1.0 report. Layout and physicality trailers
+ * match pinned GreenVita input.rs and PSBox input_packet.cpp. They are wire
+ * constants, not an arbitrary serialized controller struct. */
+static void input_gamepad(X4Rtc *rtc, const X4GamepadFrame *frame, uint8_t packet[38])
+{
+    input_header(rtc,packet,2);
+    packet[14]=1;packet[15]=0;
+    input_u16(packet+16,frame->buttons & 0xfffeu);
+    int16_t axes[]={frame->left_x,frame->left_y,frame->right_x,frame->right_y};
+    for(unsigned i=0;i<4;++i) {
+        if(axes[i]<-32767)axes[i]=-32767;
+        input_u16(packet+18+2*i,(uint16_t)axes[i]);
+    }
+    input_u16(packet+26,frame->left_trigger);input_u16(packet+28,frame->right_trigger);
+    input_u32(packet+30,1);
+    packet[34]=packet[35]=packet[36]=0;packet[37]=1; /* uint32 big endian. */
+}
+
+static void input_error(X4Rtc *rtc,int error)
+{
+    int previous=atomic_exchange(&rtc->input_error,error);
+    if(error && error!=previous)printf("XCloud4: RTC input error=0x%08x\n",(unsigned)error);
+}
+
+static void *input_sender(void *pointer)
+{
+    X4Rtc *rtc=pointer;
+    while(!atomic_load(&rtc->input_stop)) {
+        uint64_t until=sceKernelGetProcessTime()+INPUT_INTERVAL_USEC;
+        lock(&rtc->data_gate);
+        X4GamepadSource source=rtc->input_source;
+        void *user=rtc->input_user;
+        unlock(&rtc->data_gate);
+        bool ready=source && atomic_load(&rtc->input_metadata_sent) &&
+            atomic_load(&rtc->startup_complete) && !atomic_load(&rtc->error) &&
+            atomic_load(&rtc->state)==X4_RTC_CONNECTED && rtcIsOpen(rtc->channels[2]);
+        atomic_store(&rtc->input_ready,ready);
+        if(ready) {
+            X4GamepadFrame frame={0};
+            /* Auth copies its mailbox under its own gate. No RTC gate is
+             * held across this call; close joins before freeing either. */
+            if(!source(user,&frame) || !frame.connected)frame=(X4GamepadFrame){0};
+            if(!atomic_load(&rtc->input_stop)) {
+                int buffered=rtcGetBufferedAmount(rtc->channels[2]);
+                if(buffered) {
+                    atomic_fetch_add(&rtc->input_dropped,1);
+                    if(buffered<0)input_error(rtc,buffered);
+                } else {
+                    uint8_t packet[38];
+                    input_gamepad(rtc,&frame,packet);
+                    int rc=rtcSendMessage(rtc->channels[2],(const char *)packet,sizeof(packet));
+                    if(rc<0) {atomic_fetch_add(&rtc->input_dropped,1);input_error(rtc,rc);}
+                    else {atomic_fetch_add(&rtc->input_packets,1);input_error(rtc,0);}
+                }
+            }
+        }
+        /* No catch-up bursts: each iteration starts a fresh monotonic
+         * deadline; interrupted sleeps cannot exceed the 60 Hz ceiling. */
+        while(!atomic_load(&rtc->input_stop)) {
+            uint64_t t=sceKernelGetProcessTime();
+            if(t>=until)break;
+            sceKernelUsleep((unsigned)(until-t));
+        }
+    }
+    atomic_store(&rtc->input_ready,false);
+    return NULL;
+}
+
 static int startup_message(int channel, const char *target, const char *content)
 {
     char escaped[1536], message[2048], id[37];
@@ -376,7 +474,7 @@ static void start_channels(X4Rtc *rtc)
     rc |= startup_message(message, "/streaming/characteristics/clientdevicecapabilities", "{\"supportsCustomResolution\":true,\"supportsHevc\":false,\"supportsHdr\":false,\"supportsFps\":30,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":5000,\"video\":{\"width\":1280,\"height\":720,\"maxWidth\":1280,\"maxHeight\":720,\"maxBitrateKbps\":5000}}");
     rc |= startup_message(message, "/streaming/characteristics/dimensionschanged", "{\"horizontal\":1280,\"vertical\":720,\"preferredWidth\":1280,\"preferredHeight\":720,\"safeAreaLeft\":0,\"safeAreaTop\":0,\"safeAreaRight\":1280,\"safeAreaBottom\":720,\"supportsCustomResolution\":true}");
     if (rc < 0) fail(rtc, -42);
-    else printf("XCloud4: RTC canales Xbox preparados\n");
+    else {atomic_store(&rtc->startup_complete,true);printf("XCloud4: RTC canales Xbox preparados\n");}
 }
 static void channel_open(int channel, void *pointer)
 {
@@ -389,12 +487,13 @@ static void channel_open(int channel, void *pointer)
         if (send_text(channel, message) < 0) fail(rtc, -43);
     }
     if (channel == rtc->channels[2]) {
-        /* ClientMetadata report: u16 type8, u32 sequence1, f64 elapsed ms,
+        /* ClientMetadata report: u16 type8, shared u32 sequence, f64 elapsed ms,
          * u8 supported touch points0; all fields are little endian. */
-        unsigned char metadata[15] = {8, 0, 1};
-        double elapsed_ms = (double)(sceKernelGetProcessTime() - rtc->started_at) / 1000.0;
-        memcpy(metadata + 6, &elapsed_ms, sizeof(elapsed_ms));
+        unsigned char metadata[15] = {0};
+        atomic_store(&rtc->input_metadata_sent,false);
+        input_header(rtc,metadata,8);
         if (rtcSendMessage(channel, (const char *)metadata, sizeof(metadata)) < 0) fail(rtc, -43);
+        else atomic_store(&rtc->input_metadata_sent,true);
     }
     start_channels(rtc);
     leave(pointer);
@@ -432,6 +531,10 @@ X4Rtc *x4_rtc_open(int *error)
     atomic_init(&rtc->offer_logged, false);
     atomic_init(&rtc->video_packets, 0);
     atomic_init(&rtc->audio_packets, 0);
+    atomic_init(&rtc->input_stop,false);atomic_init(&rtc->input_ready,false);
+    atomic_init(&rtc->input_metadata_sent,false);atomic_init(&rtc->startup_complete,false);
+    atomic_init(&rtc->input_error,0);
+    atomic_init(&rtc->input_packets,0);atomic_init(&rtc->input_dropped,0);
     atomic_flag_clear(&rtc->data_gate);
     lock(&callback_gate);
     if (slots_used < CALLBACK_SLOTS) { rtc->slot=&slots[slots_used++]; rtc->slot->context=rtc; }
@@ -508,6 +611,20 @@ void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user
     if(!rtc)return;
     lock(&rtc->data_gate);rtc->media=callback;rtc->media_user=user;unlock(&rtc->data_gate);
 }
+int x4_rtc_set_gamepad_source(X4Rtc *rtc,X4GamepadSource source,void *user)
+{
+    if(!rtc || !source || rtc->input_thread_started || atomic_load(&rtc->input_stop))return -46;
+    lock(&rtc->data_gate);rtc->input_source=source;rtc->input_user=user;unlock(&rtc->data_gate);
+    int rc=scePthreadCreate(&rtc->input_thread,NULL,input_sender,rtc,"XCloud4Input");
+    if(rc) {
+        lock(&rtc->data_gate);rtc->input_source=NULL;rtc->input_user=NULL;unlock(&rtc->data_gate);
+        input_error(rtc,rc);
+        return rc;
+    }
+    rtc->input_thread_started=true;
+    printf("XCloud4: RTC input sender iniciado\n");
+    return 0;
+}
 int x4_rtc_local_description(X4Rtc *rtc,char *sdp,size_t capacity)
 {
     if(!rtc||!sdp||!capacity)return -1;
@@ -567,6 +684,8 @@ void x4_rtc_snapshot(X4Rtc *rtc,X4RtcSnapshot *snapshot)
     snapshot->state=(X4RtcState)atomic_load(&rtc->state);snapshot->error=atomic_load(&rtc->error);
     snapshot->gathering_done=atomic_load(&rtc->gathering_done);
     snapshot->video_packets=atomic_load(&rtc->video_packets);snapshot->audio_packets=atomic_load(&rtc->audio_packets);
+    snapshot->input_ready=atomic_load(&rtc->input_ready);snapshot->input_error=atomic_load(&rtc->input_error);
+    snapshot->input_packets=atomic_load(&rtc->input_packets);snapshot->input_dropped=atomic_load(&rtc->input_dropped);
 }
 int x4_rtc_request_keyframe(X4Rtc *rtc)
 {
@@ -574,9 +693,23 @@ int x4_rtc_request_keyframe(X4Rtc *rtc)
     if(rtcIsOpen(rtc->channels[1]))send_text(rtc->channels[1],"{\"message\":\"videoKeyframeRequested\",\"ifrRequested\":true}");
     return rtcRequestKeyframe(rtc->video);
 }
-void x4_rtc_close(X4Rtc *rtc)
+int x4_rtc_close(X4Rtc *rtc)
 {
-    if(!rtc)return;
+    if(!rtc)return 0;
+    atomic_store(&rtc->input_stop,true);
+    if(rtc->input_thread_started) {
+        int rc=scePthreadJoin(rtc->input_thread,NULL);
+        if(rc) {
+            if(rtc->input_join_error!=rc)printf("XCloud4: RTC input join error=0x%08x; contexto retenido\n",(unsigned)rc);
+            rtc->input_join_error=rc;
+            input_error(rtc,rc);
+            return rc; /* No handle, callback or provider context is freed. */
+        }
+        rtc->input_thread_started=false;
+    }
+    printf("XCloud4: RTC input resumen submitted=%llu dropped=%llu error=0x%08x\n",
+        (unsigned long long)atomic_load(&rtc->input_packets),
+        (unsigned long long)atomic_load(&rtc->input_dropped),(unsigned)atomic_load(&rtc->input_error));
     /* Every callback carries a process-lifetime slot. Detach the heap context
      * before deleting asynchronous library objects; stale callbacks see NULL.
      * Slots are deliberately never reused (bounded to64 sessions per process). */
@@ -588,4 +721,5 @@ void x4_rtc_close(X4Rtc *rtc)
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);
+    return 0;
 }
