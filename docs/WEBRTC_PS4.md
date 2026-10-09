@@ -129,6 +129,16 @@ The actual console resolver results are creation **0**, timeout **2000000 micros
 
 Matching source closed from the frozen mirror: **83545142 bytes**, SHA-256 `9aac8351b1b93b0f4e619e81a3291f74567ccaf0dd4da516f0e61fecf654a0e0`. All **9367** source hashes matched, with an identical PC copy and every prior snapshot unchanged. See [0.7.8 package evidence and exact sources](RELEASE_NOTES_0.7.8.md).
 
+### 0.7.9 logical signaling diagnostics
+
+The original authentication diagnostics extend to logical failures in successful HTTP responses for SDP/ICE exchange, acknowledgement and keepalive. Fixed classes0–14 remain; bounded nodes0–4 describe root/errorDetails/error and one details-object level with JSON types, validated uint32/signed32 code data, uint32 status and message types only. Diagnostics use no recursion/allocation and run before clearing private data. No arbitrary provider text or credential/SDP/ICE values are logged. Negotiation decisions and media behavior remain unchanged. The purpose is to classify the non-null errorDetails refusal seen in 0.7.8, whose exact server category is still unknown.
+
+Claude Opus 5.5 completed a focused read-only review in **8 turns**, without a material finding in the reviewed diagnostic/JSON scope or source edits/tests. The full application/package built without warnings/errors, and VM/PC/PS4 retrieval hashes match.
+
+Actual DNS succeeds (lookup0/elapsed11086 microseconds), with current SDP1286 bytes/two candidates and POST HTTP202. After **37** HTTP204 polls, keepalive returns HTTP200/37 bytes, then SDP HTTP200/243 bytes at **30251 ms / poll count38**. Route1 classification reports errorDetails object(type1), unrecognized string code(type3/class1), and string message type3; no root-code/status/nested-details value is reported. This identifies structure, not a specific refusal category. Remote cleanup returns HTTP200 with no RTP/video/audio.
+
+The exact dependency/adapter source archive is **83545064 bytes**, SHA-256 `b2ab42ea193254aa4aa71c891a3e53396850685418cc6c366783e3abfdd94235`; all **9367** hashes match, with identical guest/PC copies. Application checkpoint `0e328bf` contains the authentication diagnostics separately from the unchanged RTC/vendor trees. Earlier snapshots remain immutable. See [0.7.9 source and runtime evidence](RELEASE_NOTES_0.7.9.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.

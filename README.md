@@ -12,7 +12,7 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development package: 0.7.8 native DNS timeout
+## Development package: 0.7.9 logical signaling diagnostics
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -31,6 +31,8 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 `XCloud4-0.7.7.pkg` obtains the current provider SDP after gathering through libdatachannel's C API, replacing submission of the initial callback snapshot. The console confirms a **1201-byte offer with one real candidate**, fixing that source-state issue. Xbox accepts submission with HTTP 202, but 33 HTTP 204 polls still return no answer before keepalive reports HTTP 410 / `SessionNotActive`. Cleanup and OPTIONS exit succeed. **No successful remote negotiation or game media is confirmed.** See [0.7.7 scope and hardware evidence](docs/RELEASE_NOTES_0.7.7.md).
 
 `XCloud4-0.7.8.pkg` corrects the original native DNS adapter's timeout to `2000000` microseconds (two seconds). The console confirms successful lookup and a **1286-byte offer with two candidates**. After accepted submission, 37 pending polls and a successful keepalive, Xbox returns **HTTP 200 with non-null `errorDetails`**, which the parser identifies as a logical SDP refusal. Cleanup succeeds; **no RTP or game video/audio is received**. DNS is not established as the sole cause of the previous failure. See [0.7.8 runtime, package evidence and primary reference](docs/RELEASE_NOTES_0.7.8.md).
+
+`XCloud4-0.7.9.pkg` classifies logical signaling failures before response data is cleared, preserving negotiation/media behavior. The console identifies an **`errorDetails` object with an unrecognized string code**, carried by HTTP 200 after pending SDP polls and successful keepalive. The exact server refusal category remains unknown; cleanup succeeds and **no RTP or game media is received**. Build/transfer integrity and Claude's eight-turn read-only review are recorded separately. See [0.7.9 diagnostic and runtime evidence](docs/RELEASE_NOTES_0.7.9.md).
 
 The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
@@ -51,6 +53,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.7.6, diagnostic | Keepalive HTTP 410 is identified as `SessionNotActive`; the initial callback summary has zero candidates, no remote SDP answer or media is received. |
 | 0.7.7, partial | Current offer includes one real candidate; no Xbox answer before `SessionNotActive`, cleanup and OPTIONS exit succeed, no media received. |
 | 0.7.8, partial | Native DNS succeeds and current offer has two candidates; Xbox returns a logical SDP refusal in HTTP 200, cleanup succeeds, no media received. |
+| 0.7.9, diagnostic | Refusal contains an errorDetails object with an unrecognized string code; exact category unknown, cleanup succeeds, no media received. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
@@ -87,7 +90,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.8 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.8.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The 0.7.9 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.9.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
