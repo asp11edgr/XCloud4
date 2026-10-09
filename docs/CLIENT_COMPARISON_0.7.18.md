@@ -2,7 +2,9 @@
 
 The current blocking failure is a native worker crash in `SctpTransport::doRecv()` after successful Xbox signaling, ICE completion and DTLS connection. The smallest proposed repair moves its 65,536-byte receive buffer from automatic storage to an owned heap allocation. The worker's actual stack bounds remain unmeasured, and live game video/audio remains unconfirmed.
 
-This comparison covers discoverable public Xbox clients, their protocol libraries and relevant native console implementations. It identifies the specific inspected paths and source revisions; it does not claim every existing client or reproduce another author's playback results. All proposals below are unimplemented.
+This comparison covers discoverable public Xbox clients, their protocol libraries and relevant native console implementations. It identifies the specific inspected paths and source revisions; it does not claim every existing client or reproduce another author's playback results. All proposals below were unimplemented when this 0.7.18 review was completed.
+
+Subsequent development: [0.7.19](RELEASE_NOTES_0.7.19.md) implements the target-only owned receive buffer, with a verified smaller linked frame. Its [first console attempt](ERROR_REPORT_0.7.19.md) reaches live game audio and video, with slow video, input and external-close limitations. The native stack default remains unmeasured. The remaining stack-diagnostic and worker-sizing proposals are still unimplemented; the observations below preserve the 0.7.18 investigation.
 
 ## Current console evidence
 

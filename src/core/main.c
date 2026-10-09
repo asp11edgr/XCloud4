@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.18: direccion SCTP nativa y diagnostico de inicializacion\n");
+    printf("XCloud4 0.7.19: recepcion SCTP con bufer en memoria dinamica\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

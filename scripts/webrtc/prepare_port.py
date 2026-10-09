@@ -654,6 +654,27 @@ for step, event in ((6, 'SCTP_ASSOC_CHANGE'), (7, 'SCTP_SENDER_DRY_EVENT'),
         prefix + '\tif (X4_SCTP_RESULT(' + str(step) + ', ' + expression + '))'))
 checked_patch(source, sctp_replacements, 'static int x4_sctp_result(int step, int result) {', exact=True)
 
+# Keep the 64 KiB receive scratch buffer off the native worker stack.
+# Allocate once inside the existing exception handler; other targets retain
+# the upstream automatic array and all receive/copy/notification logic.
+checked_patch(source, [
+    ('#include <vector>',
+     '#include <vector>\n#ifdef X4_OPENORBIS\n#include <memory>\n#endif'),
+    ('void SctpTransport::doRecv() {\n'
+     '\tstd::lock_guard lock(mRecvMutex);\n\t--mPendingRecvCount;\n\ttry {\n'
+     '\t\twhile (state() != State::Disconnected && state() != State::Failed) {\n'
+     '\t\t\tconst size_t bufferSize = 65536;\n\t\t\tbyte buffer[bufferSize];',
+     'void SctpTransport::doRecv() {\n'
+     '\tstd::lock_guard lock(mRecvMutex);\n\t--mPendingRecvCount;\n\ttry {\n'
+     '#ifdef X4_OPENORBIS\n'
+     '\t\tconst size_t bufferSize = 65536;\n'
+     '\t\tstd::unique_ptr<byte[]> receiveStorage(new byte[bufferSize]);\n'
+     '\t\tbyte *buffer = receiveStorage.get();\n#endif\n'
+     '\t\twhile (state() != State::Disconnected && state() != State::Failed) {\n'
+     '#ifndef X4_OPENORBIS\n'
+     '\t\t\tconst size_t bufferSize = 65536;\n\t\t\tbyte buffer[bufferSize];\n#endif'),
+], 'std::unique_ptr<byte[]> receiveStorage(new byte[bufferSize]);', exact=True)
+
 # Initialization exceptions can set PeerConnection::Failed directly before
 # any SCTP state callback. Preserve the original error/cleanup path and add
 # only fixed numeric stages and exception classes, never exception messages.

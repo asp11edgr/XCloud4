@@ -2,7 +2,7 @@
 
 Experimental native Xbox Cloud Gaming client for a PS4 Fat running firmware **12.00** and **GoldHEN v2.4b18.7**, built with OpenOrbis.
 
-## Current confirmed milestone: 0.6.2
+## Preserved authorization milestone: 0.6.2
 
 The owner confirmed that connection authorization completes without an error. The PS4 kernel log confirms Microsoft token renewal **HTTP 200**, Passport **HTTP 200**, `/connect` **HTTP 202**, and automatic session deletion **HTTP 200**, with no cleanup error. This milestone is preserved as **`v0.6.2`**.
 
@@ -12,11 +12,17 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest tested development checkpoint: 0.7.18
+## Latest tested development checkpoint: 0.7.19
+
+Version **0.7.19**, PS4 **APP_VER 00.89**, moves the native SCTP receive scratch buffer to owned heap storage, allocated once per receive invocation inside the existing exception handler. Its **65,536-byte capacity**, receive lock, pending counter, notification/message copies and end-of-record handling are preserved. Other targets retain the upstream automatic array; no new worker-stack attributes are introduced.
+
+The affected dependency unit and full application package built successfully. The final linked `SctpTransport::doRecv()` reserves **552 local stack bytes**, compared with **66,072 bytes** in 0.7.18. A fresh actual Claude Code **Opus 5.5** review reported no material defects; source inventory and VM/PC/PS4 package hashes are verified. **The owner now confirms live game audio and video.** The log records SCTP/RTC connection, Xbox channels prepared, first Opus decoding and a 1280×720 H.264 image. Audio works well; video updates slowly, input reports are not yet implemented, and external closure raises CE-34878-0 with a graphics-suspension timeout. Native stack bounds and measured FPS remain unknown. See the [0.7.19 result and limitations](docs/ERROR_REPORT_0.7.19.md), [release evidence](docs/RELEASE_NOTES_0.7.19.md) and [development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.19).
+
+## Previous tested development checkpoint: 0.7.18
 
 Version **0.7.18** corrects a verified native SCTP address ABI mismatch: the public C++ declaration placed the family at byte 0, while the actual C implementation expects length at byte 0 and family at byte 1. The target patch adds compile-time layout checks and bounded numeric initialization diagnostics. Actual Claude Code Opus 5.5, Antigravity Opus 4.6 Thinking and independent source reviews, native packaging, linked caller/library byte-layout evidence, matching source inventory and VM/PC/PS4 package hashes are confirmed. **The first console attempt reaches SCTP construction, successful bind and accepted nonblocking start, then crashes with SIGSEGV in `SctpTransport::doRecv()` before confirmed media.** Its large automatic receive buffer and fault at RSP - 8 strongly suggest worker-stack exhaustion; the actual worker stack size is not yet established. See the [current 0.7.18 error report](docs/ERROR_REPORT_0.7.18.md). Live game video/audio remains unconfirmed. Read the [0.7.18 evidence](docs/RELEASE_NOTES_0.7.18.md) and download the [public development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.18).
 
-The completed [public-client comparison and proposed receive fix](docs/CLIENT_COMPARISON_0.7.18.md) records the inspected implementations, source pins, platform differences and actual Antigravity/Claude review scope. It prioritizes moving the receive buffer to owned heap storage, followed by native stack measurements. The proposal has not been implemented or tested on the console.
+The completed [public-client comparison and proposed receive fix](docs/CLIENT_COMPARISON_0.7.18.md) records the inspected sources and actual Antigravity/Claude review scope. Its receive-buffer proposal is implemented in 0.7.19, whose first attempt now reaches live media. The remaining native stack-measurement proposals are unimplemented; video performance, input and external closure remain separate work.
 
 ## Previous tested development checkpoint: 0.7.17
 
@@ -124,7 +130,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The current 0.7.18 development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.18.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The current 0.7.19 development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.19.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
