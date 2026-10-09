@@ -26,6 +26,8 @@ El SDK v0.5.4 tiene declaraciones incompletas para esta API. Se conserva la estr
 
 `assets/sample.h264` es un patrón sintético generado con FFmpeg 8.0.1 y libx264 en Lubuntu, mediante `scripts/generar-muestra.sh`. No contiene material de un juego, música ni imágenes de terceros. FFmpeg y libx264 solo se utilizan en la PC; sus ejecutables y bibliotecas no se incluyen en el PKG. Los tonos PCM se generan en XCloud4.
 
+La 0.2.1 adapta la selección del usuario SYSTEM para el puerto MAIN y la espera de consumo con `sceAudioOutOutput(handle, NULL)` del ejemplo público `samples/audio-wav/audio-wav/main.cpp` de OpenOrbis v0.5.4, bajo GPL-3.0. Fuente: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp. Se conserva la licencia en `docs/licenses/OpenOrbis-GPL-3.0.txt`. No se incluye su archivo musical ni su decodificador WAV.
+
 ## Referencias futuras
 
 GreenVita (MPL-2.0), Better xCloud (MIT) y Moonlight PS4 (licencia del código propio pendiente de aclarar) se consideran referencias de investigación. No se ha incorporado su código. Las versiones revisadas y los archivos de interés están en `docs/REFERENCIAS.md`.

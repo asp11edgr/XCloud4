@@ -2,7 +2,7 @@
 
 ## Alcance
 
-La pantalla IMAGEN Y SONIDO permite ejecutar el primer camino de reproducción nativo. No tiene conexión con Xbox. El resultado real de Videodec2 y AudioOut en PS4 12.00 queda pendiente hasta abrir el paquete en la consola.
+La pantalla IMAGEN Y SONIDO permite ejecutar el primer camino de reproducción nativo. No tiene conexión con Xbox. En la 0.2.0, el propietario informó que el video va bien y la foto muestra 217 / 240 imágenes. Klog registra la primera imagen H.264 de 640 × 368 con pitch 640 y `MUESTRA TERMINADA`. El audio de esa versión falló con `0x809B0001`.
 
 - Clip sintético H.264 Annex B, baseline 3.0, 640 × 368, 30 cuadros por segundo, ocho segundos, sin B-frames y con un delimitador AUD por cuadro. Lo genera `scripts/generar-muestra.sh` con FFmpeg y libx264 en la PC.
 - SHA-256 del clip incluido: `fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31`. Se incluye el archivo para compilar sin requerir FFmpeg. Para regenerarlo, usar `bash scripts/generar-muestra.sh`; `X4_FFMPEG` permite indicar la ruta del ejecutable local.
@@ -25,3 +25,9 @@ Claude Code Pro 2.1.292 ejecutó una revisión estática con `claude-opus-5-5` (
 Se descartaron propuestas sin defecto demostrado: intercambiar rojo/azul (la pantalla usa ABGR), borrar archivos de empaquetado (el GP4 enumera explícitamente sus archivos) o quitar la primera presentación (cada flip espera su finalización). No se cambiaron profile/level a cero: esa sugerencia era una hipótesis de hardware. Los registros de la consola decidirán cualquier cambio posterior de parámetros.
 
 No se añadieron ni ejecutaron pruebas automatizadas. La 0.1.2 y su etiqueta se conservan como base confirmada.
+
+## Audio 0.2.1
+
+El registro real contiene `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` en cada inicio de la muestra 0.2.0. La pantalla y la foto del propietario muestran `0x809B0001`; la implementación pasaba a MAIN el usuario obtenido de UserService. El ejemplo público OpenOrbis v0.5.4 abre MAIN con `ORBIS_USER_SERVICE_USER_ID_SYSTEM` (0xFF). La 0.2.1 adopta esa asociación y elimina la consulta del usuario para el audio.
+
+También sigue la espera explícita con `sceAudioOutOutput(handle, NULL)` antes de reutilizar el bloque PCM y al finalizar, y registra los resultados de init, open y creación del hilo. Fuente primaria: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp. Las credenciales de Microsoft no intervienen. Se conserva el video de la 0.2.0. La corrección de sonido queda pendiente de confirmación real.

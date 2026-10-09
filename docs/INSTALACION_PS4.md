@@ -1,5 +1,9 @@
 # Instalar XCloud4
 
+## Corrección de sonido 0.2.1
+
+Seleccionar `XCloud4-0.2.1.pkg` en Package Installer (HDD o ALL si se copió por red) y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO; debe conservar el video y ahora intentar abrir el audio MAIN con el usuario SYSTEM. X repite, cuadrado silencia y círculo vuelve. Sonido pendiente de confirmación. La 0.2.0 ya reprodujo video en la consola, pero su audio mostró `0x809B0001`.
+
 ## Nueva muestra 0.2.0
 
 Paquete: `XCloud4-0.2.0.pkg`, mismo identificador `XCLD00001`. Compilado y empaquetado en Lubuntu; reproducción en PS4 pendiente. Conserva CONTROL y PROYECTO y agrega IMAGEN Y SONIDO. Incluye un clip H.264 sintético de ocho segundos y tonos PCM suaves alternados entre izquierda y derecha. No inicia juegos ni sesión de Xbox.

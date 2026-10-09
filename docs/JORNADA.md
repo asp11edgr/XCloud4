@@ -46,6 +46,14 @@ Claude Code Pro realizó una revisión estática con `claude-opus-5-5`, confirma
 
 El paquete final se compiló y generó en Lubuntu sin errores de compilación. El GP4 incluye la muestra, el ejecutable y ambos auxiliares OpenOrbis. Tamaño: 6619136 bytes. SHA-256: `a67ddc21d3d2e5fc2e700ec24407862f83238c6c2b5f3e633171c531671f0a5d`. Se copió a `/data/pkg/XCloud4-0.2.0.pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalar, abrir IMAGEN Y SONIDO e informar el resultado mientras se captura Klog. Inicio y reproducción de la 0.2.0 pendientes; la base 0.1.2 sigue conservada.
 
-## Publicación pendiente
+## Resultado de video 0.2.0 y corrección de audio 0.2.1
+
+El propietario informó que el video parece ir bien. Su foto de IMAGEN Y SONIDO muestra la imagen sintética y 217 / 240 imágenes; el audio indica `0x809B0001`. Klog confirma `primera imagen H264 640x368 pitch=640`, `MUESTRA TERMINADA` y `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` al iniciar audio. Queda confirmada la reproducción de esta muestra H.264 en PS4 12.00. No demuestra rendimiento a 720p ni reproducción desde WebRTC.
+
+La 0.2.1 abre MAIN con el usuario SYSTEM (0xFF), siguiendo el ejemplo oficial de audio-wav de OpenOrbis v0.5.4, y espera el consumo antes de reutilizar el bloque PCM. Agrega registros de init, open, hilo y finalización. Claude Code Pro revisó el ajuste con `claude-opus-5-5`; no detectó defectos concretos de ABI, hilo o vida útil del buffer. Se contrastó el código de ALREADY_INIT con el encabezado del SDK. No se ejecutaron pruebas automatizadas.
+
+La corrección se compiló y empaquetó en Lubuntu sin errores. Paquete `XCloud4-0.2.1.pkg`, 6619136 bytes, SHA-256 `6023aeacd4521e3e486ad3fb335bafab77631bd92613c56a5383037f341ab2e9`. Se copió a `/data/pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalarla mientras se captura Klog; sonido 0.2.1 pendiente. La implementación de video no cambió.
+
+## GitHub al final de la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

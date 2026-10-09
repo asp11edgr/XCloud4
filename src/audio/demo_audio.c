@@ -12,6 +12,13 @@ static void *play(void *opaque)
     int16_t samples[1024 * 2];
     unsigned position = 0, phase = 0;
     while (!atomic_load(&a->stop) && position < 48000 * 8) {
+        /* AudioOut may retain samples after submission; finish before reuse. */
+        int rc = a->output(a->handle, NULL);
+        if (rc < 0) {
+            atomic_store(&a->error, rc);
+            printf("XCloud4: AudioOut espera 0x%08x\n", (unsigned)rc);
+            break;
+        }
         int muted = atomic_load(&a->muted);
         for (unsigned i = 0; i < 1024; ++i, ++position) {
             unsigned within = position % 48000;
@@ -27,15 +34,20 @@ static void *play(void *opaque)
             samples[i * 2] = channel == 0 ? (int16_t)value : 0;
             samples[i * 2 + 1] = channel == 1 ? (int16_t)value : 0;
         }
-        int rc = a->output(a->handle, samples);
+        rc = a->output(a->handle, samples);
         if (rc < 0) {
             atomic_store(&a->error, rc);
             printf("XCloud4: AudioOutOutput 0x%08x\n", (unsigned)rc);
             break;
         }
     }
-    a->output(a->handle, NULL);
+    int rc = a->output(a->handle, NULL);
+    if (rc < 0 && !atomic_load(&a->error)) {
+        atomic_store(&a->error, rc);
+        printf("XCloud4: AudioOut finalizar 0x%08x\n", (unsigned)rc);
+    }
     atomic_store(&a->finished, 1);
+    printf("XCloud4: PCM terminado, muestras=%u error=0x%08x\n", position, (unsigned)atomic_load(&a->error));
     return NULL;
 }
 
@@ -58,19 +70,22 @@ int x4_audio_start(X4DemoAudio *a)
     SYMBOL("sceAudioOutClose", a->close);
 #undef SYMBOL
     rc = init();
+    printf("XCloud4: AudioOutInit -> 0x%08x\n", (unsigned)rc);
     if (rc < 0 && (uint32_t)rc != 0x8026000e) goto fail;
-    OrbisUserServiceUserId user;
-    rc = sceUserServiceGetInitialUser(&user);
-    if (rc < 0) goto fail;
-    a->handle = open(user, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN, 0, 1024, 48000, ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_STEREO);
+    /* MAIN output follows the OpenOrbis audio-wav example: SYSTEM user. */
+    a->handle = open(ORBIS_USER_SERVICE_USER_ID_SYSTEM, ORBIS_AUDIO_OUT_PORT_TYPE_MAIN,
+        0, 1024, 48000, ORBIS_AUDIO_OUT_PARAM_FORMAT_S16_STEREO);
     rc = a->handle;
+    printf("XCloud4: AudioOutOpen MAIN SYSTEM(0xff) -> 0x%08x\n", (unsigned)rc);
     if (rc < 0) goto fail;
     rc = scePthreadCreate(&a->thread, NULL, play, a, "x4-pcm");
+    printf("XCloud4: audio crear hilo -> 0x%08x\n", (unsigned)rc);
     if (rc != 0) { if (rc > 0) rc = -rc; goto fail; }
     a->running = 1;
     printf("XCloud4: PCM 48000 Hz estereo iniciado\n");
     return 0;
 fail:
+    printf("XCloud4: inicio audio fallo 0x%08x\n", (unsigned)rc);
     atomic_store(&a->error, rc);
     x4_audio_stop(a);
     return rc;

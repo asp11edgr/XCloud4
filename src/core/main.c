@@ -21,7 +21,7 @@ int main(void)
         return 1;
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.2.0: inicio de interfaz, control y muestra multimedia\n");
+    printf("XCloud4 0.2.1: inicio de interfaz, control y muestra multimedia\n");
     for (unsigned frame = 0; !screen.exit_requested; ++frame) {
         x4_controller_read(&controller, frame);
         x4_screen_update(&screen, controller.pressed, controller.data.buttons);

@@ -14,7 +14,11 @@ El entorno de trabajo elegido es la máquina virtual de Lubuntu existente en Vir
 
 Agrega IMAGEN Y SONIDO al menú: una muestra local H.264 de ocho segundos, 640 × 368, con decodificación mediante Videodec2 y presentación NV12 convertida a RGB. Reproduce tonos suaves alternados entre izquierda y derecha, mediante AudioOut a 48 kHz. X repite la muestra, cuadrado silencia y círculo vuelve al inicio. La carga de estas bibliotecas se realiza al entrar en la muestra, para conservar el inicio de la interfaz sin depender del reproductor.
 
-La 0.2.0 está compilada y empaquetada en Lubuntu. La reproducción real en la PS4 está pendiente de confirmación. Todavía no incluye cuenta Microsoft, catálogo, WebRTC ni juegos de Xbox. La 0.1.2 se conserva con la etiqueta `v0.1.2` y su paquete separado.
+La 0.2.0 está compilada y empaquetada en Lubuntu. El propietario informó que el video va bien y su foto muestra 217 / 240 imágenes; Klog registra la primera imagen 640 × 368, pitch 640, y el final de la muestra. El audio falló con `0x809B0001` y Klog informa `sceMbusAddHandleByUserId`. No incluye cuenta Microsoft, catálogo, WebRTC ni juegos de Xbox. La 0.1.2 se conserva con la etiqueta `v0.1.2` y su paquete separado.
+
+### Corrección 0.2.1
+
+La salida de audio MAIN usa el usuario SYSTEM (0xFF), siguiendo el ejemplo público de OpenOrbis, y espera el consumo del bloque PCM antes de sobrescribirlo. Agrega registros de inicialización, apertura, hilo y finalización. El video conserva la implementación de la 0.2.0. La reproducción de sonido de la 0.2.1 está pendiente de confirmación en PS4.
 
 ## Etapas
 
@@ -38,7 +42,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.0.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.2.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 
