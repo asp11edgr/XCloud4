@@ -30,6 +30,14 @@ Se corrigió también el color del encabezado de error para que no aparezca como
 
 Compilada y empaquetada sin errores ni avisos. `XCloud4-0.6.1.pkg`: 6619136 bytes, SHA-256 `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e`. Copiada a `/data/pkg` y verificada contra el archivo recuperado por FTP. Resultado del diagnóstico en PS4 pendiente.
 
+## Perfil temporal 0.6.2
+
+La 0.6.1 ya confirmó `invalid_scope` en la consola y cierre remoto HTTP 200, sin enviar `/connect`. La comparación de fuentes e hipótesis del rechazo está en [INVESTIGACION_PASSPORT.md](INVESTIGACION_PASSPORT.md).
+
+La 0.6.2 utiliza el identificador público de referencia usado por GreenVita durante todo el acceso, con autorización previa del propietario. La interfaz y el registro anuncian el perfil temporal. El registro propio se conserva; no se mezclan tokens ni se cambia de cliente automáticamente tras un error. Endpoints, scope y diagnóstico permanecen iguales. El cliente de referencia exige iniciar sesión nuevamente y Microsoft puede mostrar un nombre de aplicación diferente del registro XCloud4.
+
+Compilada y empaquetada sin errores ni avisos. `XCloud4-0.6.2.pkg`: 6619136 bytes, SHA-256 `25c724aca93728d53c9d4c6b7e52f0acff3dff45c263779bdbcc87e25699b601`. Copiada a `/data/pkg` y recuperada por FTP con la misma huella. El propietario y Klog confirmaron Passport HTTP 200, `/connect` HTTP 202 y cierre automático DELETE HTTP 200, sin error de limpieza. La autorización funciona con el cliente temporal; WebRTC y la recepción del juego siguen pendientes.
+
 ## Credenciales y cancelación
 
 El acceso y la renovación de Microsoft permanecen privados y solo en memoria. La renovación acepta los candidatos únicamente después de validar toda la respuesta; conserva el token de renovación anterior si Microsoft no devuelve otro. Un `invalid_grant` exacto en esa renovación elimina la cuenta y catálogo locales. Un rechazo de Passport se informa como error de autorización.

@@ -1,5 +1,9 @@
 # Instalar XCloud4
 
+## Cliente temporal — 0.6.2
+
+Cerrar XCloud4, instalar `XCloud4-0.6.2.pkg` desde Package Installer con HDD o ALL y aceptar reemplazarla. Está copiada y verificada en `/data/pkg`. CUENTA informa que usa temporalmente el identificador de referencia que utiliza GreenVita; autorizar en Microsoft desde cero. El consentimiento puede mostrar otro nombre de aplicación. Abrir catálogo con R1 y elegir un título CON ACCESO con X. Conservar el resultado de Passport y `/connect` para comparar con el rechazo `invalid_scope` del registro propio; aceptación pendiente. Todavía no se transmite el juego.
+
 ## Diagnóstico Passport — 0.6.1
 
 Cerrar XCloud4 e instalar `XCloud4-0.6.1.pkg` desde Package Installer con HDD o ALL; aceptar reemplazarla. Autorizar Microsoft nuevamente, abrir catálogo con R1 y elegir un título CON ACCESO con X. Conservar una foto del mensaje `Passport:` y su código si el rechazo se repite. Esta versión identifica el motivo del HTTP 400 observado en 0.6.0; todavía no se afirma corregido. El paquete está copiado y verificado en `/data/pkg`.

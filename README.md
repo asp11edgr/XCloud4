@@ -34,6 +34,10 @@ La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada p
 
 El propietario y Klog confirmaron el catálogo real: 2733 títulos recibidos, 128 conservados por el límite local, 21 de esas 128 entradas con acceso indicado por Xbox y 32 nombres de Microsoft Store. Funcionan RPS, XSTS y credenciales cloud con el registro propio y la descripción XCloud4/PS4. Consulta `docs/CATALOGO_XBOX.md`.
 
+## Confirmed connection authorization — 0.6.2
+
+The PS4 owner confirmed that 0.6.2 completes without an error. Console Klog confirms Microsoft renewal HTTP 200, Passport HTTP 200, `/connect` HTTP 202, and automatic session deletion HTTP 200 with no cleanup error. This version uses the temporary public client identifier used by GreenVita, with the owner's authorization. The original XCloud4 registration is preserved. Actual WebRTC video, audio and game input are the next milestone and are not implemented in this confirmed version.
+
 ## Preparación de sesión — 0.5.0
 
 Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. El propietario y Klog confirmaron preparación de AMONGUS, estado listo para negociar y cierre automático con HTTP 200, sin error. Esta entrega todavía no recibe imagen, sonido ni control del juego. Consulta [SESION_XBOX.md](docs/SESION_XBOX.md). Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).

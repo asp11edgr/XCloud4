@@ -5,6 +5,7 @@
 #include "../video/display.h"
 #include "../input/controller.h"
 #include "../ui/screen.h"
+#include "../auth/auth_profile.h"
 #include "lifecycle.h"
 
 int main(void)
@@ -33,7 +34,8 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.6.1: interfaz, multimedia, cuenta, catalogo y diagnostico de Passport\n");
+    printf("XCloud4 0.6.2: interfaz, multimedia, cuenta, catalogo y perfil temporal de acceso\n");
+    printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;

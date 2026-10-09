@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "device_auth.h"
+#include "auth_profile.h"
 #include "http_client.h"
 #include "json.h"
 #include "xbox_live.h"
@@ -11,9 +12,9 @@
 #include <string.h>
 #include <orbis/libkernel.h>
 
-/* Public client ID of the XCloud4 app registered by the project owner for
- * personal Microsoft accounts. Device-code clients have no secret. */
-#define X4_AUTH_CLIENT_ID "f9ac8684-1032-4131-bb47-d2f58da9bb93"
+/* X4_AUTH_CLIENT_ID comes from auth_profile.h: one compile-time profile
+ * (own registration or the temporary reference client) for the whole
+ * process. Device code, polling, renewal and Passport all use it. */
 #define X4_AUTH_SCOPE "xboxlive.signin openid profile offline_access"
 #define X4_AUTH_GRANT "urn:ietf:params:oauth:grant-type:device_code"
 #define X4_AUTH_DEVICE_URL "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
@@ -21,7 +22,8 @@
 #define X4_AUTH_METADATA_URL "https://login.microsoftonline.com/consumers/v2.0/.well-known/openid-configuration"
 #define X4_AUTH_REFRESH_GRANT "refresh_token"
 /* Service scope of the console-transfer token sent to a session's /connect;
- * requested with this app's own client ID, never another app's. */
+ * requested with the same profile client ID that obtained the refresh token
+ * through this process's own device sign-in; no cross-client refresh. */
 #define X4_AUTH_PASSPORT_SCOPE "service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN"
 #define X4_AUTH_USEC 1000000ull
 #define X4_AUTH_STEP_USEC 100000u

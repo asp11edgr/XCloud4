@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "screen.h"
 #include "canvas.h"
+#include "../auth/auth_profile.h"
 #include <stdio.h>
 #include <string.h>
 static const uint32_t BG = 0xff1b1510, PANEL = 0xff30261c;
@@ -24,7 +25,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.6.1", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.6.2", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -146,7 +147,7 @@ void x4_exit_error_draw(int error, uint32_t *p)
 void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
 {
     x4_text(p, 84, 267, 5, "TU CUENTA MICROSOFT", WHITE);
-    x4_text(p, 84, 332, 3, "AUTORIZA XCLOUD4 DESDE TU TELEFONO O PC.", MUTED);
+    x4_text(p, 84, 332, 3, X4_AUTH_PROFILE_PROMPT, MUTED);
     x4_rect(p, 84, 400, 1752, 424, PANEL);
     if (closing) {
         x4_text(p, 126, 452, 4, "CERRANDO LA CONEXION...", WHITE);
@@ -185,6 +186,7 @@ void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
     }
     x4_text(p, 84, 853, 2, "X INICIAR   CUADRADO CONEXION   TRIANGULO BORRAR SESION   CIRCULO VOLVER   OPTIONS SALIR", WHITE);
     x4_text(p, 84, 899, 2, "R1 CATALOGO DE XBOX. LA CONEXION A UN JUEGO SIGUE EN PREPARACION.", MUTED);
+    x4_text(p, 84, 1004, 2, X4_AUTH_PROFILE_NOTE, MUTED);
 }
 
 void x4_catalog_draw(const X4CatalogSnapshot *c, unsigned selected, int busy, uint32_t *p)

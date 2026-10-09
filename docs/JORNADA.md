@@ -140,6 +140,14 @@ Claude Code Pro con `claude-opus-5-5` realizó la revisión e implementó clasif
 
 La 0.6.1 compiló y se empaquetó sin errores ni avisos. PKG de 6619136 bytes, SHA-256 `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e`; transferido a `/data/pkg/XCloud4-0.6.1.pkg` y recuperado con la misma huella. Se inició captura Klog y se pidió al propietario instalar y repetir para identificar el motivo concreto. Resultado de ese diagnóstico y corrección del rechazo pendientes. La base confirmada sigue siendo `v0.5.0`.
 
+## Confirmed 0.6.2 result
+
+The owner confirmed that the temporary reference client completes without an error. Klog identifies XCloud4 0.6.2 and records Microsoft renewal HTTP 200, Passport HTTP 200 (1090 bytes), `/connect` HTTP 202 (empty response), AUTHORIZED, and automatic DELETE HTTP 200. Final state is CLOSED with `connection_authorized=1`, `cleanup_failed=0`, and error zero. The own client had returned `invalid_scope`; the comparison establishes a client-dependent difference, but does not establish Microsoft's exact registration policy.
+
+Claude Code Pro with `claude-opus-5-5` implemented the shared authentication profile in 12 turns. All authentication stages use the same selected client, without mixing refresh tokens. The own registration remains available. No SDP, ICE, game video, game audio or game input is present in this version. Automated tests were not added or run. The confirmed package is 6619136 bytes, SHA-256 `25c724aca93728d53c9d4c6b7e52f0acff3dff45c263779bdbcc87e25699b601`.
+
+The owner requested a private GitHub repository with English repository documentation, while retaining the Spanish PS4 interface, and then authorized continued work toward actual video and audio.
+
 ## GitHub al terminar la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.
