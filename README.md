@@ -12,7 +12,7 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development package: 0.7.6 SDP and HTTP diagnostics
+## Development package: 0.7.7 current offer after gathering
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -27,6 +27,8 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 `XCloud4-0.7.5.pkg` uses the PlayStation `SO_NBIO` socket option through POSIX set/query calls on the existing descriptor and verifies enabled mode/four-byte size. The console confirms successful socket setup, host-candidate gathering and local offer submission: **Xbox accepts `POST /sdp` with HTTP 202, but returns HTTP 204 without a remote answer until keepalive returns HTTP 410**. Remote cleanup returns HTTP 200. No RTP or game video/audio is received. Claude Opus 5.5 completed a read-only review in five turns. API research, package/source hashes and hardware evidence are in [0.7.5 notes](docs/RELEASE_NOTES_0.7.5.md); the reason for the missing remote answer remains under investigation.
 
 `XCloud4-0.7.6.pkg` adds structural SDP and allowlisted HTTP diagnostics without changing negotiation. The console again receives no remote answer; keepalive HTTP 410 is now identified as **`SessionNotActive` after 33 pending SDP polls**. A callback summary reconstructed from interleaved log fragments records three media sections and zero candidates. Source inspection identifies the retained initial offer snapshot as the next repair target; no corrected server result or media is confirmed. See [0.7.6 evidence and review limitations](docs/RELEASE_NOTES_0.7.6.md).
+
+`XCloud4-0.7.7.pkg` obtains the current provider SDP after gathering through libdatachannel's C API, replacing submission of the initial callback snapshot. It checks offer type, lengths and termination, uses actual candidates and repairs the scanner's overflow labeling. The full application/package built without warnings/errors; **the owner's console result remains pending**. This is a source repair with no successful Xbox answer or media result yet. See [0.7.7 scope and package evidence](docs/RELEASE_NOTES_0.7.7.md).
 
 The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
@@ -81,7 +83,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.6 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.6.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The 0.7.7 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.7.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

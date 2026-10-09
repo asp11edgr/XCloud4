@@ -107,6 +107,14 @@ The console capture again accepts SDP submission with HTTP 202 and receives HTTP
 
 Source inspection identifies a retained initial callback offer despite completed gathering. Obtaining the current local description after gathering is the next repair target; the missing answer's precise cause and repair result remain unconfirmed. The full package built without warnings/errors, and PC/VM/PS4 hashes match. Matching source is **83544715 bytes**, SHA-256 `14f8578e49d8bef7497b68b8803d6ed71c0fc5d720f72687d7ba05b515246f2d`; all **9367** source hashes and the copied archive matched. See [0.7.6 package, runtime and review evidence](RELEASE_NOTES_0.7.6.md).
 
+### 0.7.7 current description after gathering
+
+The original transport waits for actual gathering completion and reads the current local offer through the provider C API. It verifies offer type, queried/read length, capacity and termination within 32768 bytes, retaining pending availability and native errors under existing deadlines. Candidate addresses are not synthesized or merged; no extra candidate prerequisite replaces the provider's completion state. The structural summary now describes this current offer, and the scanner's >8-media setup/trickle labeling is repaired. H.264 profile, media order and HTTP signaling are unchanged.
+
+The full application/package build succeeded without warnings/errors, and static peer review completed successfully. Claude Opus 5.5 completed its focused read-only review in **2 turns / 1 read**, with no proven defect found within that scope. VM/PC/PS4 package retrieval hashes match. The source-state repair does not establish that Xbox returns a remote answer or game video/audio; the owner's console result remains pending.
+
+Matching sources closed separately: **83544519 bytes**, SHA-256 `33e30efb0c20cf45e976e950b8d320147f46bad60f4224bf685ce680c14949b8`, with all **9367** manifest source hashes verified and the PC copy matching. Previous snapshots remain unchanged. See [0.7.7 notes](RELEASE_NOTES_0.7.7.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.
