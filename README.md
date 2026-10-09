@@ -32,7 +32,7 @@ La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada p
 
 ## Catálogo Xbox — 0.4.0
 
-Desde CUENTA, después de autorizar Microsoft, R1 abre el catálogo. Se añade el intercambio de credenciales Xbox y la consulta de títulos en la región predeterminada que devuelva el servicio, con una lista local de hasta 128 entradas y nombres de Microsoft Store para las primeras 32 cuando se obtengan. La cruceta recorre los títulos; L1/R1 cambian ocho posiciones; cuadrado actualiza y círculo vuelve a la cuenta. Los permisos se muestran solo cuando los indica Xbox. La 0.4.0 está compilada, empaquetada y copiada con verificación de huella a la PS4; todavía no está confirmada en consola. No inicia juegos ni incorpora WebRTC. Consulta `docs/CATALOGO_XBOX.md`.
+Desde CUENTA, después de autorizar Microsoft, R1 abre el catálogo. Se añade el intercambio de credenciales Xbox y la consulta de títulos en la región predeterminada que devuelva el servicio, con una lista local de hasta 128 entradas y nombres de Microsoft Store para las primeras 32 cuando se obtengan. La cruceta recorre los títulos; L1/R1 cambian ocho posiciones; cuadrado actualiza y círculo vuelve a la cuenta. Los permisos se muestran solo cuando los indica Xbox. La 0.4.0 está confirmada por fotografía y Klog: recibió 2733 títulos, guardó 128 por el límite local y obtuvo 32 nombres Store, con HTTP 200 y sin errores. Se conserva con la etiqueta v0.4.0. No inicia juegos ni incorpora WebRTC. Consulta `docs/CATALOGO_XBOX.md`.
 
 ## Etapas
 

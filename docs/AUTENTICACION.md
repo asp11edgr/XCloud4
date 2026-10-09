@@ -34,3 +34,7 @@ El intercambio de credenciales Xbox y el catálogo aún no forman parte de esta 
 ## Corrección 0.3.1
 
 La 0.3.0 falló al localizar el módulo SSL, antes de enviar una solicitud HTTPS. La 0.3.1 amplía la localización por exportaciones y rutas nativas del sandbox. El propietario confirmó con una fotografía la cuenta Microsoft autorizada. Klog confirma comprobación de conexión con HTTP 200 y finalización del acceso en `X4_AUTH_AUTHORIZED`, HTTP 200, error cero. El token permanece en memoria durante esta ejecución. Sesión Xbox, catálogo y juegos siguen pendientes.
+
+## Resultado 0.4.0
+
+Se confirmó en PS4 el acceso Microsoft, los intercambios RPS y XSTS, las credenciales cloud `xgpuweb` y la consulta regional del catálogo, todos con HTTP 200. La fotografía y Klog coinciden en 2733 títulos recibidos y 128 en la lista local. Klog confirma además 32 nombres Store obtenidos y finalización sin errores. Consulta CATALOGO_XBOX.md. La creación de una sesión de juego y WebRTC siguen pendientes.

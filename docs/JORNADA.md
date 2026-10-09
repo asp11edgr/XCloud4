@@ -100,6 +100,12 @@ Codex integró CUENTA → R1 → CATALOGO, actualización con cuadrado, selecci�
 
 La aplicación final compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.4.0.pkg`: 6619136 bytes, SHA-256 `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1`. Se copió a `/data/pkg/XCloud4-0.4.0.pkg` y la huella recuperada por FTP coincide. Se inició captura Klog y se prepararon instrucciones para instalar, autorizar Microsoft nuevamente y pulsar R1. Credenciales Xbox, catálogo real y compatibilidad de la descripción propia de dispositivo permanecen pendientes de confirmar en la PS4. No se inicia ningún juego en esta versión.
 
+## Resultado confirmado de la 0.4.0: catálogo Xbox
+
+El propietario informó "Listo si lo mostró" y envió fotografía de la 0.4.0 con el catálogo, 2733 títulos recibidos y 128 en la lista por el límite local. Klog confirma nuevamente Microsoft AUTHORIZED, HTTP 200 y error cero; después RPS, XSTS, login `xgpuweb` y `/v2/titles` reciben HTTP 200. La respuesta regional tiene 1247270 bytes, 2733 entradas válidas, 128 guardadas y 21 de esas 128 con permiso indicado por Xbox. Los cuatro lotes Store obtienen ocho nombres cada uno, 32 en total. El catálogo termina READY, HTTP 200, error cero y XErr cero.
+
+Se guarda la 0.4.0 como base funcional con la etiqueta `v0.4.0`. Quedan confirmados la autorización Microsoft, los intercambios Xbox, la descripción propia XCloud4/PS4 aceptada por la consulta y la visualización del catálogo real. No fue necesario el fallback de juegos gratuitos. No se ha iniciado ni transmitido un juego; la navegación, actualización y cancelación de catálogo todavía no se comprobaron por separado. La etapa 3 del plan (cuenta y catálogo) alcanza su primer hito real; lo siguiente es la etapa 4, sesión de juego y WebRTC.
+
 ## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.
