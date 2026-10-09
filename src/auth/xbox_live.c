@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.8\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.9\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1292,11 +1292,8 @@ static bool signal_provisioned(X4XboxWork *w, uint64_t deadline, SessionEnd *end
 
 /* Only fixed classifications are logged, never a remote string. Code 0 is
  * absent, 1 unknown, and 2..14 follow the literal allowlist below. */
-static int signal_error_code(X4JsonSpan object)
+static int signal_error_literal(X4JsonSpan value)
 {
-    X4JsonSpan value;
-    int member = x4_json_member(object, "code", &value);
-    if (member < 1) return member;
     static const char *const allowed[] = {
         "SessionNotActive", "SessionNotFound", "SessionExpired", "InvalidSdp",
         "InvalidOffer", "InvalidRequest", "BadRequest", "Unauthorized",
@@ -1312,6 +1309,73 @@ static int signal_error_code(X4JsonSpan object)
     return result;
 }
 
+static int signal_error_code(X4JsonSpan object)
+{
+    X4JsonSpan value;
+    int member = x4_json_member(object, "code", &value);
+    return member < 1 ? member : signal_error_literal(value);
+}
+
+static int signal_error_class(X4JsonSpan value)
+{
+    X4JsonType type = x4_json_type(value);
+    if (type == X4_JSON_T_OBJECT) return signal_error_code(value);
+    if (type == X4_JSON_T_STRING) return signal_error_literal(value);
+    return type == X4_JSON_T_NULL ? 0 : 1;
+}
+
+/* Error codes may arrive as signed HRESULTs. Keep their 32-bit pattern and
+ * sign separately; this reader does not affect the business JSON parser. */
+static bool signal_error_number(X4JsonSpan value, uint32_t *bits, bool *negative)
+{
+    *bits = 0;
+    *negative = false;
+    if (!x4_json_uint32(value, bits)) return true;
+    if (x4_json_type(value) != X4_JSON_T_NUMBER || value.length < 2 || value.length > 11 ||
+        value.data[0] != '-') return false;
+    uint32_t magnitude = 0;
+    for (size_t i = 1; i < value.length; ++i) {
+        unsigned char c = (unsigned char)value.data[i];
+        if (c < '0' || c > '9') return false;
+        uint32_t digit = (uint32_t)(c - '0');
+        if (magnitude > (2147483648u - digit) / 10u) return false;
+        magnitude = magnitude * 10u + digit;
+    }
+    *bits = 0u - magnitude;
+    *negative = true;
+    return true;
+}
+
+/* Node 0 is the root, 1 errorDetails, 2 error, and 3/4 their details
+ * objects. Only JSON types, fixed classes and validated 32-bit numbers
+ * escape the response buffer; message/details text is never printed. */
+static void signal_error_shape(unsigned node, X4JsonSpan value)
+{
+    X4JsonType type = x4_json_type(value);
+    X4JsonSpan code = {0}, status = {0}, details = {0}, message = {0};
+    int code_type = 0, status_type = 0, details_type = 0, message_type = 0;
+    uint32_t code_number = 0, status_number = 0;
+    bool code_number_ok = false, code_negative = false, status_number_ok = false;
+    if (type == X4_JSON_T_OBJECT) {
+        int found = x4_json_member(value, "code", &code);
+        code_type = found == 1 ? (int)x4_json_type(code) : found;
+        if (found == 1) code_number_ok = signal_error_number(code, &code_number, &code_negative);
+        found = x4_json_member(value, "status", &status);
+        status_type = found == 1 ? (int)x4_json_type(status) : found;
+        if (found == 1) status_number_ok = !x4_json_uint32(status, &status_number);
+        found = x4_json_member(value, "details", &details);
+        details_type = found == 1 ? (int)x4_json_type(details) : found;
+        found = x4_json_member(value, "message", &message);
+        message_type = found == 1 ? (int)x4_json_type(message) : found;
+    } else if (type == X4_JSON_T_NUMBER) {
+        code_type = (int)type;
+        code_number_ok = signal_error_number(value, &code_number, &code_negative);
+    }
+    printf("XCloud4: signal error shape node=%u type=%d class=%d code_type=%d code_num_ok=%d code_num=%u code_negative=%d status_type=%d status_num_ok=%d status_num=%u details_type=%d message_type=%d\n",
+        node, (int)type, signal_error_class(value), code_type, code_number_ok, code_number, code_negative,
+        status_type, status_number_ok, status_number, details_type, message_type);
+}
+
 static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, const char *suffix)
 {
     X4JsonSpan root={0}, details={0}, error={0};
@@ -1321,11 +1385,11 @@ static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, co
         top_code=signal_error_code(root);
         if (x4_json_member(root,"errorDetails",&details)==1) {
             details_type=x4_json_type(details);
-            if (details_type==X4_JSON_T_OBJECT) details_code=signal_error_code(details);
+            details_code=signal_error_class(details);
         }
         if (x4_json_member(root,"error",&error)==1) {
             error_type=x4_json_type(error);
-            if (error_type==X4_JSON_T_OBJECT) error_code=signal_error_code(error);
+            error_code=signal_error_class(error);
         }
     }
     int route=!strcmp(suffix,"/sdp")?1:!strcmp(suffix,"/ice")?2:3;
@@ -1333,6 +1397,16 @@ static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, co
     unsigned long long elapsed=w->sdp_sent_at && now>=w->sdp_sent_at ? (now-w->sdp_sent_at)/1000ull:0;
     printf("XCloud4: signal HTTP failure route=%d http=%d bytes=%zu object=%d code=%d details_type=%d details_code=%d error_type=%d error_code=%d sdp_polls=%u elapsed_ms=%llu\n",
         route,status,length,valid,top_code,details_type,details_code,error_type,error_code,w->sdp_polls,elapsed);
+    if (valid) {
+        signal_error_shape(0, root);
+        if (details_type) signal_error_shape(1, details);
+        if (error_type) signal_error_shape(2, error);
+        X4JsonSpan nested;
+        if (details_type == X4_JSON_T_OBJECT && x4_json_member(details, "details", &nested) == 1 &&
+            x4_json_type(nested) == X4_JSON_T_OBJECT) signal_error_shape(3, nested);
+        if (error_type == X4_JSON_T_OBJECT && x4_json_member(error, "details", &nested) == 1 &&
+            x4_json_type(nested) == X4_JSON_T_OBJECT) signal_error_shape(4, nested);
+    }
 }
 
 /* Applies the same deadline after blocking native HTTP as before it. */
@@ -1397,6 +1471,7 @@ static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
             }
         }
     }
+    if (result < 1 || gone) signal_error_diagnostic(w, length, status, "/keepalive");
     wipe_response(w, length);
     if (result < 1 || gone) {
         end_with(end, X4_SESSION_ERROR, result < 0 ? X4_AUTH_E_RESPONSE : X4_AUTH_E_SESSION, status,
@@ -1413,6 +1488,7 @@ static bool signal_ack(X4XboxWork *w, const char *suffix, uint64_t deadline, Ses
     int status = 0;
     if (!signal_call(w, suffix, X4_SESSION_HTTP_POST, w->request, deadline, end, &length, &status)) return false;
     int result = connect_result(w, length);
+    if (result < 1) signal_error_diagnostic(w, length, status, suffix);
     wipe_response(w, length);
     if (result < 1) {
         end_with(end, X4_SESSION_ERROR, result < 0 ? X4_AUTH_E_RESPONSE : X4_AUTH_E_SESSION, status,
@@ -1456,6 +1532,7 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
         if (!signal_call(w, "/sdp", X4_SESSION_HTTP_GET, NULL, deadline, end, &length, &status)) return false;
         X4JsonSpan exchange, sdp;
         int result = signal_exchange(w, length, status, &exchange);
+        if (result < 0) signal_error_diagnostic(w, length, status, "/sdp");
         wipe_response(w, length);
         if (result == 1) {
             bool valid = x4_json_type(exchange) == X4_JSON_T_OBJECT &&
@@ -1592,6 +1669,7 @@ static bool signal_remote_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     if (!signal_call(w, "/ice", X4_SESSION_HTTP_GET, NULL, deadline, end, &length, &status)) return false;
     X4JsonSpan exchange, candidates, item;
     int result = signal_exchange(w, length, status, &exchange);
+    if (result < 0) signal_error_diagnostic(w, length, status, "/ice");
     wipe_response(w, length);
     if (!result) return true;
     if (result < 0) {
