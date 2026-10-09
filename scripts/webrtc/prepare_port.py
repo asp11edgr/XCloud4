@@ -59,8 +59,24 @@ if 'X4_OPENORBIS' not in text:
         '#endif\n')
 write_changed(random, text)
 
-# Native POSIX fcntl uses the SDK's BSD O_NONBLOCK flag. The SDK has no
-# FIONBIO declaration, so use the standard descriptor operation instead.
+# Restore the exact BSD FIONBIO name missing from the SDK. Its existing
+# _IOW encoding is native BSD, unlike LINUX_FIONBIO (0x5421). Socket
+# nonblocking uses this one operation. F_SETFL also requests FIOASYNC;
+# F_SETFL returned EACCES on the actual PS4, but its rejected sub-operation
+# has not been identified.
+source = base / 'libdatachannel/deps/libjuice/src/socket.h'
+text = source.read_text()
+fio_header = ('#include <sys/ioctl.h>\n#ifdef X4_OPENORBIS\n'
+    '#ifndef FIONBIO\n#define FIONBIO _IOW(\'f\', 126, int)\n#endif\n#endif')
+if fio_header not in text:
+    if text.count('#include <sys/ioctl.h>') != 1:
+        raise SystemExit('Unexpected pinned libjuice socket ioctl include')
+    text = text.replace('#include <sys/ioctl.h>', fio_header, 1)
+write_changed(source, text)
+
+# Normalize the original upstream form for the checked migration below.
+# Existing 0.7.3 diagnostic sources and the current native form are also
+# accepted explicitly; no partially applied replacement is silently used.
 for filename in ('tcp.c', 'udp.c'):
     source = base / 'libdatachannel/deps/libjuice/src' / filename
     text = source.read_text()
@@ -348,10 +364,6 @@ checked_patch(source, [
     ('\tif (sock == INVALID_SOCKET) {\n\t\tJLOG_WARN("UDP socket creation failed, errno=%d", sockerrno);',
      '\tif (sock == INVALID_SOCKET) {\n\t\tX4_JUICE_EVENT(50, sockerrno);\n'
      '\t\tJLOG_WARN("UDP socket creation failed, errno=%d", sockerrno);'),
-    ('\tif (fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK) < 0) {',
-     '\tint existing_flags = fcntl(sock, F_GETFL, 0);\n'
-     '\tif (existing_flags < 0) X4_JUICE_EVENT(51, sockerrno);\n'
-     '\tif (fcntl(sock, F_SETFL, existing_flags | O_NONBLOCK) < 0) {\n\t\tX4_JUICE_EVENT(52, sockerrno);'),
     ('\t\tJLOG_WARN("UDP socket binding failed, errno=%d", sockerrno);',
      '\t\tX4_JUICE_EVENT(53, sockerrno);\n\t\tJLOG_WARN("UDP socket binding failed, errno=%d", sockerrno);'),
     ('\t\tJLOG_WARN("UDP socket binding failed on port %hu, errno=%d", port, sockerrno);',
@@ -388,4 +400,33 @@ checked_patch(source, [
     ('\tint ret = thread_init(&registry_impl->thread, conn_thread_entry, registry);',
      '\tint ret = thread_init(&registry_impl->thread, conn_thread_entry, registry);\n\tX4_JUICE_EVENT(58, ret);'),
 ], 'X4_JUICE_EVENT(58, ret);')
+
+# F_SETFL also requests async-mode ioctls on BSD sockets. Request only
+# FIONBIO with the actual four-byte int argument required by upstream.
+# A rejected ioctl remains a real error; a blocking socket is never used.
+for filename in ('udp.c', 'tcp.c'):
+    source = base / 'libdatachannel/deps/libjuice/src' / filename
+    text = source.read_text()
+    if juice_diagnostic_header not in text:
+        if text.count('#include "log.h"') != 1:
+            raise SystemExit('Unexpected pinned socket diagnostic include: ' + filename)
+        text = text.replace('#include "log.h"', juice_diagnostic_header, 1)
+    replacement = ('\tconst int nonblock_result = ioctlsocket(sock, FIONBIO, &nbio);\n'
+        '\tX4_JUICE_EVENT(64, nonblock_result == 0 ? 0 : sockerrno);\n'
+        '\tif (nonblock_result) {')
+    if replacement not in text:
+        original_forms = (
+            '\tif (fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK) < 0) {',
+            '\tint existing_flags = fcntl(sock, F_GETFL, 0);\n'
+            '\tif (existing_flags < 0) X4_JUICE_EVENT(51, sockerrno);\n'
+            '\tif (fcntl(sock, F_SETFL, existing_flags | O_NONBLOCK) < 0) {\n'
+            '\t\tX4_JUICE_EVENT(52, sockerrno);',
+        )
+        matches = [original for original in original_forms if original in text]
+        if len(matches) != 1 or text.count(matches[0]) != 1:
+            raise SystemExit('Unexpected pinned socket nonblocking implementation: ' + filename)
+        text = text.replace(matches[0], replacement, 1)
+    if text.count(replacement) != 1:
+        raise SystemExit('Incomplete native socket nonblocking patch: ' + filename)
+    write_changed(source, text)
 print('OpenOrbis dependency overlay prepared:', overlay)
