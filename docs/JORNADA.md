@@ -276,3 +276,21 @@ Gathering completes (enum **2**). The actual current SDP is **1201 bytes** with 
 Xbox accepts SDP submission with **HTTP 202**, but **33** answer polls return **HTTP 204** without a remote answer. Keepalive returns **HTTP 410**, **118 bytes**, code **2 (`SessionNotActive`)**, at **30492 ms** after submission. Remote deletion returns **HTTP 200** and no RTP is received. The owner reports the same session error. OPTIONS closes resources and returns to the PS4 menu without `CE-34878-0`. The refreshed offer repairs the source-state issue, while remote negotiation and game media remain unconfirmed.
 
 The private 0.7.7 draft checkpoint is recorded at target `44c684294d2c113bb67a52a3dfa758d87672d8c7`, with all three asset digests verified. That preserved build/source checkpoint is not a completed streaming milestone.
+
+## 0.7.8: native DNS timeout units
+
+Source review finds the original native resolver passes `2` as its timeout. The intended two-second bound is represented by **2000000 microseconds**; the patch corrects that argument and adds numeric-only return/timing diagnostics, with no hostname/address/ICE/credential output. Interface-unit research uses ioQuake3-PS4 pin `d4c7912af73c3b0eaa57195391ad76f21e79a910`, whose resolver call passes `3 * 1000 * 1000`. The reference implementation is not copied; XCloud4's adapter and chosen two-second limit remain original.
+
+The same pinned project's technical DNS note explicitly labels the timeout in microseconds. Original adapter diagnostics 69–73 record creation result, timeout, lookup result, elapsed microseconds bounded to INT_MAX and a nonzero-address boolean; no actual address is exposed. The two source files are `rtc_net.c` and `rtc_native.c`, with no vendor changes.
+
+Claude Opus 5.5 completed the focused read-only resolver review successfully in **3 turns / 2 reads**, finding no concrete defect within that scope. Actual resolver/negotiation evidence is recorded below separately from that review.
+
+The full application/package compiled without warnings/errors. SDK `sceKernelGetProcessTime` return width is confirmed as `uint64_t`. Package `XCloud4-0.7.8.pkg` is **8912896 bytes**, SHA-256 `b562ab50eb0336b7d518bba8e8db74eb9a8af87ed6bd6c0ed3f0eaef14812664`; VM/PC/PS4 FTP retrieval hashes match.
+
+### Actual 0.7.8 console result
+
+Resolver creation returns **0**, the configured timeout is **2000000 microseconds**, lookup returns **0**, elapsed time is **11519 microseconds**, and the nonzero-address boolean is **1**. The current offer is **1286 bytes**, contains **two candidates**, and has three media sections/BUNDLE entries. Native DNS succeeds in this capture, without proving it was the sole cause of the earlier missing-answer failure.
+
+Xbox accepts submission with **HTTP 202**, and **37** answer polls return **HTTP 204**. The next keepalive succeeds with **HTTP 200 / 37 bytes**. An SDP request then returns **HTTP 200 / 243 bytes**, but `signal_exchange` returns **-2** because `errorDetails` is non-null. This is a logical SDP refusal within a successful HTTP response; its exact server category remains unknown. The owner reports a new error. Remote deletion returns **HTTP 200**, with no RTP, video or audio received. The next investigation must identify the bounded logical-error category; no complete streaming milestone is claimed.
+
+The exact source snapshot closed from the frozen final mirror, and the archive was copied to the PC: **83545142 bytes**, SHA-256 `9aac8351b1b93b0f4e619e81a3291f74567ccaf0dd4da516f0e61fecf654a0e0`. All **9367** manifest source hashes matched; PC/guest archive hashes are identical, and forbidden generated/Git/log/local-credential paths are absent. The two updated adapters are captured with unchanged pinned vendors, configuration, overlays and retained licenses. Every earlier snapshot remains preserved. See [0.7.8 scope, build and primary source](RELEASE_NOTES_0.7.8.md).

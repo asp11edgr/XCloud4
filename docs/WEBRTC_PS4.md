@@ -117,6 +117,18 @@ The actual console reports gathering complete (enum2) and a **1201-byte** curren
 
 Matching sources closed separately: **83544519 bytes**, SHA-256 `33e30efb0c20cf45e976e950b8d320147f46bad60f4224bf685ce680c14949b8`, with all **9367** manifest source hashes verified and the PC copy matching. Previous snapshots remain unchanged. See [0.7.7 notes](RELEASE_NOTES_0.7.7.md).
 
+### 0.7.8 native resolver timeout
+
+The original resolver's native timeout argument changes from `2` to **`2000000` microseconds (two seconds)**, with numeric-only return/timing diagnostics. The pinned [ioQuake3-PS4 call](https://github.com/Mayo1970/ioQuake3-PS4/blob/d4c7912af73c3b0eaa57195391ad76f21e79a910/code/qcommon/net_ip.c#L447) uses `3 * 1000 * 1000` and supports the unit research. No reference implementation is copied; XCloud4 retains its original resolver and selects its own bound. Hostnames, addresses, ICE values and credentials are omitted.
+
+The pinned project's technical DNS note explicitly identifies microsecond units. Events 69–73 record resolver creation result, timeout, lookup result, bounded elapsed microseconds and a nonzero-address boolean, with no actual address output. Only original resolver/diagnostic-label files change; vendors are unchanged.
+
+This repairs a timeout argument in source; DNS is not established as the sole cause of the earlier missing Xbox answer. The full application/package built without warnings/errors, SDK elapsed-time return width is confirmed, and VM/PC/PS4 retrieval hashes match. Current-offer/H.264 settings are unchanged by this patch.
+
+The actual console resolver results are creation **0**, timeout **2000000 microseconds**, lookup **0**, elapsed **11519 microseconds** and nonzero-address boolean **1**. The current SDP grows to **1286 bytes / two candidates**, with three media sections and BUNDLE entries. Xbox accepts submission with HTTP202, returns HTTP204 through **37** polls, then keepalive succeeds with HTTP200/37 bytes. The next SDP request returns **HTTP200/243 bytes**, with exchange result **-2** from non-null `errorDetails`. The exact logical-error category remains unknown. Cleanup returns HTTP200 with no RTP/video/audio. The owner reports a new error; successful DNS and more candidates do not establish a complete negotiation.
+
+Matching source closed from the frozen mirror: **83545142 bytes**, SHA-256 `9aac8351b1b93b0f4e619e81a3291f74567ccaf0dd4da516f0e61fecf654a0e0`. All **9367** source hashes matched, with an identical PC copy and every prior snapshot unchanged. See [0.7.8 package evidence and exact sources](RELEASE_NOTES_0.7.8.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.
