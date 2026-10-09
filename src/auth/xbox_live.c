@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.11\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.12\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -98,6 +98,7 @@ struct X4XboxWork {
     unsigned sdp_polls;
     unsigned local_candidates, remote_candidates;
     bool provisioned;
+    bool terminal_keepalive;
     /* Signaling may contain ICE credentials and local IP addresses. All
      * buffers are private, bounded and cleared before freeing this heap. */
     char sdp[X4_SESSION_SDP_MAX + 1];
@@ -1475,6 +1476,7 @@ static bool signal_call(X4XboxWork *w, const char *suffix, enum X4HttpSessionMet
 
 static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
 {
+    w->terminal_keepalive = false;
     if (session_now() < w->next_keepalive) return true;
     uint64_t now=session_now();
     unsigned long long elapsed=w->sdp_sent_at && now>=w->sdp_sent_at ? (now-w->sdp_sent_at)/1000ull:0;
@@ -1482,7 +1484,15 @@ static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
         w->sdp_polls,elapsed,X4_SESSION_KEEPALIVE_USEC/1000ull);
     size_t length = 0;
     int status = 0;
-    if (!signal_call(w, "/keepalive", X4_SESSION_HTTP_POST, "", deadline, end, &length, &status)) return false;
+    if (!signal_call(w, "/keepalive", X4_SESSION_HTTP_POST, "", deadline, end, &length, &status)) {
+        X4JsonSpan root = {0};
+        w->terminal_keepalive = end->state == X4_SESSION_ERROR && end->error == X4_AUTH_E_STATUS &&
+            end->status == 410 && status == 410 && w->session.keepalive_http_status == 410 &&
+            !x4_json_parse(w->response, length, &root) && x4_json_type(root) == X4_JSON_T_OBJECT &&
+            signal_error_code(root) == 2; /* Exact public code: SessionNotActive. */
+        if (w->terminal_keepalive) wipe_response(w, length);
+        return false;
+    }
     int result = connect_result(w, length);
     bool gone = false;
     if (result > 0 && length) {
@@ -1506,6 +1516,44 @@ static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     }
     w->next_keepalive = now + X4_SESSION_KEEPALIVE_USEC;
     return true;
+}
+
+/* One diagnostic GET only after a confirmed terminal heartbeat while SDP
+ * was pending. Direct session_call leaves the original terminal outcome,
+ * public HTTP status and poll counters intact. Never apply a late answer. */
+static void signal_terminal_sdp(X4XboxWork *w, uint64_t deadline, const SessionEnd *end)
+{
+    if (!w->terminal_keepalive || end->state != X4_SESSION_ERROR || end->error != X4_AUTH_E_STATUS ||
+        end->status != 410 || w->session.keepalive_http_status != 410) return;
+    w->terminal_keepalive = false;
+    uint64_t now = session_now();
+    uint64_t remaining = deadline > now ? deadline - now : 0;
+    bool cancelled = atomic_load(w->cancel), late = now >= deadline;
+    /* The native HTTP context currently has a 30-second request budget.
+     * Reserve it inside the existing negotiation deadline, never extend it. */
+    if (cancelled || remaining < 30ull * X4_SESSION_USEC) {
+        printf("XCloud4: signal terminal SDP skipped cancelled=%d remaining_ms=%llu\n",
+            cancelled, (unsigned long long)(remaining / 1000ull));
+        goto done;
+    }
+    size_t length = 0;
+    int status = 0, result = -3;
+    int rc = session_url(w, w->session_id, "/sdp") ?
+        session_call(w, X4_SESSION_HTTP_GET, NULL, w->cancel, &length, &status) : X4_HTTP_URL;
+    cancelled = atomic_load(w->cancel);
+    late = session_now() >= deadline;
+    if (!rc && !cancelled && !late) {
+        X4JsonSpan exchange;
+        result = status >= 200 && status <= 299 ? signal_exchange(w, length, status, &exchange) : -4;
+        if (result < 0) signal_error_diagnostic(w, length, status, "/sdp");
+    }
+    printf("XCloud4: signal terminal SDP http=%d rc=0x%08x result=%d bytes=%zu cancelled=%d late=%d\n",
+        status, (unsigned)rc, result, length, cancelled, late);
+done:
+    x4_secure_clear(w->response, sizeof(w->response));
+    x4_secure_clear(w->exchange, sizeof(w->exchange));
+    x4_secure_clear(w->sdp, sizeof(w->sdp));
+    x4_secure_clear(w->request, sizeof(w->request));
 }
 
 static bool signal_ack(X4XboxWork *w, const char *suffix, uint64_t deadline, SessionEnd *end)
@@ -1577,7 +1625,10 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
                 result == -2 ? "Xbox rechazo el intercambio SDP" : "respuesta SDP no valida");
             return false;
         }
-        if (!signal_keepalive(w, deadline, end)) return false;
+        if (!signal_keepalive(w, deadline, end)) {
+            signal_terminal_sdp(w, deadline, end);
+            return false;
+        }
         int waited = session_wait(w, session_now() + X4_SESSION_SDP_POLL_USEC, deadline);
         if (waited) {
             end_with(end, waited == 1 ? X4_SESSION_CANCELLED : X4_SESSION_ERROR,
