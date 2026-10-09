@@ -14,7 +14,7 @@ The PS4 interface remains **Spanish**. Repository documentation and GitHub conte
 
 ## Latest prepared development checkpoint: 0.7.18
 
-Version **0.7.18** corrects a verified native SCTP address ABI mismatch: the public C++ declaration placed the family at byte 0, while the actual C implementation expects length at byte 0 and family at byte 1. The target patch adds compile-time layout checks and bounded numeric initialization diagnostics. Actual Claude Opus 5.5 and independent source reviews, native packaging, linked caller/library byte-layout evidence, matching source inventory and VM/PC/PS4 package hashes are confirmed. **A new console result is pending; live game video/audio remains unconfirmed.** Read the [0.7.18 evidence](docs/RELEASE_NOTES_0.7.18.md) and download the [public development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.18).
+Version **0.7.18** corrects a verified native SCTP address ABI mismatch: the public C++ declaration placed the family at byte 0, while the actual C implementation expects length at byte 0 and family at byte 1. The target patch adds compile-time layout checks and bounded numeric initialization diagnostics. Actual Claude Code Opus 5.5, Antigravity Opus 4.6 Thinking and independent source reviews, native packaging, linked caller/library byte-layout evidence, matching source inventory and VM/PC/PS4 package hashes are confirmed. **A new console result is pending; live game video/audio remains unconfirmed.** Read the [0.7.18 evidence](docs/RELEASE_NOTES_0.7.18.md) and download the [public development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.18).
 
 ## Latest tested development checkpoint: 0.7.17
 
