@@ -11,6 +11,7 @@ typedef struct {
     /* Main-thread cumulative timings in sceKernelGetProcessTime microseconds. */
     uint64_t decode_calls, decoded_frames, no_picture_calls, decode_us, decode_max_us;
     uint64_t convert_us, convert_max_us;
+    uint64_t copy_calls, copy_us, copy_max_us, copy_bytes;
     uint64_t last_picture_time_us, picture_gap_max_us;
     int error;
     char stage[48];

@@ -7,6 +7,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cpuid.h>
+#include <emmintrin.h>
+#include <smmintrin.h>
 
 enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024 };
 typedef struct { void *p; off_t offset; size_t size; int allocated; } Memory;
@@ -25,6 +28,9 @@ typedef struct {
     unsigned input_slot, slot;
     OrbisVideodec2OutputInfo pending;
     bool pending_valid;
+    uint8_t *staging;
+    size_t staging_size;
+    bool streaming_copy;
 } VideoState;
 
 static int stage(X4LiveVideo *v, const char *name, int rc)
@@ -92,6 +98,7 @@ int x4_live_video_stop(X4LiveVideo *v)
     for (unsigned i = 0; i < sizeof(remaining) / sizeof(*remaining); ++i) {
         int rc = release(remaining[i]); if (rc < 0) return stage(v, "LIBERAR MEMORIA", rc);
     }
+    free(s->staging); s->staging = NULL;
     free(v->pixels); v->pixels = NULL;
     free(s); v->state = NULL;
     return 0;
@@ -156,6 +163,15 @@ int x4_live_video_start(X4LiveVideo *v)
         rc = allocate(&s->output[i], s->frame_size, 3, memory.frameBufferAlignment);
         if (stage(v, "RESERVAR IMAGEN", rc) < 0) goto fail;
     }
+    /* Keep the native decoder's WC output type. CPU color conversion reads
+     * one persistent cached heap copy bounded by the validated output size. */
+    s->staging_size = s->frame_size;
+    s->staging = malloc(s->staging_size);
+    if (!s->staging) { rc = stage(v, "IMAGEN NV12 CPU", -5); goto fail; }
+    unsigned eax, ebx, ecx, edx;
+    s->streaming_copy = __get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 19));
+    printf("XCloud4: video NV12 copy mode=%u capacity=%zu source_alignment=16\n",
+        s->streaming_copy ? 1u : 0u, s->staging_size);
     v->pixels = calloc(X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(*v->pixels));
     if (!v->pixels) { rc = stage(v, "IMAGEN RGB", -5); goto fail; }
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
@@ -171,6 +187,48 @@ fail:
 
 static unsigned clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : (unsigned)v; }
 
+/* Original fixed-block copy based on the instruction contracts in Intel's
+ * SSE4 programming reference, section 2.2.3. No external project helper is
+ * copied. Owned GPU output bases are 16-byte aligned; heap stores may be
+ * unaligned. Every vector load stays inside the validated NV12 region. */
+__attribute__((noinline))
+static void copy_nv12_sse2(uint8_t *destination, const uint8_t *source, size_t length)
+{
+    size_t at = 0;
+    for (; length - at >= 64; at += 64) {
+        __m128i a = _mm_load_si128((const __m128i *)(source + at));
+        __m128i b = _mm_load_si128((const __m128i *)(source + at + 16));
+        __m128i c = _mm_load_si128((const __m128i *)(source + at + 32));
+        __m128i d = _mm_load_si128((const __m128i *)(source + at + 48));
+        _mm_storeu_si128((__m128i *)(destination + at), a);
+        _mm_storeu_si128((__m128i *)(destination + at + 16), b);
+        _mm_storeu_si128((__m128i *)(destination + at + 32), c);
+        _mm_storeu_si128((__m128i *)(destination + at + 48), d);
+    }
+    for (; length - at >= 16; at += 16)
+        _mm_storeu_si128((__m128i *)(destination + at), _mm_load_si128((const __m128i *)(source + at)));
+    for (; at < length; ++at) destination[at] = source[at];
+}
+__attribute__((target("sse4.1"), noinline))
+static void copy_nv12_sse41(uint8_t *destination, const uint8_t *source, size_t length)
+{
+    size_t at = 0;
+    for (; length - at >= 64; at += 64) {
+        __m128i a = _mm_stream_load_si128((__m128i *)(uintptr_t)(source + at));
+        __m128i b = _mm_stream_load_si128((__m128i *)(uintptr_t)(source + at + 16));
+        __m128i c = _mm_stream_load_si128((__m128i *)(uintptr_t)(source + at + 32));
+        __m128i d = _mm_stream_load_si128((__m128i *)(uintptr_t)(source + at + 48));
+        _mm_storeu_si128((__m128i *)(destination + at), a);
+        _mm_storeu_si128((__m128i *)(destination + at + 16), b);
+        _mm_storeu_si128((__m128i *)(destination + at + 32), c);
+        _mm_storeu_si128((__m128i *)(destination + at + 48), d);
+    }
+    for (; length - at >= 16; at += 16)
+        _mm_storeu_si128((__m128i *)(destination + at),
+            _mm_stream_load_si128((__m128i *)(uintptr_t)(source + at)));
+    for (; at < length; ++at) destination[at] = source[at];
+}
+
 static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
 {
     if (o->isErrorFrame) return -7;
@@ -178,7 +236,7 @@ static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
     if (o->codecType != 1 || !o->frameWidth || o->frameWidth > X4_LIVE_WIDTH || (o->frameWidth & 1) ||
         !o->frameHeight || o->frameHeight > X4_LIVE_HEIGHT || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) return -7;
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
-    if (length > o->frameBufferSize) return -7;
+    if (length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) return -7;
     int owned = 0;
     for (unsigned i = 0; i < RING; ++i)
         if (o->pFrameBuffer == s->output[i].p && length <= s->output[i].size) owned = 1;
@@ -191,8 +249,19 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
     VideoState *s = v ? v->state : NULL;
     if (!s || !s->pending_valid || v->error) return 0;
     const OrbisVideodec2OutputInfo *o = &s->pending;
+    size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
+    uint64_t copy_begin = sceKernelGetProcessTime();
+    /* Decode has reported a valid owned picture. MFENCE orders WC loads
+     * around the independent burst copy before reuse of its native output. */
+    _mm_mfence();
+    if (s->streaming_copy) copy_nv12_sse41(s->staging, o->pFrameBuffer, length);
+    else copy_nv12_sse2(s->staging, o->pFrameBuffer, length);
+    _mm_mfence();
+    uint64_t copy_elapsed = sceKernelGetProcessTime() - copy_begin;
+    ++v->copy_calls; v->copy_bytes += length; v->copy_us += copy_elapsed;
+    if (copy_elapsed > v->copy_max_us) v->copy_max_us = copy_elapsed;
     uint64_t begin = sceKernelGetProcessTime();
-    const uint8_t *yplane = o->pFrameBuffer;
+    const uint8_t *yplane = s->staging;
     const uint8_t *uvplane = yplane + (size_t)o->framePitch * o->frameHeight;
     for (unsigned y = 0; y < o->frameHeight; ++y) {
         for (unsigned x = 0; x < o->frameWidth; ++x) {

@@ -41,7 +41,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.20: control Xbox, dibujo de video y diagnostico de tiempos\n");
+    printf("XCloud4 0.7.21: copia de imagen a memoria CPU y tiempos de conversion\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

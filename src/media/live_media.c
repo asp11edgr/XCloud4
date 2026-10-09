@@ -301,6 +301,7 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
     const X4LiveMediaSnapshot *p = &m->report_previous;
     printf("XCloud4: video perf interval_us=%llu tick=%llu packets=%llu tick_us=%llu tick_max_us=%llu "
         "decode=%llu pictures=%llu no_picture=%llu decode_us=%llu decode_max_us=%llu "
+        "copy=%llu copy_us=%llu copy_max_us=%llu copy_bytes=%llu "
         "convert=%llu convert_us=%llu convert_max_us=%llu picture_age_us=%llu picture_gap_max_us=%llu\n",
         (unsigned long long)(now - m->report_time),
         (unsigned long long)(s.video_tick_calls - p->video_tick_calls),
@@ -310,6 +311,9 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.video_decoded_frames - p->video_decoded_frames),
         (unsigned long long)(s.video_no_picture_calls - p->video_no_picture_calls),
         (unsigned long long)(s.video_decode_us - p->video_decode_us), (unsigned long long)s.video_decode_max_us,
+        (unsigned long long)(s.video_copy_calls - p->video_copy_calls),
+        (unsigned long long)(s.video_copy_us - p->video_copy_us), (unsigned long long)s.video_copy_max_us,
+        (unsigned long long)(s.video_copy_bytes - p->video_copy_bytes),
         (unsigned long long)(s.video_frames - p->video_frames),
         (unsigned long long)(s.video_convert_us - p->video_convert_us), (unsigned long long)s.video_convert_max_us,
         (unsigned long long)s.video_picture_age_us, (unsigned long long)s.video_picture_gap_max_us);
@@ -332,7 +336,7 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.keyframe_requests - p->keyframe_requests), s.waiting_keyframe ? 1u : 0u);
     m->report_previous = s; m->report_time = now;
     m->tick_max_us = m->draw_max_us = m->present_max_us = 0;
-    m->video.decode_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
+    m->video.decode_max_us = m->video.copy_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
 }
 void x4_live_media_tick(X4LiveMedia *m)
 {
@@ -428,6 +432,8 @@ void x4_live_media_snapshot(const X4LiveMedia *m, X4LiveMediaSnapshot *s)
     s->video_no_picture_calls = m->video.no_picture_calls;
     s->video_decode_us = m->video.decode_us; s->video_decode_max_us = m->video.decode_max_us;
     s->video_convert_us = m->video.convert_us; s->video_convert_max_us = m->video.convert_max_us;
+    s->video_copy_calls = m->video.copy_calls; s->video_copy_us = m->video.copy_us;
+    s->video_copy_max_us = m->video.copy_max_us; s->video_copy_bytes = m->video.copy_bytes;
     s->video_tick_calls = m->tick_calls; s->video_tick_us = m->tick_us; s->video_tick_max_us = m->tick_max_us;
     s->video_tick_packets = m->tick_packets;
     s->video_draw_calls = m->draw_calls; s->video_draw_new = m->draw_new; s->video_draw_repeat = m->draw_repeat;

@@ -34,6 +34,7 @@ typedef struct {
      * maxima are since the previous five-second diagnostic report. */
     uint64_t video_decode_calls, video_decoded_frames, video_no_picture_calls;
     uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
+    uint64_t video_copy_calls, video_copy_us, video_copy_max_us, video_copy_bytes;
     uint64_t video_tick_calls, video_tick_us, video_tick_max_us, video_tick_packets;
     uint64_t video_draw_calls, video_draw_new, video_draw_repeat, video_draw_us, video_draw_max_us;
     uint64_t video_present_calls, video_present_us, video_present_max_us;
