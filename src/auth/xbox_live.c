@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.13\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.14\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1232,6 +1232,51 @@ static int signal_exchange(X4XboxWork *w, size_t length, int status, X4JsonSpan 
     return 1;
 }
 
+/* A completed exchange can contain configuration/debugInfo without an SDP.
+ * Record only member results, JSON types and lengths. The validity rule stays
+ * identical to the original direct sdp string decoder; diagnostics never
+ * interpret debugInfo, print remote text or change the accepted response. */
+static bool signal_remote_sdp(X4XboxWork *w, X4JsonSpan exchange)
+{
+    X4JsonSpan sdp = {0}, state = {0}, message = {0}, debug = {0};
+    int exchange_type = (int)x4_json_type(exchange);
+    int sdp_member = x4_json_member(exchange, "sdp", &sdp);
+    bool decoded = exchange_type == X4_JSON_T_OBJECT && sdp_member == 1 &&
+        signal_decode(sdp, w->sdp, sizeof(w->sdp), true);
+    size_t decoded_length = decoded ? strlen(w->sdp) : 0;
+    int header_class = 0; /* not decoded, empty, CRLF, LF, escaped CRLF, other v=0, other */
+    if (decoded) {
+        header_class = decoded_length == 0 ? 1 : 6;
+        if (decoded_length >= 3 && !memcmp(w->sdp, "v=0", 3)) {
+            header_class = 5;
+            if (decoded_length >= 5 && !memcmp(w->sdp, "v=0\r\n", 5)) header_class = 2;
+            else if (decoded_length >= 4 && !memcmp(w->sdp, "v=0\n", 4)) header_class = 3;
+            else if (decoded_length >= 7 && !memcmp(w->sdp, "v=0\\r\\n", 7)) header_class = 4;
+        }
+    }
+    int state_member = x4_json_member(exchange, "status", &state);
+    int message_member = x4_json_member(exchange, "messageType", &message);
+    int debug_member = x4_json_member(exchange, "debugInfo", &debug);
+    char message_type[32] = {0};
+    int message_class = 0; /* absent/null=0, unknown/invalid=1, offer=2, answer=3 */
+    if (message_member < 0 || (message_member == 1 && x4_json_type(message) != X4_JSON_T_NULL)) {
+        message_class = 1;
+        if (message_member == 1 && !x4_json_token(message, message_type, sizeof(message_type))) {
+            if (!strcmp(message_type, "offer")) message_class = 2;
+            else if (!strcmp(message_type, "answer")) message_class = 3;
+        }
+    }
+    printf("XCloud4: signal nested SDP exchange_type=%d exchange_bytes=%zu sdp_member=%d sdp_type=%d sdp_span=%zu decoded=%d decoded_bytes=%zu nonempty=%d header_class=%d\n",
+        exchange_type, exchange.length, sdp_member, (int)x4_json_type(sdp), sdp.length,
+        decoded, decoded_length, decoded_length != 0, header_class);
+    printf("XCloud4: signal nested fields status_member=%d status_type=%d status_span=%zu message_member=%d message_type=%d message_class=%d debug_member=%d debug_type=%d debug_span=%zu\n",
+        state_member, (int)x4_json_type(state), state.length,
+        message_member, (int)x4_json_type(message), message_class,
+        debug_member, (int)x4_json_type(debug), debug.length);
+    x4_secure_clear(message_type, sizeof(message_type));
+    return decoded_length != 0;
+}
+
 static bool signal_cancelled(X4XboxWork *w, SessionEnd *end)
 {
     if (!atomic_load(w->cancel)) return false;
@@ -1689,14 +1734,12 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
         int status = 0;
         ++w->sdp_polls;
         if (!signal_call(w, "/sdp", X4_SESSION_HTTP_GET, NULL, deadline, end, &length, &status)) return false;
-        X4JsonSpan exchange, sdp;
+        X4JsonSpan exchange;
         int result = signal_exchange(w, length, status, &exchange);
         if (result < 0) signal_error_diagnostic(w, length, status, "/sdp");
         wipe_response(w, length);
         if (result == 1) {
-            bool valid = x4_json_type(exchange) == X4_JSON_T_OBJECT &&
-                x4_json_member(exchange, "sdp", &sdp) == 1 && signal_decode(sdp, w->sdp, sizeof(w->sdp), true) &&
-                w->sdp[0];
+            bool valid = signal_remote_sdp(w, exchange);
             x4_secure_clear(w->exchange, sizeof(w->exchange));
             if (!valid) { end_with(end, X4_SESSION_ERROR, X4_AUTH_E_RESPONSE, status, "respuesta SDP no valida"); return false; }
             int rc = x4_rtc_set_remote_description(w->rtc, w->sdp);
