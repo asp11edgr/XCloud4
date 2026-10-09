@@ -12,11 +12,13 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest prepared development checkpoint: 0.7.23
+## Latest tested development checkpoint: 0.7.23
 
-The owner selected a **960 × 540** video request for **0.7.23**, PS4 **APP_VER 00.93**, to prioritize fluency. The implementation updates the two fixed RTC startup capability/dimension messages and adds a numeric request diagnostic; **30 FPS / 5000 kbps** and the existing native media/input pipeline remain unchanged. The native build, final compiled-profile audit, complete matching-source inventory, fresh actual Claude **Opus 5.5** PASS and VM/PC/retrieved-PS4 package hashes are verified. The console result remains **pending**. Requested dimensions must still be checked against actual decoded width, height and pitch. See the [0.7.23 request, review and artifact evidence](docs/RELEASE_NOTES_0.7.23.md).
+The owner selected a **960 × 540** video request for **0.7.23**, PS4 **APP_VER 00.93**, to prioritize fluency. The implementation updates the two fixed RTC startup capability/dimension messages and adds a numeric request diagnostic; **30 FPS / 5000 kbps** and the existing native media/input pipeline remain unchanged. The native build, final compiled-profile audit, complete matching-source inventory, fresh actual Claude **Opus 5.5** PASS and VM/PC/retrieved-PS4 package hashes are verified. **The console's first decoded picture remains 1280 × 720, pitch 1280, despite the 960 × 540 request.** A bounded second attempt records **13.775 new image draws/s**, **29.349 ms copy** and **3.003 ms conversion**, with queue overflow and keyframe recovery. This uncontrolled live sample does not establish actual 540p delivery, improved fluency or measured input latency. See the [0.7.23 measured result and limits](docs/ERROR_REPORT_0.7.23.md) and [request, review and artifact evidence](docs/RELEASE_NOTES_0.7.23.md).
 
-## Latest tested development checkpoint: 0.7.22
+The owner subsequently reports worse video with intermittent stutters and much smoother controls; end-to-end latency remains unmeasured. Actual Claude Opus 5.5 completed a [selected-source comparison with Better xCloud](docs/BETTER_XCLOUD_COMPARISON_0.7.23.md), identifying profile/bitrate concepts and browser-specific options. No Better xCloud option is integrated.
+
+## Previous tested development checkpoint: 0.7.22
 
 Product **0.7.22**, PS4 **APP_VER 00.92**, converts eight pixels at a time with original SSE2 code. The owner reports better video but continuing choppiness and greater control-to-image delay; that delay has not been measured. A sustained **120.487-second** sample records **19.504 new image draws per second**, **3.001 ms conversion** and **29.337 ms copy** per image. Conversion is about **6.686×** faster than the separate 0.7.21 sample's conversion region; this is not a controlled benchmark or an FPS multiplier. Copy remains the largest measured local stage.
 

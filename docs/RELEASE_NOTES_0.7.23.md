@@ -1,6 +1,6 @@
 # XCloud4 0.7.23 — owner-selected 540p video request
 
-Product **0.7.23**, PS4 **APP_VER 00.93**, application identifier **XCLD00001**, has frozen request source and a successful native build. The owner selected a smaller video request to prioritize fluency. The PS4 interface remains Spanish; repository and release content remain English. **Fresh Claude source review, compiled-profile audit, matching-source verification and VM/PC/retrieved-PS4 package integrity are confirmed. The console result remains pending.**
+Product **0.7.23**, PS4 **APP_VER 00.93**, application identifier **XCLD00001**, has frozen request source and a successful native build. The owner selected a smaller video request to prioritize fluency. The PS4 interface remains Spanish; repository and release content remain English. **At packaging, fresh Claude source review, compiled-profile audit, matching-source verification and VM/PC/retrieved-PS4 package integrity were confirmed; the console result was pending.** The later hardware result is recorded in the dated addendum below.
 
 ## Reason
 
@@ -38,3 +38,11 @@ The actual Claude review completed with exit code 0, no stderr and no access out
 The compiled VM source matches **67** frozen PC runtime/build/script/notice/license files, and **16** selected export files match exactly. The dependency archive's PC copy passed all manifest, exclusion and privacy checks. It contains patched dependency sources, recipes and native adapters. Full application source, including media/main, is preserved separately in Git at the corresponding release checkpoint.
 
 The published 0.7.22 checkpoint and source/package artifacts remain unchanged. This preparation does not establish a 30 FPS result, lower input latency or fixed choppiness. No automated tests have been added or run.
+
+## Hardware addendum — 2026-10-09
+
+The bounded second game attempt records the requested **960 × 540**, but its first valid H.264 picture remains **1280 × 720**, pitch **1280**. Actual 540p delivery is not established. After excluding warmup and the first mixed interval, **27 pairs / 135.752188 seconds** record **13.775 new image draws per second**, **29.349 ms copy**, **3.003 ms conversion**, **8.538 ms Decode** and **8.951 ms presentation** per respective call. Queue overflow and keyframe recovery remain. This is an uncontrolled live sample, not a 540p performance benchmark.
+
+Closing state 4, canceled state 6 and final HTTP 200/error 0 are recorded; they do not establish a crash or its cause. See the [0.7.23 measured result and limits](ERROR_REPORT_0.7.23.md). Original source-only review metadata, package/source hashes and published artifacts remain unchanged. The capture continues; no further runtime changes or tests were performed for this report.
+
+The owner subsequently reports worse video with intermittent stutters and much smoother control response. These are subjective observations; input latency remains unmeasured. Actual Claude Opus 5.5 also completed a [selected-source Better xCloud comparison](BETTER_XCLOUD_COMPARISON_0.7.23.md); it identifies candidate profile/bitrate concepts and browser-specific implementations, without changing the application.
