@@ -1,6 +1,6 @@
 # Instalar la versión inicial
 
-Paquete: `XCloud4-0.1.2.pkg`. Identificador: `XCLD00001`. Esta es una aplicación inicial con pantalla y control; aún no inicia sesiones ni juegos de Xbox. Incluye Fios2 y libc, módulos auxiliares de OpenOrbis ausentes en los paquetes anteriores. Su inicio requiere confirmación en la consola.
+Paquete: `XCloud4-0.1.2.pkg`. Identificador: `XCLD00001`. Esta es una aplicación inicial con pantalla y control; aún no inicia sesiones ni juegos de Xbox. Incluye Fios2 y libc, módulos auxiliares de OpenOrbis ausentes en los paquetes anteriores. El propietario confirmó el inicio y funcionamiento de las opciones CONTROL y PROYECTO en su PS4 12.00 con GoldHEN v2.4b18.7.
 
 ## Por USB
 
@@ -27,4 +27,4 @@ GoldHEN admite paquetes en `/data/pkg` (fuente: https://github.com/GoldHEN/GoldH
 - En PROYECTO: círculo para volver.
 - OPTIONS cierra la aplicación.
 
-Si el paquete no instala, aparece pantalla negra o la aplicación se cierra, conserva el texto o una foto del error para continuar desde el resultado real. La compatibilidad en PS4 12.00 queda pendiente hasta ejecutar esta versión en la consola.
+Si el paquete no instala, aparece pantalla negra o la aplicación se cierra, conserva el texto o una foto del error para continuar desde el resultado real. La confirmación en PS4 12.00 corresponde al inicio y a las dos vistas de esta versión; Xbox y reproducción de audio/video siguen pendientes.

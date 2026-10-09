@@ -4,7 +4,9 @@ Cliente nativo experimental de Xbox Cloud Gaming para PS4 Fat con firmware 12.00
 
 ## Versión inicial — 0.1.2
 
-Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. La 0.1.0 se instaló en PS4 12.00 pero falló por Fios2 ausente; la 0.1.1 pasó ese bloqueo y falló por libc ausente. Ambos resultados se confirmaron en el registro de la consola. La 0.1.2 incluye las dos dependencias y todavía requiere confirmar su inicio en PS4. Conexión con Xbox, reproducción de video y audio siguen pendientes.
+Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. La 0.1.0 se instaló en PS4 12.00 pero falló por Fios2 ausente; la 0.1.1 pasó ese bloqueo y falló por libc ausente. Ambos resultados se confirmaron en el registro de la consola.
+
+La 0.1.2 incluye las dos dependencias. El registro confirma el inicio del programa y el propietario confirmó que aparecen las opciones CONTROL y PROYECTO y que ambas funcionan. Esta confirmación cubre el inicio y las dos vistas; no se han comprobado por separado todos los valores de botones, palancas y gatillos. Conexión con Xbox, reproducción de video y audio siguen pendientes.
 
 El entorno de trabajo elegido es la máquina virtual de Lubuntu existente en VirtualBox. Se mantiene su red NAT para descargar herramientas y preparar compilaciones.
 

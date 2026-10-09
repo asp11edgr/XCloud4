@@ -28,6 +28,10 @@ Se corrigió la identificación inicial de estos módulos: las fuentes de ambos 
 
 La 0.1.2 se compiló y empaquetó en Lubuntu con ambos auxiliares. Mide 6619136 bytes; SHA-256 `4c42328bed5150f2f7654a4b9b37c31c8abdcfa88447899c09966e3724141bee`. Se copió por FTP a `/data/pkg/XCloud4-0.1.2.pkg` y la copia descargada de vuelta tiene la misma huella. Se avisó al usuario para instalar y abrir esta versión mientras se captura el registro. Inicio, pantalla y control de esta versión siguen pendientes de confirmación.
 
+## Resultado confirmado de la 0.1.2
+
+El registro de la consola muestra `EXEC /app0/eboot.bin` y `XCloud4 0.1.2: inicio de interfaz y control` para el proceso 75, sin el error de módulos ausentes de los procesos anteriores. El propietario confirmó: "aparecen 2 opciones la de control y da de proyecto, las dos funcionan bien". Quedan confirmados el inicio y las dos vistas en PS4 12.00 con GoldHEN v2.4b18.7. No se han comprobado individualmente todos los botones, ejes y gatillos; tampoco Xbox, decodificación ni audio. Se conserva el PKG verificado y se registra esta versión como base funcional.
+
 ## Revisión con Claude Code
 
 Claude Code Pro se utilizó para dos revisiones estáticas con Sonnet 5. Se contrastaron sus propuestas con los encabezados y ejemplos del SDK y con los archivos generados. Las dudas sobre el tipo de memoria, el pitch de vídeo y la lista de archivos del paquete no demostraron defectos. Una propuesta posterior sobre GOT/RELRO requiere confirmar el comportamiento del cargador y no se ha aplicado.
