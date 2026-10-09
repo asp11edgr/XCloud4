@@ -17,7 +17,9 @@ int main(void)
     X4Auth *auth = x4_auth_create();
     X4AuthSnapshot account = {0};
     static X4CatalogSnapshot catalog;
+    X4SessionSnapshot session = {0};
     unsigned catalog_selected = 0;
+    int session_back = 0;
     int media_active = 0;
     int closing = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -31,12 +33,12 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.4.0: interfaz, multimedia, cuenta y catalogo Xbox\n");
+    printf("XCloud4 0.5.0: interfaz, multimedia, cuenta, catalogo y preparacion de sesion Xbox\n");
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;
         if (!closing) x4_screen_update(&screen, controller.pressed, controller.data.buttons);
-        if ((previous_page == 4 || previous_page == 5) && screen.page != previous_page)
+        if ((previous_page == 4 || previous_page == 5 || previous_page == 6) && screen.page != previous_page)
             x4_auth_cancel(auth);
         if (screen.exit_requested) {
             if (x4_auth_busy(auth)) {
@@ -66,6 +68,18 @@ reopen_interface:;
         }
         x4_auth_snapshot(auth, &account);
         x4_auth_catalog_snapshot(auth, &catalog);
+        x4_auth_session_snapshot(auth, &session);
+        if (!closing && screen.page == 6 && previous_page == 6) {
+            if (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) {
+                x4_auth_cancel(auth);
+                session_back = 1;
+            }
+            /* Keep the session page visible until remote cleanup finishes. */
+            if (session_back && !x4_auth_busy(auth)) {
+                session_back = 0;
+                screen.page = 5;
+            }
+        }
         if (!closing && screen.page == 5 && previous_page == 5) {
             if ((controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && !x4_auth_busy(auth)) {
                 catalog_selected = 0;
@@ -81,6 +95,17 @@ reopen_interface:;
                 if (controller.pressed & ORBIS_PAD_BUTTON_R1)
                     catalog_selected = catalog_selected + 8 < catalog.count ? catalog_selected + 8 : catalog.count - 1;
                 if (catalog_selected >= catalog.count) catalog_selected = catalog.count - 1;
+                if ((controller.pressed & ORBIS_PAD_BUTTON_CROSS) &&
+                    catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth)) {
+                    rc = x4_auth_start_session(auth, catalog_selected);
+                    x4_auth_session_snapshot(auth, &session);
+                    if (rc == 0 || session.state == X4_SESSION_ERROR) {
+                        session_back = 0;
+                        screen.page = 6;
+                    }
+                    if (rc == X4_AUTH_E_SIGNED_OUT) screen.page = 4;
+                    if (rc) printf("XCloud4: solicitar sesion fallo 0x%08x\n", (unsigned)rc);
+                }
             } else catalog_selected = 0;
         }
         if (screen.page != 3 && media_active) {
@@ -106,7 +131,9 @@ reopen_interface:;
         }
         x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
-        if (screen.page == 4 || closing)
+        if (screen.page == 6)
+            x4_session_draw(&session, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+        else if (screen.page == 4 || closing)
             x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
         else if (screen.page == 5)
             x4_catalog_draw(&catalog, catalog_selected, x4_auth_busy(auth), x4_display_pixels(&display));
@@ -147,6 +174,7 @@ reopen_interface:;
     screen.page = 0;
     media_active = 0;
     closing = 0;
+    session_back = 0;
     if (!auth) auth = x4_auth_create();
     sceKernelUsleep(250000);
     goto reopen_interface;

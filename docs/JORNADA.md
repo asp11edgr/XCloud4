@@ -106,6 +106,16 @@ El propietario informó "Listo si lo mostró" y envió fotografía de la 0.4.0 c
 
 Se guarda la 0.4.0 como base funcional con la etiqueta `v0.4.0`. Quedan confirmados la autorización Microsoft, los intercambios Xbox, la descripción propia XCloud4/PS4 aceptada por la consulta y la visualización del catálogo real. No fue necesario el fallback de juegos gratuitos. No se ha iniciado ni transmitido un juego; la navegación, actualización y cancelación de catálogo todavía no se comprobaron por separado. La etapa 3 del plan (cuenta y catálogo) alcanza su primer hito real; lo siguiente es la etapa 4, sesión de juego y WebRTC.
 
-## GitHub
+## Preparación de sesión de juego 0.5.0
+
+El propietario pidió anotar búsqueda de títulos para actualizaciones futuras y continuar con la siguiente etapa. Quedó registrada en `docs/MEJORAS_FUTURAS.md`, sin implementar búsqueda ni modificar su entrada de texto. Preguntó también por aprovechar las aplicaciones investigadas: se mantiene GreenVita como base de los intercambios Xbox, Better xCloud como referencia de configuración y Moonlight PS4 como investigación de APIs de medios, con adaptación nativa de PS4. Las candidatas WebRTC y la evidencia del SDK se documentaron en `docs/WEBRTC_PS4.md`; ninguna se integró ni compiló todavía.
+
+Claude Code Pro con `claude-opus-5-5` implementó el transporte de sesión, la reutilización privada de los intercambios Xbox y su integración con el trabajador de cuenta. Su resultado confirma 52 turnos, éxito y ausencia de error. Codex integró X desde el catálogo, la pantalla de sesión, espera del cierre al volver/salir, mensajes de errores locales y empaquetado. En la revisión por lectura, Codex añadió comprobación del plazo después de recibir el estado remoto para impedir READY tardío y validó el identificador del título antes de copiarlo al mensaje público. No se añadieron ni ejecutaron pruebas automatizadas.
+
+La nueva entrega solicita `/v5/sessions/cloud/play` para el título elegido y consulta su estado. Usa el registro y descripción propios de XCloud4/PS4/Orbis. No se repite la creación ante fallos de transporte. ReadyToConnect o Provisioned indican únicamente preparación remota para negociar; una sesión lista se mantiene como máximo 45 segundos y después se elimina. Círculo espera el cierre antes de volver al catálogo; OPTIONS espera antes de la salida nativa. DELETE se intenta con tiempo limitado aun después de cancelar. Un cierre sin confirmar permanece como error. No se envía autorización Passport de conexión, SDP ni ICE y no se recibe un juego; no se afirma compatibilidad WebRTC.
+
+La 0.5.0 compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.5.0.pkg`: 6619136 bytes, SHA-256 `bda87ebf4f46faf427c5ee54724789cb41020f890f26417152071dce3a252440`. Se copió a `/data/pkg/XCloud4-0.5.0.pkg`; el archivo recuperado por FTP tiene la misma huella. Preparación de sesión y cierre reales pendientes de instalar y abrir esta versión en PS4. La base confirmada anterior sigue siendo `v0.4.0`.
+
+## Publicación al terminar la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

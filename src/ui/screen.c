@@ -8,6 +8,8 @@ static const uint32_t WHITE = 0xfff5f1eb, MUTED = 0xffb6a899, GREEN = 0xff72d86e
 void x4_screen_update(X4Screen *s, uint32_t pressed, uint32_t held)
 {
     if (pressed & ORBIS_PAD_BUTTON_OPTIONS) s->exit_requested = 1;
+    /* Main waits for the session worker to close the remote session. */
+    if (s->page == 6) return;
     if ((pressed & ORBIS_PAD_BUTTON_CIRCLE) && (s->page != 1 || (held & ORBIS_PAD_BUTTON_L1))) {
         s->page = s->page == 5 ? 4 : 0; return;
     }
@@ -22,7 +24,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.4.0", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.5.0", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -225,6 +227,48 @@ void x4_catalog_draw(const X4CatalogSnapshot *c, unsigned selected, int busy, ui
             x4_text(p, 84, 880, 2, line, MUTED);
         }
     }
-    x4_text(p, 84, 929, 2, "CRUCETA ELEGIR   L1/R1 PAGINAS   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
-    x4_text(p, 84, 1004, 2, "EL INICIO DE UN JUEGO TODAVIA ESTA EN PREPARACION.", MUTED);
+    x4_text(p, 84, 929, 2, "X SESION   CRUCETA ELEGIR   L1/R1 PAGINAS   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
+    x4_text(p, 84, 1004, 2, "SOLICITA UNA SESION A XBOX. LA IMAGEN Y EL SONIDO DEL JUEGO SIGUEN EN PREPARACION.", MUTED);
+}
+
+void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t *p)
+{
+    x4_text(p, 84, 260, 5, "SESION DE JUEGO", WHITE);
+    char line[160];
+    snprintf(line, sizeof(line), "%.85s", s->title_name[0] ? s->title_name : "TITULO SELECCIONADO");
+    x4_text(p, 84, 328, 3, line, MUTED);
+    x4_rect(p, 84, 400, 1752, 424, PANEL);
+    const char *title = "PREPARANDO LA SOLICITUD...";
+    switch (s->state) {
+    case X4_SESSION_WAITING: title = "XBOX ESTA PREPARANDO EL JUEGO..."; break;
+    case X4_SESSION_READY: title = "XBOX PREPARO LA SESION"; break;
+    case X4_SESSION_STOPPING: title = "CERRANDO LA SESION EN XBOX..."; break;
+    case X4_SESSION_CLOSED: title = "SESION CERRADA"; break;
+    case X4_SESSION_CANCELLED: title = "SOLICITUD CANCELADA"; break;
+    case X4_SESSION_ERROR: title = "NO SE PUDO COMPLETAR LA SESION"; break;
+    default: break;
+    }
+    if (closing) title = "CERRANDO LA SESION Y LA APLICACION...";
+    x4_text(p, 126, 448, 4, title, s->ready_seen && !s->cleanup_failed ? GREEN : WHITE);
+    x4_text(p, 126, 523, 3, s->stage, MUTED);
+    if (s->state == X4_SESSION_READY) {
+        snprintf(line, sizeof(line), "LA SESION SE CERRARA EN %u SEGUNDOS.", s->seconds_left);
+        x4_text(p, 126, 587, 3, line, WHITE);
+    } else if (s->ready_seen && !busy)
+        x4_text(p, 126, 587, 3, "XBOX CONFIRMO QUE LA SESION ESTABA LISTA.", GREEN);
+    else if (busy) {
+        snprintf(line, sizeof(line), "TIEMPO TRANSCURRIDO: %u SEGUNDOS.", s->elapsed_seconds);
+        x4_text(p, 126, 587, 3, line, MUTED);
+    }
+    x4_text(p, 126, 655, 3, "LA RECEPCION DE IMAGEN Y SONIDO SIGUE EN PREPARACION.", MUTED);
+    if (s->cleanup_failed) {
+        snprintf(line, sizeof(line), "CIERRE SIN CONFIRMAR: 0X%08X   HTTP %d",
+            (unsigned)s->cleanup_error, s->cleanup_http_status);
+        x4_text(p, 126, 722, 3, line, WHITE);
+    } else if (s->error || s->http_status >= 400) {
+        snprintf(line, sizeof(line), "DETALLE 0X%08X   HTTP %d", (unsigned)s->error, s->http_status);
+        x4_text(p, 126, 722, 3, line, WHITE);
+    }
+    x4_text(p, 84, 867, 3, "CIRCULO  CERRAR Y VOLVER AL CATALOGO     OPTIONS  SALIR", WHITE);
+    x4_text(p, 84, 1004, 2, "ESTA ETAPA PREPARA Y CIERRA LA SESION. TODAVIA NO TRANSMITE EL JUEGO.", MUTED);
 }

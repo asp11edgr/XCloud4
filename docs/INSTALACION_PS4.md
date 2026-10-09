@@ -1,5 +1,13 @@
 # Instalar XCloud4
 
+## Preparación de sesión — 0.5.0
+
+Cerrar XCloud4 antes de instalar `XCloud4-0.5.0.pkg`, aceptar reemplazar la aplicación y autorizar Microsoft nuevamente en CUENTA. Abrir el catálogo con R1, seleccionar un título marcado CON ACCESO y pulsar X. Esta versión prepara una sesión remota; todavía no transmite el juego.
+
+Si Xbox prepara la sesión, anotar el mensaje mostrado. Círculo debe esperar el cierre remoto y volver al catálogo. Si se deja abierta, una sesión lista se cierra después de 45 segundos. Si aparece un error, conservar su detalle numérico y estado HTTP para el diagnóstico. OPTIONS solicita cierre de la sesión antes de salir de la aplicación. Consulta [SESION_XBOX.md](SESION_XBOX.md).
+
+Resultados reales de esta versión pendientes de ejecutar en PS4.
+
 ## Corrección de cierre 0.2.2
 
 Instalar `XCloud4-0.2.2.pkg` y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO y pulsar OPTIONS para salir. El propietario confirmó video, sonido y retorno correcto al inicio sin CE-34878-0; Klog confirma el cierre mediante LoadExec. Esta versión queda como base funcional.

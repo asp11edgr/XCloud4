@@ -19,6 +19,7 @@
 #define X4_HTTP_VERSION_1_1 2
 #define X4_HTTP_METHOD_GET 0
 #define X4_HTTP_METHOD_POST 1
+#define X4_HTTP_METHOD_DELETE 5
 #define X4_HTTP_HEADER_OVERWRITE 0u
 /* SERVER_VERIFY | CN_CHECK | NOT_AFTER | NOT_BEFORE | KNOWN_CA | SNI */
 #define X4_HTTPS_VERIFY_ALL 0xBDu
@@ -45,12 +46,18 @@ static const char header_contract[] = "x-xbl-contract-version";
 static const char header_client[] = "x-gssv-client";
 static const char header_device[] = "X-MS-Device-Info";
 static const char header_authorization[] = "Authorization";
+static const char sessions_path[] = "/v5/sessions/cloud/";
+#define X4_HTTP_SESSION_ID_MAX 128u
+#define X4_HTTP_SESSION_HEADERS 3u
 
-enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE };
+/* DEST_SESSION is produced only by classify_session, never by classify. */
+enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE, DEST_SESSION };
+enum SessionRoute { ROUTE_NONE, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_RESOURCE };
 
 /* Request inputs copied into one block. It must outlive the native request,
  * connection and template, so it is freed only after they were deleted. */
 typedef struct {
+    int method; /* native GET 0, POST 1, DELETE 5 */
     const char *url, *payload, *content_type;
     size_t payload_size, header_count, size;
     X4HttpHeader headers[X4_HTTP_HEADERS_MAX];
@@ -334,6 +341,56 @@ static enum Destination classify(const char *url)
     return DEST_NONE;
 }
 
+/* ASCII case-insensitive comparison of n bytes against a lowercase word. */
+static bool same_word(const char *text, size_t n, const char *word)
+{
+    size_t i = 0;
+    for (; i < n && word[i]; ++i) {
+        char c = text[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != word[i]) return false;
+    }
+    return i == n && !word[i];
+}
+
+/* 1..128 of [A-Za-z0-9_-]; GUIDs fit. Collection names are refused so an ID
+ * can never address /play or /active. */
+static bool session_id(const char *id, size_t n)
+{
+    if (n == 0 || n > X4_HTTP_SESSION_ID_MAX) return false;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)id[i];
+        if (!alphanumeric(c) && c != '-' && c != '_') return false;
+    }
+    return !same_word(id, n, "play") && !same_word(id, n, "active");
+}
+
+/* https://<region host>/v5/sessions/cloud/{play | <id> | <id>/state |
+ * <id>/keepalive}, nothing more. The host passes the same label checks as
+ * the /v2/titles region. */
+static enum SessionRoute classify_session(const char *url)
+{
+    size_t n = bounded_length(url, X4_HTTP_JSON_URL_MAX + 1);
+    size_t scheme = sizeof(https_scheme) - 1, prefix = sizeof(sessions_path) - 1;
+    if (n > X4_HTTP_JSON_URL_MAX || n <= scheme || memcmp(url, https_scheme, scheme)) return ROUTE_NONE;
+    const char *host = url + scheme;
+    size_t h = 0;
+    while (host[h] && host[h] != '/') ++h;
+    if (!region_host(host, h)) return ROUTE_NONE;
+    const char *path = host + h;
+    if (strncmp(path, sessions_path, prefix)) return ROUTE_NONE;
+    const char *rest = path + prefix;
+    if (!strcmp(rest, "play")) return ROUTE_PLAY;
+    size_t id = 0;
+    while (rest[id] && rest[id] != '/') ++id;
+    if (!session_id(rest, id)) return ROUTE_NONE;
+    const char *tail = rest + id;
+    if (!tail[0]) return ROUTE_RESOURCE;
+    if (!strcmp(tail, "/state")) return ROUTE_STATE;
+    if (!strcmp(tail, "/keepalive")) return ROUTE_KEEPALIVE;
+    return ROUTE_NONE;
+}
+
 /* RFC 7235 token68: the only credential syntax ever sent. */
 static bool token68(const char *t)
 {
@@ -364,9 +421,10 @@ static int check_headers(enum Destination d, const X4HttpHeader *headers, size_t
         bool allowed = false;
         if (!strcmp(name, header_contract)) allowed = d == DEST_XBOX_USER || d == DEST_XSTS;
         else if (!strcmp(name, header_client) || !strcmp(name, header_device))
-            allowed = d == DEST_LOGIN || d == DEST_REGION;
+            allowed = d == DEST_LOGIN || d == DEST_REGION || d == DEST_SESSION;
         else if (!strcmp(name, header_authorization))
-            allowed = d == DEST_REGION && !strncmp(value, "Bearer ", 7) && token68(value + 7);
+            allowed = (d == DEST_REGION || d == DEST_SESSION) && !strncmp(value, "Bearer ", 7) &&
+                token68(value + 7);
         if (!allowed) return X4_HTTP_ARGUMENT;
     }
     return 0;
@@ -386,8 +444,8 @@ static int check_json(const char *json, size_t *size)
 }
 
 /* Inputs were validated, so every length here is already bounded. */
-static Owned *own(const char *url, const char *payload, size_t payload_size, const char *content_type,
-    const X4HttpHeader *headers, size_t count)
+static Owned *own(int method, const char *url, const char *payload, size_t payload_size,
+    const char *content_type, const X4HttpHeader *headers, size_t count)
 {
     size_t url_size = strlen(url) + 1;
     size_t size = url_size + (payload ? payload_size + 1 : 0);
@@ -395,6 +453,7 @@ static Owned *own(const char *url, const char *payload, size_t payload_size, con
     Owned *o = malloc(sizeof(*o) + size);
     if (!o) return NULL;
     memset(o, 0, sizeof(*o));
+    o->method = method;
     o->size = size;
     o->content_type = content_type;
     o->payload_size = payload_size;
@@ -489,8 +548,8 @@ static int transfer(X4Http *h, Owned *o, char *body, size_t capacity, size_t *le
     /* Full certificate verification; failures surface, never bypassed. */
     OPTION("verificacion TLS", h->fn.https_enable(tmpl, X4_HTTPS_VERIFY_ALL));
     CREATE("conexion HTTPS", conn, h->fn.create_connection(tmpl, url, false));
-    CREATE("solicitud HTTPS", req, h->fn.create_request(conn,
-        form ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET, url, (uint64_t)form_size));
+    /* Method chosen explicitly by the caller and copied with the inputs. */
+    CREATE("solicitud HTTPS", req, h->fn.create_request(conn, o->method, url, (uint64_t)form_size));
     OPTION("cabeceras", h->fn.add_header(req, "Accept", "application/json", X4_HTTP_HEADER_OVERWRITE));
     OPTION("cabeceras", h->fn.add_header(req, "Accept-Encoding", "identity", X4_HTTP_HEADER_OVERWRITE));
     if (o->content_type) OPTION("cabeceras", h->fn.add_header(req, "Content-Type",
@@ -570,7 +629,8 @@ static int perform(X4Http *h, const char *url, const char *form, char *body, siz
         rc = check_form(form, &form_size);
         if (rc) return rc;
     }
-    Owned *o = own(url, form, form_size, form ? "application/x-www-form-urlencoded" : NULL, NULL, 0);
+    Owned *o = own(form ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET, url, form, form_size,
+        form ? "application/x-www-form-urlencoded" : NULL, NULL, 0);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
     return transfer(h, o, body, capacity, length, status, cancel);
 }
@@ -601,7 +661,65 @@ static int perform_json(X4Http *h, const char *url, const X4HttpHeader *headers,
     h->stage = "cabecera rechazada";
     rc = check_headers(d, headers, count);
     if (rc) return rc;
-    Owned *o = own(url, json, json_size, json ? "application/json" : NULL, headers, count);
+    Owned *o = own(post ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET, url, json, json_size,
+        json ? "application/json" : NULL, headers, count);
+    if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    return transfer(h, o, body, capacity, length, status, cancel);
+}
+
+static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const char *url,
+    const X4HttpHeader *headers, size_t count, const char *json, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel)
+{
+    h->stage = "argumentos HTTPS";
+    if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
+    body[0] = 0;
+    *length = 0;
+    *status = 0;
+    if (capacity > X4_HTTP_RESPONSE_MAX + 1) return X4_HTTP_ARGUMENT;
+    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
+    h->stage = "URL rechazada";
+    enum SessionRoute route = classify_session(url);
+    if (route == ROUTE_NONE) return X4_HTTP_URL;
+    /* One method per route; the body rule is part of the allowlist. */
+    h->stage = "metodo rechazado";
+    bool allowed = false;
+    int native = X4_HTTP_METHOD_GET;
+    switch (route) {
+    case ROUTE_PLAY:
+        allowed = method == X4_SESSION_HTTP_POST && json && json[0];
+        native = X4_HTTP_METHOD_POST;
+        break;
+    case ROUTE_KEEPALIVE:
+        allowed = method == X4_SESSION_HTTP_POST && json && !json[0];
+        native = X4_HTTP_METHOD_POST;
+        break;
+    case ROUTE_STATE:
+        allowed = method == X4_SESSION_HTTP_GET && !json;
+        native = X4_HTTP_METHOD_GET;
+        break;
+    case ROUTE_RESOURCE:
+        allowed = method == X4_SESSION_HTTP_DELETE && !json;
+        native = X4_HTTP_METHOD_DELETE;
+        break;
+    case ROUTE_NONE:
+        break;
+    }
+    if (!allowed) return X4_HTTP_ARGUMENT;
+    size_t json_size = 0;
+    int rc;
+    if (route == ROUTE_PLAY) {
+        h->stage = "cuerpo JSON rechazado";
+        rc = check_json(json, &json_size);
+        if (rc) return rc;
+    }
+    h->stage = "cabecera rechazada";
+    if (count != X4_HTTP_SESSION_HEADERS) return X4_HTTP_ARGUMENT;
+    /* Three distinct names out of a three-name allowlist: all are present. */
+    rc = check_headers(DEST_SESSION, headers, count);
+    if (rc) return rc;
+    /* The empty keepalive POST still declares application/json. */
+    Owned *o = own(native, url, json, json_size, json ? "application/json" : NULL, headers, count);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
     return transfer(h, o, body, capacity, length, status, cancel);
 }
@@ -633,6 +751,23 @@ int x4_http_json_request(X4Http *h, const char *url, const X4HttpHeader *headers
     }
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform_json(h, url, headers, header_count, json, body, capacity, length, status, cancel);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_session_request(X4Http *h, enum X4HttpSessionMethod method, const char *url,
+    const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel)
+{
+    if (!h) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_session(h, method, url, headers, header_count, json, body, capacity, length, status,
+        cancel);
     atomic_store(&h->busy, false);
     return rc;
 }

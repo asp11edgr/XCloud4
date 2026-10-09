@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 #include "xbox_catalog.h"
+#include "xbox_session.h"
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
@@ -21,6 +22,9 @@ enum {
     X4_AUTH_E_SIGNED_OUT = -2009, /* catalog refused: no valid Microsoft token */
     X4_AUTH_E_XBOX = -2010,       /* Xbox Live or cloud gaming refused the account */
     X4_AUTH_E_REGION = -2011,     /* no usable default streaming region */
+    X4_AUTH_E_SESSION = -2012,    /* Xbox reported the cloud session failed */
+    X4_AUTH_E_DEADLINE = -2013,   /* session not ready within its deadline */
+    X4_AUTH_E_UNCONFIRMED = -2014, /* a remote session may exist; not confirmed closed */
 };
 
 typedef struct X4Auth X4Auth;
@@ -37,7 +41,9 @@ enum X4AuthState {
     X4_AUTH_ERROR,
 };
 
-enum X4AuthAction { X4_AUTH_SIGN_IN, X4_AUTH_CHECK_CONNECTION, X4_AUTH_XBOX_CATALOG };
+/* X4_AUTH_XBOX_SESSION is dispatched only through x4_auth_start_session;
+ * x4_auth_start refuses it. */
+enum X4AuthAction { X4_AUTH_SIGN_IN, X4_AUTH_CHECK_CONNECTION, X4_AUTH_XBOX_CATALOG, X4_AUTH_XBOX_SESSION };
 
 typedef struct {
     enum X4AuthState state;
@@ -60,7 +66,18 @@ int x4_auth_busy(X4Auth *auth);
 void x4_auth_snapshot(X4Auth *auth, X4AuthSnapshot *out);
 /* Copy of the last catalog view; it holds no token, user hash or body. */
 void x4_auth_catalog_snapshot(X4Auth *auth, X4CatalogSnapshot *out);
-/* Wipes the local token and catalog only; no global Microsoft sign-out. */
+/* Prepares an Xbox cloud session for catalog title catalog_index with the
+ * catalog's offering (see xbox_session.h); no video, audio or input yet.
+ * Requires a READY catalog, a valid index, a valid Microsoft token and no
+ * running worker. Publishes STARTING before the worker starts. The account
+ * stays AUTHORIZED and the catalog view is kept. x4_auth_cancel stops it;
+ * busy stays true through READY and the remote cleanup until every
+ * credential is wiped and HTTPS is closed. */
+int x4_auth_start_session(X4Auth *auth, unsigned catalog_index);
+/* Copy of the last session view; no token, session path or ID. */
+void x4_auth_session_snapshot(X4Auth *auth, X4SessionSnapshot *out);
+/* Wipes the local token, catalog and session view only; no global Microsoft
+ * sign-out. */
 int x4_auth_forget(X4Auth *auth);
 /* Call once busy is false. On a join error the context is kept. */
 int x4_auth_close(X4Auth *auth);

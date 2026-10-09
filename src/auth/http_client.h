@@ -56,6 +56,25 @@ int x4_http_json_request(X4Http *http, const char *url, const X4HttpHeader *head
     size_t header_count, const char *json, char *body, size_t capacity, size_t *length,
     int *status, const _Atomic int *cancel);
 
+enum X4HttpSessionMethod { X4_SESSION_HTTP_GET, X4_SESSION_HTTP_POST, X4_SESSION_HTTP_DELETE };
+
+/* Xbox cloud session exchanges on the validated default region host
+ * (https://<labels>.gssv-play-prod.xboxlive.com, same label rules as
+ * /v2/titles), under the same TLS, timeout, redirect, cookie and quarantine
+ * rules. Exactly these method/path pairs are accepted:
+ *   POST JSON  /v5/sessions/cloud/play            (non-empty JSON body)
+ *   GET        /v5/sessions/cloud/<id>/state      (json NULL)
+ *   POST       /v5/sessions/cloud/<id>/keepalive  (json "", empty body)
+ *   DELETE     /v5/sessions/cloud/<id>            (json NULL)
+ * <id> is 1..128 of [A-Za-z0-9_-] (GUIDs included) and never "play" or
+ * "active". No query, fragment, escape, dot segment, port or userinfo.
+ * Exactly three headers are required, once each: Authorization
+ * ("Bearer <token68>"), x-gssv-client and X-MS-Device-Info. Header values
+ * and bodies stay private. capacity is at most X4_HTTP_RESPONSE_MAX + 1. */
+int x4_http_session_request(X4Http *http, enum X4HttpSessionMethod method, const char *url,
+    const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel);
+
 /* Constant literal naming the last stage reached; safe to show in the UI. */
 const char *x4_http_stage(const X4Http *http);
 

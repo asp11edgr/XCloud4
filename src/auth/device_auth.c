@@ -57,14 +57,18 @@ struct X4Auth {
      * until it releases finished; main reads them only after acquiring it. */
     enum X4AuthAction action;
     X4AuthWork *work;
-    X4XboxWork *xwork; /* catalog runs only */
+    X4XboxWork *xwork; /* catalog and session runs only */
+    /* Private session run arguments, copied from the catalog before start. */
+    X4CatalogTitle session_title;
+    char session_offering[24];
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
     _Atomic int cancel, finished;
-    /* Guards nothing but copies of shared and catalog. */
+    /* Guards nothing but copies of shared, catalog and session. */
     atomic_flag lock;
     Shared shared;
     X4CatalogSnapshot catalog;
+    X4SessionSnapshot session;
 };
 
 static uint64_t now(void)
@@ -138,6 +142,32 @@ static void catalog_progress(void *context, const char *stage, const char *offer
     copy_text(a->catalog.stage, sizeof(a->catalog.stage), stage);
     copy_text(a->catalog.offering, sizeof(a->catalog.offering), offering);
     copy_text(a->catalog.region, sizeof(a->catalog.region), region);
+    unlock(a);
+}
+
+/* Empty session view in one state; title, offering and region optional. */
+static void reset_session(X4Auth *a, enum X4SessionState state, int error, const char *stage,
+    const char *title, const char *offering, const char *region)
+{
+    X4SessionSnapshot next;
+    memset(&next, 0, sizeof(next));
+    next.state = state;
+    next.error = error;
+    copy_text(next.stage, sizeof(next.stage), stage);
+    copy_text(next.title_name, sizeof(next.title_name), title);
+    copy_text(next.offering, sizeof(next.offering), offering);
+    copy_text(next.region, sizeof(next.region), region);
+    lock(a);
+    a->session = next;
+    unlock(a);
+}
+
+/* Worker progress and final view: a whole public copy, taken under lock. */
+static void session_progress(void *context, const X4SessionSnapshot *snapshot)
+{
+    X4Auth *a = context;
+    lock(a);
+    memcpy(&a->session, snapshot, sizeof(a->session));
     unlock(a);
 }
 
@@ -457,11 +487,33 @@ static void catalog_run(X4Auth *a)
     a->xwork = NULL;
 }
 
+/* Reads the Microsoft token only; account and catalog views are untouched.
+ * The Xbox credentials are reacquired inside the run and wiped by it. The
+ * final view is published as returned: it already reflects any cancel, and
+ * a failed remote cleanup must never be replaced by CANCELLED. */
+static void session_run(X4Auth *a)
+{
+    X4XboxWork *w = a->xwork;
+    if (!a->token_expiry || now() >= a->token_expiry) {
+        reset_session(a, X4_SESSION_ERROR, X4_AUTH_E_SIGNED_OUT, "token Microsoft caducado",
+            a->session_title.name[0] ? a->session_title.name : a->session_title.id, a->session_offering, NULL);
+    } else {
+        const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
+            &a->cancel, session_progress, a);
+        session_progress(a, r);
+    }
+    x4_xbox_work_free(w);
+    a->xwork = NULL;
+    x4_secure_clear(&a->session_title, sizeof(a->session_title));
+    x4_secure_clear(a->session_offering, sizeof(a->session_offering));
+}
+
 static void *worker(void *opaque)
 {
     X4Auth *a = opaque;
-    if (a->action == X4_AUTH_XBOX_CATALOG) {
-        catalog_run(a);
+    if (a->action == X4_AUTH_XBOX_CATALOG || a->action == X4_AUTH_XBOX_SESSION) {
+        if (a->action == X4_AUTH_XBOX_CATALOG) catalog_run(a);
+        else session_run(a);
         atomic_store_explicit(&a->finished, 1, memory_order_release);
         return NULL;
     }
@@ -537,6 +589,7 @@ X4Auth *x4_auth_create(void)
     atomic_flag_clear(&a->lock);
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
+    reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
     return a;
 }
 
@@ -585,8 +638,12 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
      * a working connection. */
     if (action == X4_AUTH_CHECK_CONNECTION && a->token_expiry) return X4_AUTH_E_AUTHORIZED;
     if (action == X4_AUTH_XBOX_CATALOG) return start_catalog(a);
-    /* A fresh sign-in deliberately discards the previous token and catalog. */
-    if (action == X4_AUTH_SIGN_IN) discard_session(a);
+    /* A fresh sign-in deliberately discards the previous token, catalog and
+     * session view; no worker runs here, so no cleanup is pending. */
+    if (action == X4_AUTH_SIGN_IN) {
+        discard_session(a);
+        reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
+    }
     a->work = malloc(sizeof(*a->work));
     if (!a->work) {
         printf("XCloud4: acceso Microsoft sin memoria de trabajo\n");
@@ -611,6 +668,72 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
         return rc;
     }
     a->running = 1;
+    return 0;
+}
+
+static bool valid_offering(const char *offering)
+{
+    return !strcmp(offering, "xgpuweb") || !strcmp(offering, "xgpuwebf2p");
+}
+
+int x4_auth_start_session(X4Auth *a, unsigned index)
+{
+    if (!a) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    int rc = join_worker(a);
+    if (rc) return rc;
+    expire_tokens(a);
+    if (!a->token_expiry || now() >= a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
+    /* Title and offering are copied privately before the worker exists. No
+     * catalog or Store request is repeated for the session. */
+    X4CatalogTitle title = {0};
+    char offering[sizeof(a->session_offering)] = {0}, region[sizeof(a->catalog.region)] = {0};
+    bool ready;
+    lock(a);
+    ready = a->catalog.state == X4_CATALOG_READY && index < a->catalog.count && index < X4_CATALOG_MAX;
+    if (ready) {
+        title = a->catalog.titles[index];
+        copy_text(offering, sizeof(offering), a->catalog.offering);
+        copy_text(region, sizeof(region), a->catalog.region);
+    }
+    unlock(a);
+    if (!ready) return X4_AUTH_E_ARGUMENT;
+    title.id[sizeof(title.id) - 1] = 0;
+    title.name[sizeof(title.name) - 1] = 0;
+    if (!title.id[0] || !valid_offering(offering)) {
+        x4_secure_clear(&title, sizeof(title));
+        return X4_AUTH_E_ARGUMENT;
+    }
+    const char *shown = title.name[0] ? title.name : title.id;
+    a->xwork = x4_xbox_work_new();
+    if (!a->xwork) {
+        printf("XCloud4: sesion Xbox sin memoria de trabajo\n");
+        reset_session(a, X4_SESSION_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para la sesion", shown, offering,
+            region);
+        x4_secure_clear(&title, sizeof(title));
+        return X4_AUTH_E_ALLOCATION;
+    }
+    a->session_title = title;
+    copy_text(a->session_offering, sizeof(a->session_offering), offering);
+    a->action = X4_AUTH_XBOX_SESSION;
+    atomic_store(&a->cancel, 0);
+    reset_session(a, X4_SESSION_STARTING, 0, "preparando sesion Xbox", shown, offering, region);
+    atomic_store_explicit(&a->finished, 0, memory_order_release);
+    rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    if (rc != 0) {
+        if (rc > 0) rc = -rc;
+        printf("XCloud4: sesion Xbox crear hilo 0x%08x\n", (unsigned)rc);
+        atomic_store(&a->finished, 1);
+        x4_xbox_work_free(a->xwork);
+        a->xwork = NULL;
+        x4_secure_clear(&a->session_title, sizeof(a->session_title));
+        x4_secure_clear(a->session_offering, sizeof(a->session_offering));
+        reset_session(a, X4_SESSION_ERROR, rc, "no se pudo iniciar la sesion", shown, offering, region);
+        x4_secure_clear(&title, sizeof(title));
+        return rc;
+    }
+    a->running = 1;
+    x4_secure_clear(&title, sizeof(title));
     return 0;
 }
 
@@ -640,7 +763,10 @@ void x4_auth_snapshot(X4Auth *a, X4AuthSnapshot *out)
         if (copy.code_deadline > t)
             out->seconds_left = (unsigned)((copy.code_deadline - t + X4_AUTH_USEC - 1) / X4_AUTH_USEC);
     }
-    if (busy && a->action != X4_AUTH_XBOX_CATALOG && atomic_load(&a->cancel)) {
+    /* Only sign-in and the check own the account view; catalog and session
+     * cancels never mark the account as cancelling. */
+    if (busy && (a->action == X4_AUTH_SIGN_IN || a->action == X4_AUTH_CHECK_CONNECTION) &&
+        atomic_load(&a->cancel)) {
         /* Hide the code at once; the worker wipes its private copy. */
         memset(out->user_code, 0, sizeof(out->user_code));
         memset(out->verification_uri, 0, sizeof(out->verification_uri));
@@ -668,6 +794,33 @@ void x4_auth_catalog_snapshot(X4Auth *a, X4CatalogSnapshot *out)
         copy_text(out->stage, sizeof(out->stage), "cancelando...");
 }
 
+void x4_auth_session_snapshot(X4Auth *a, X4SessionSnapshot *out)
+{
+    if (!out) return;
+    if (!a) {
+        memset(out, 0, sizeof(*out));
+        out->state = X4_SESSION_ERROR;
+        out->error = X4_AUTH_E_ALLOCATION;
+        copy_text(out->stage, sizeof(out->stage), "sin memoria para el acceso");
+        return;
+    }
+    bool busy = x4_auth_busy(a);
+    if (!busy) expire_tokens(a);
+    lock(a);
+    *out = a->session;
+    unlock(a);
+    /* A pending cancel shows STOPPING at once while the worker still runs;
+     * a terminal view (CLOSED/CANCELLED/ERROR, including a failed cleanup)
+     * is never replaced. */
+    if (busy && a->action == X4_AUTH_XBOX_SESSION && atomic_load(&a->cancel) &&
+        (out->state == X4_SESSION_STARTING || out->state == X4_SESSION_WAITING ||
+            out->state == X4_SESSION_READY || out->state == X4_SESSION_STOPPING)) {
+        out->state = X4_SESSION_STOPPING;
+        out->seconds_left = 0;
+        copy_text(out->stage, sizeof(out->stage), "cerrando sesion...");
+    }
+}
+
 int x4_auth_forget(X4Auth *a)
 {
     if (!a) return X4_AUTH_E_ARGUMENT;
@@ -675,6 +828,7 @@ int x4_auth_forget(X4Auth *a)
     int rc = join_worker(a);
     if (rc) return rc;
     discard_session(a);
+    reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     return 0;
 }

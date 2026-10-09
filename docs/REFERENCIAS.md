@@ -48,3 +48,9 @@ GreenVita, en la misma versión fijada arriba, aporta referencias del protocolo:
 - Nombres públicos localizados de Microsoft Store: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/catalog.rs.
 
 Se usa el registro propio de XCloud4. Se escriben implementaciones C originales; no se adapta código Rust ni la persistencia de credenciales de Vita. Los resultados reales de Xbox se documentarán después de ejecutar el paquete en PS4, sin inferirlos de estas referencias.
+
+## Sesión y transporte: siguiente etapa
+
+Se consultó `src/api_xbox/stream.rs` y la creación de sesión de `api.rs` de GreenVita en la misma versión fijada. Describen `/v5/sessions/cloud/play`, estados de preparación, conexión, SDP, ICE y DELETE para cerrar la sesión. La implementación nativa conserva estas referencias de protocolo. Las candidatas de transporte, sus versiones y la evidencia del SDK local se detallan en [WEBRTC_PS4.md](WEBRTC_PS4.md).
+
+La búsqueda de títulos solicitada por el propietario queda aplazada en [MEJORAS_FUTURAS.md](MEJORAS_FUTURAS.md).

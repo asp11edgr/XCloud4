@@ -28,7 +28,15 @@ OPTIONS prepara la solicitud de salida mediante SystemService antes de cerrar re
 
 Se prepara la pantalla CUENTA con conexión HTTPS y acceso por código. Usa el registro **XCloud4** creado por el propietario, para cuentas personales y con flujos de cliente público habilitados. X solicita un código, cuadrado comprueba la conexión, triángulo elimina la sesión local y círculo cancela/vuelve. Los tokens quedan en memoria durante esta ejecución y se borran al cerrar. La muestra y salida nativa conservan la base confirmada 0.2.2.
 
-La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada por fotografía del propietario y Klog: conexión HTTPS con HTTP 200 y cuenta Microsoft autorizada mediante el registro propio de XCloud4, sin error. La sesión permanece en memoria hasta cerrar la aplicación. Credenciales de Xbox, catálogo y sesión de juego aún no están implementados. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
+La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada por fotografía del propietario y Klog: conexión HTTPS con HTTP 200 y cuenta Microsoft autorizada mediante el registro propio de XCloud4, sin error. La sesión permanece en memoria hasta cerrar la aplicación. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
+
+## Catálogo confirmado — 0.4.0
+
+El propietario y Klog confirmaron el catálogo real: 2733 títulos recibidos, 128 conservados por el límite local, 21 de esas 128 entradas con acceso indicado por Xbox y 32 nombres de Microsoft Store. Funcionan RPS, XSTS y credenciales cloud con el registro propio y la descripción XCloud4/PS4. Consulta `docs/CATALOGO_XBOX.md`.
+
+## Preparación de sesión — 0.5.0
+
+Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. Esta entrega todavía no recibe imagen, sonido ni control del juego. Su resultado remoto debe confirmarse en la consola. Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).
 
 ## Catálogo Xbox — 0.4.0
 
@@ -56,19 +64,19 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.3.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.5.0.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 
 ## Organización
 
 - `src/core`: entrada y ciclo de vida.
-- `src/auth`: HTTPS y acceso Microsoft por código, confirmados en consola con 0.3.1.
+- `src/auth`: HTTPS, cuenta Microsoft, catálogo Xbox y preparación de sesión. Cuenta y catálogo confirmados en consola.
 - `src/streaming`: sesión y transporte pendientes.
 - `src/video`: VideoOut y muestra H.264 con Videodec2.
 - `src/input`: lectura y reconexión del DualShock 4.
 - `src/audio`: muestra PCM con AudioOut; Opus pendiente.
-- `src/ui`: inicio, control, proyecto, imagen y sonido, y cuenta.
+- `src/ui`: inicio, control, proyecto, imagen y sonido, cuenta, catálogo y preparación de sesión.
 - `docs`: decisiones, arquitectura, preparación y referencias.
 - `scripts`: herramientas de preparación y trabajo local.
 
