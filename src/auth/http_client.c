@@ -15,7 +15,6 @@
 #define X4_HTTP_TIMEOUT_USEC (5u * 1000 * 1000)
 #define X4_HTTP_CHUNK 4096u
 #define X4_HTTP_URL_MAX 256
-#define X4_HTTP_FORM_MAX 8192
 #define X4_HTTP_VERSION_1_1 2
 #define X4_HTTP_METHOD_GET 0
 #define X4_HTTP_METHOD_POST 1
@@ -25,6 +24,8 @@
 #define X4_HTTPS_VERIFY_ALL 0xBDu
 
 static const char allowed_prefix[] = "https://login.microsoftonline.com/consumers/";
+/* The only destination of x4_http_passport_request. */
+static const char passport_url[] = "https://login.live.com/oauth20_token.srf";
 
 /* Xbox Live / Store destinations for x4_http_json_request. */
 #define X4_HTTP_JSON_URL_MAX 512
@@ -52,7 +53,7 @@ static const char sessions_path[] = "/v5/sessions/cloud/";
 
 /* DEST_SESSION is produced only by classify_session, never by classify. */
 enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE, DEST_SESSION };
-enum SessionRoute { ROUTE_NONE, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_RESOURCE };
+enum SessionRoute { ROUTE_NONE, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_CONNECT, ROUTE_RESOURCE };
 
 /* Request inputs copied into one block. It must outlive the native request,
  * connection and template, so it is freed only after they were deleted. */
@@ -366,8 +367,8 @@ static bool session_id(const char *id, size_t n)
 }
 
 /* https://<region host>/v5/sessions/cloud/{play | <id> | <id>/state |
- * <id>/keepalive}, nothing more. The host passes the same label checks as
- * the /v2/titles region. */
+ * <id>/keepalive | <id>/connect}, nothing more. The host passes the same
+ * label checks as the /v2/titles region. */
 static enum SessionRoute classify_session(const char *url)
 {
     size_t n = bounded_length(url, X4_HTTP_JSON_URL_MAX + 1);
@@ -388,6 +389,7 @@ static enum SessionRoute classify_session(const char *url)
     if (!tail[0]) return ROUTE_RESOURCE;
     if (!strcmp(tail, "/state")) return ROUTE_STATE;
     if (!strcmp(tail, "/keepalive")) return ROUTE_KEEPALIVE;
+    if (!strcmp(tail, "/connect")) return ROUTE_CONNECT;
     return ROUTE_NONE;
 }
 
@@ -694,6 +696,10 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
         allowed = method == X4_SESSION_HTTP_POST && json && !json[0];
         native = X4_HTTP_METHOD_POST;
         break;
+    case ROUTE_CONNECT:
+        allowed = method == X4_SESSION_HTTP_POST && json && json[0];
+        native = X4_HTTP_METHOD_POST;
+        break;
     case ROUTE_STATE:
         allowed = method == X4_SESSION_HTTP_GET && !json;
         native = X4_HTTP_METHOD_GET;
@@ -708,7 +714,7 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     if (!allowed) return X4_HTTP_ARGUMENT;
     size_t json_size = 0;
     int rc;
-    if (route == ROUTE_PLAY) {
+    if (route == ROUTE_PLAY || route == ROUTE_CONNECT) {
         h->stage = "cuerpo JSON rechazado";
         rc = check_json(json, &json_size);
         if (rc) return rc;
@@ -720,6 +726,28 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     if (rc) return rc;
     /* The empty keepalive POST still declares application/json. */
     Owned *o = own(native, url, json, json_size, json ? "application/json" : NULL, headers, count);
+    if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    return transfer(h, o, body, capacity, length, status, cancel);
+}
+
+/* Fixed destination: only the form comes from the caller. */
+static int perform_passport(X4Http *h, const char *form, char *body, size_t capacity, size_t *length,
+    int *status, const _Atomic int *cancel)
+{
+    h->stage = "argumentos HTTPS";
+    if (!form || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
+    body[0] = 0;
+    *length = 0;
+    *status = 0;
+    if (capacity > X4_HTTP_PASSPORT_BODY_MAX + 1) return X4_HTTP_ARGUMENT;
+    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
+    h->stage = "formulario rechazado";
+    size_t form_size = 0;
+    int rc = check_form(form, &form_size);
+    if (rc) return rc;
+    if (form_size == 0) return X4_HTTP_ARGUMENT;
+    Owned *o = own(X4_HTTP_METHOD_POST, passport_url, form, form_size, "application/x-www-form-urlencoded",
+        NULL, 0);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
     return transfer(h, o, body, capacity, length, status, cancel);
 }
@@ -736,6 +764,21 @@ int x4_http_request(X4Http *h, const char *url, const char *form, char *body, si
     /* Single owner: a concurrent call is refused without touching state. */
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform(h, url, form, body, capacity, length, status, cancel);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_passport_request(X4Http *h, const char *form, char *body, size_t capacity, size_t *length,
+    int *status, const _Atomic int *cancel)
+{
+    if (!h) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_passport(h, form, body, capacity, length, status, cancel);
     atomic_store(&h->busy, false);
     return rc;
 }

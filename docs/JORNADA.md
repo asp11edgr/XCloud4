@@ -122,6 +122,16 @@ El propietario envió una fotografía de SESION DE JUEGO con AMONGUS, "XBOX PREP
 
 Quedan confirmadas la creación, preparación y eliminación automática de una sesión remota con la descripción propia XCloud4/PS4/Orbis. Se guarda el hito con `v0.5.0`; todavía no hay autorización Passport de conexión, SDP/ICE, WebRTC ni medios o mando dentro de un juego. Círculo, cancelación durante creación y OPTIONS con sesión activa no se comprobaron por separado. No se ejecutaron pruebas automatizadas. La búsqueda de títulos continúa aplazada. El siguiente trabajo de la etapa 4 es completar la autorización de conexión y adaptar un transporte WebRTC real.
 
+## Autorización de conexión 0.6.0 y comienzo de la adaptación WebRTC
+
+Claude Code Pro con el modelo `claude-opus-5-5` implementó renovación del acceso Microsoft, solicitud Passport y autorización regional `/connect`, completando 53 turnos con éxito. Conserva el registro propio, secretos en memoria, TLS verificado, rutas restringidas, cancelación y DELETE final. Codex revisó el código, integró estados y pantalla 0.6.0 y ajustó la interpretación de `/connect` para rechazar JSON que no sea un objeto, además de cuerpos mal formados o con `errorDetails` no nulo. La autorización aceptada todavía no significa WebRTC ni un juego visible.
+
+Se inició la compilación de bibliotecas existentes para OpenOrbis. Mbed TLS 3.6.7 produjo las tres bibliotecas estáticas sin ejecutar programas ni pruebas. La configuración de libdatachannel terminó, pero su primer intento de compilación se detuvo por tipos BSD y `pthread_np.h` ausentes; requiere ajustes y revisión de ABI, DNS y entropía antes de incorporarla. Quedaron registradas versiones, configuración y limitaciones en `WEBRTC_PS4.md`. Esas bibliotecas no se incluyen en el PKG 0.6.0.
+
+Lubuntu dejó de responder a SSH y al servicio de ejecución de VirtualBox; el registro del hipervisor indicó falta de respuesta del invitado. Reponer la regla NAT y pedir apagado normal no lo recuperó. Se reinició la VM y SSH volvió a responder; el código de Windows y las bibliotecas guardadas en disco se conservaron. La causa del bloqueo no se estableció.
+
+La 0.6.0 compiló y se empaquetó sin errores ni avisos. `XCloud4-0.6.0.pkg`: 6619136 bytes, SHA-256 `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474`. Se transfirió a `/data/pkg/XCloud4-0.6.0.pkg` y la copia recuperada por FTP coincide. Se inició captura Klog y se pidió instalar y comprobar autorización con un título CON ACCESO. No se añadieron ni ejecutaron pruebas automatizadas. Confirmación real de Passport, `/connect` y cierre posterior pendiente; se conserva `v0.5.0` como último hito confirmado. La búsqueda de títulos sigue aplazada.
+
 ## GitHub al terminar la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

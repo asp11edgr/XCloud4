@@ -33,7 +33,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.5.0: interfaz, multimedia, cuenta, catalogo y preparacion de sesion Xbox\n");
+    printf("XCloud4 0.6.0: interfaz, multimedia, cuenta, catalogo y autorizacion de conexion Xbox\n");
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;

@@ -1,5 +1,9 @@
 # Instalar XCloud4
 
+## Autorización de conexión — 0.6.0
+
+Cerrar XCloud4, instalar `XCloud4-0.6.0.pkg` y aceptar reemplazar la aplicación. Está copiada y verificada en `/data/pkg`; elegir HDD o ALL en Package Source. Autorizar Microsoft nuevamente en CUENTA, abrir el catálogo con R1, elegir un título CON ACCESO y pulsar X. La autorización Passport y `/connect` se intentan automáticamente después de la preparación. Si Xbox acepta, aparece `XBOX ACEPTO LA CONEXION`; todavía no se transmite el juego. Esperar el cierre automático de 45 segundos y conservar una fotografía del mensaje o detalle HTTP si falla. Confirmación real pendiente. Consulta [AUTORIZACION_CONEXION.md](AUTORIZACION_CONEXION.md).
+
 ## Preparación de sesión — 0.5.0
 
 Cerrar XCloud4 antes de instalar `XCloud4-0.5.0.pkg`, aceptar reemplazar la aplicación y autorizar Microsoft nuevamente en CUENTA. Abrir el catálogo con R1, seleccionar un título marcado CON ACCESO y pulsar X. Esta versión prepara una sesión remota; todavía no transmite el juego.

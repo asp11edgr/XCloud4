@@ -24,7 +24,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.5.0", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.6.0", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -242,6 +242,8 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
     switch (s->state) {
     case X4_SESSION_WAITING: title = "XBOX ESTA PREPARANDO EL JUEGO..."; break;
     case X4_SESSION_READY: title = "XBOX PREPARO LA SESION"; break;
+    case X4_SESSION_AUTHORIZING: title = "AUTORIZANDO LA CONEXION..."; break;
+    case X4_SESSION_AUTHORIZED: title = "XBOX ACEPTO LA CONEXION"; break;
     case X4_SESSION_STOPPING: title = "CERRANDO LA SESION EN XBOX..."; break;
     case X4_SESSION_CLOSED: title = "SESION CERRADA"; break;
     case X4_SESSION_CANCELLED: title = "SOLICITUD CANCELADA"; break;
@@ -251,10 +253,15 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
     if (closing) title = "CERRANDO LA SESION Y LA APLICACION...";
     x4_text(p, 126, 448, 4, title, s->ready_seen && !s->cleanup_failed ? GREEN : WHITE);
     x4_text(p, 126, 523, 3, s->stage, MUTED);
-    if (s->state == X4_SESSION_READY) {
+    if (s->state == X4_SESSION_AUTHORIZED) {
+        snprintf(line, sizeof(line), "CIERRE EN %u SEGUNDOS. RECEPCION DEL JUEGO PENDIENTE.", s->seconds_left);
+        x4_text(p, 126, 587, 3, line, WHITE);
+    } else if (s->state == X4_SESSION_READY) {
         snprintf(line, sizeof(line), "LA SESION SE CERRARA EN %u SEGUNDOS.", s->seconds_left);
         x4_text(p, 126, 587, 3, line, WHITE);
-    } else if (s->ready_seen && !busy)
+    } else if (s->connection_authorized && !busy)
+        x4_text(p, 126, 587, 3, "XBOX ACEPTO EL PERMISO PARA CONECTAR ESTA SESION.", GREEN);
+    else if (s->ready_seen && !busy)
         x4_text(p, 126, 587, 3, "XBOX CONFIRMO QUE LA SESION ESTABA LISTA.", GREEN);
     else if (busy) {
         snprintf(line, sizeof(line), "TIEMPO TRANSCURRIDO: %u SEGUNDOS.", s->elapsed_seconds);
@@ -270,5 +277,5 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
         x4_text(p, 126, 722, 3, line, WHITE);
     }
     x4_text(p, 84, 867, 3, "CIRCULO  CERRAR Y VOLVER AL CATALOGO     OPTIONS  SALIR", WHITE);
-    x4_text(p, 84, 1004, 2, "ESTA ETAPA PREPARA Y CIERRA LA SESION. TODAVIA NO TRANSMITE EL JUEGO.", MUTED);
+    x4_text(p, 84, 1004, 2, "ESTA ETAPA AUTORIZA LA CONEXION Y CIERRA LA SESION. TODAVIA NO TRANSMITE EL JUEGO.", MUTED);
 }

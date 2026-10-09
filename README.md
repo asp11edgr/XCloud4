@@ -38,6 +38,10 @@ El propietario y Klog confirmaron el catálogo real: 2733 títulos recibidos, 12
 
 Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. El propietario y Klog confirmaron preparación de AMONGUS, estado listo para negociar y cierre automático con HTTP 200, sin error. Esta entrega todavía no recibe imagen, sonido ni control del juego. Consulta [SESION_XBOX.md](docs/SESION_XBOX.md). Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).
 
+## Autorización de conexión — 0.6.0
+
+La 0.6.0 renueva Microsoft, solicita Passport y envía `/connect` después de la preparación remota. Está compilada y copiada a la PS4 con huella verificada. Distingue la aceptación del permiso de conexión de la transmisión del juego, aún pendiente. Consulta [AUTORIZACION_CONEXION.md](docs/AUTORIZACION_CONEXION.md). Confirmación en consola pendiente; `v0.5.0` conserva el último hito confirmado.
+
 ## Catálogo Xbox — 0.4.0
 
 Desde CUENTA, después de autorizar Microsoft, R1 abre el catálogo. Se añade el intercambio de credenciales Xbox y la consulta de títulos en la región predeterminada que devuelva el servicio, con una lista local de hasta 128 entradas y nombres de Microsoft Store para las primeras 32 cuando se obtengan. La cruceta recorre los títulos; L1/R1 cambian ocho posiciones; cuadrado actualiza y círculo vuelve a la cuenta. Los permisos se muestran solo cuando los indica Xbox. La 0.4.0 está confirmada por fotografía y Klog: recibió 2733 títulos, guardó 128 por el límite local y obtuvo 32 nombres Store, con HTTP 200 y sin errores. Se conserva con la etiqueta v0.4.0. No inicia juegos ni incorpora WebRTC. Consulta `docs/CATALOGO_XBOX.md`.
@@ -64,7 +68,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.5.0.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.6.0.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
 
 El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
 

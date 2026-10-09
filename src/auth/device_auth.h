@@ -7,7 +7,10 @@
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
  * it implies no Xbox Live session or game access. Tokens stay private.
  * The same worker reads the Xbox cloud catalog with that token; Xbox
- * credentials exist only during that run and never reach a snapshot. */
+ * credentials exist only during that run and never reach a snapshot. A
+ * session run also renews the Microsoft access with its refresh token (a
+ * rotated refresh token is kept) to obtain the console-transfer token for
+ * the session's /connect; none of these tokens reaches a snapshot. */
 
 /* Local errors; native Net/Ssl/Http/pthread errors are reported unchanged. */
 enum {
@@ -67,12 +70,15 @@ void x4_auth_snapshot(X4Auth *auth, X4AuthSnapshot *out);
 /* Copy of the last catalog view; it holds no token, user hash or body. */
 void x4_auth_catalog_snapshot(X4Auth *auth, X4CatalogSnapshot *out);
 /* Prepares an Xbox cloud session for catalog title catalog_index with the
- * catalog's offering (see xbox_session.h); no video, audio or input yet.
- * Requires a READY catalog, a valid index, a valid Microsoft token and no
- * running worker. Publishes STARTING before the worker starts. The account
- * stays AUTHORIZED and the catalog view is kept. x4_auth_cancel stops it;
- * busy stays true through READY and the remote cleanup until every
- * credential is wiped and HTTPS is closed. */
+ * catalog's offering and authorizes its connection (see xbox_session.h); no
+ * video, audio or input yet. Requires a READY catalog, a valid index, a
+ * valid Microsoft token and no running worker. Publishes STARTING before the
+ * worker starts. The account stays AUTHORIZED and the catalog view is kept,
+ * except when Microsoft refuses the renewal with invalid_grant: then the
+ * local token and catalog are dropped and the account turns EXPIRED (no
+ * global sign-out). x4_auth_cancel stops it; busy stays true through
+ * AUTHORIZED and the remote cleanup until every credential is wiped and
+ * HTTPS is closed. */
 int x4_auth_start_session(X4Auth *auth, unsigned catalog_index);
 /* Copy of the last session view; no token, session path or ID. */
 void x4_auth_session_snapshot(X4Auth *auth, X4SessionSnapshot *out);

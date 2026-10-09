@@ -23,6 +23,10 @@ typedef struct X4Http X4Http;
 X4Http *x4_http_open(int *error);
 void x4_http_close(X4Http *http);
 
+/* Encoded forms are visible ASCII of at most this many bytes; a refresh token
+ * of 16 KiB still fits once percent-encoded. */
+#define X4_HTTP_FORM_MAX (64u * 1024)
+
 /* HTTPS only to https://login.microsoftonline.com/consumers/<path>. GET when
  * form is NULL, otherwise POST application/x-www-form-urlencoded. Returns 0
  * once any HTTP status and its whole body were read (body NUL terminated,
@@ -31,6 +35,17 @@ void x4_http_close(X4Http *http);
  * waits for the current native operation under its configured timeouts. */
 int x4_http_request(X4Http *http, const char *url, const char *form, char *body,
     size_t capacity, size_t *length, int *status, const _Atomic int *cancel);
+
+#define X4_HTTP_PASSPORT_BODY_MAX (64u * 1024)
+
+/* POST application/x-www-form-urlencoded to exactly
+ * https://login.live.com/oauth20_token.srf; the destination is fixed here and
+ * never chosen by the caller. form is non-empty visible ASCII of at most
+ * X4_HTTP_FORM_MAX bytes; capacity is at most X4_HTTP_PASSPORT_BODY_MAX + 1.
+ * Same TLS, timeout, redirect, cookie, quarantine and result rules as
+ * x4_http_request. */
+int x4_http_passport_request(X4Http *http, const char *form, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel);
 
 #define X4_HTTP_JSON_BODY_MAX (64u * 1024)
 #define X4_HTTP_RESPONSE_MAX (2u * 1024 * 1024)
@@ -65,6 +80,7 @@ enum X4HttpSessionMethod { X4_SESSION_HTTP_GET, X4_SESSION_HTTP_POST, X4_SESSION
  *   POST JSON  /v5/sessions/cloud/play            (non-empty JSON body)
  *   GET        /v5/sessions/cloud/<id>/state      (json NULL)
  *   POST       /v5/sessions/cloud/<id>/keepalive  (json "", empty body)
+ *   POST JSON  /v5/sessions/cloud/<id>/connect    (non-empty JSON body)
  *   DELETE     /v5/sessions/cloud/<id>            (json NULL)
  * <id> is 1..128 of [A-Za-z0-9_-] (GUIDs included) and never "play" or
  * "active". No query, fragment, escape, dot segment, port or userinfo.

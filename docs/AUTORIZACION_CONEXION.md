@@ -1,0 +1,27 @@
+# Autorización de conexión Xbox — 0.6.0
+
+## Alcance
+
+Después de preparar el título con el flujo confirmado en 0.5.0, el trabajador renueva el acceso Microsoft con el registro propio de XCloud4, obtiene un token Passport de transferencia de consola y envía una sola solicitud POST al recurso regional `/connect` de esa sesión. No negocia SDP/ICE ni recibe medios todavía. La aceptación de `/connect` no confirma WebRTC ni un juego visible.
+
+La implementación se basa en los intercambios de [autorización de GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs) y [sesión de GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs), adaptados en C a la capa HTTPS nativa existente. No se usa el identificador de otra aplicación.
+
+## Flujo
+
+1. Autorizar Microsoft, abrir el catálogo y elegir un título CON ACCESO con X.
+2. Esperar preparación remota y autorización automática de conexión.
+3. Si Xbox acepta `/connect`, aparece `XBOX ACEPTO LA CONEXION`. La sesión permanece como máximo 45 segundos y se elimina automáticamente.
+4. Círculo solicita cierre antes de volver al catálogo; OPTIONS solicita cierre antes de salir.
+5. Ante un rechazo, conservar el mensaje, detalle numérico y HTTP. La aplicación intenta eliminar la sesión creada aunque falle Passport o `/connect`.
+
+La 0.6.0 compiló y se empaquetó sin errores ni avisos. El PKG tiene 6619136 bytes y SHA-256 `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474`. Se copió a `/data/pkg/XCloud4-0.6.0.pkg`; la copia recuperada por FTP tiene la misma huella. La confirmación real en consola está pendiente. La base confirmada se conserva como `v0.5.0`.
+
+## Credenciales y cancelación
+
+El acceso y la renovación de Microsoft permanecen privados y solo en memoria. La renovación acepta los candidatos únicamente después de validar toda la respuesta; conserva el token de renovación anterior si Microsoft no devuelve otro. Un `invalid_grant` exacto en esa renovación elimina la cuenta y catálogo locales. Un rechazo de Passport se informa como error de autorización.
+
+La solicitud de renovación tiene plazo de 30 segundos y termina antes de atender una cancelación para conservar una posible rotación del token. Passport y `/connect` sí atienden cancelación. Siempre se intenta DELETE con tiempo limitado una vez conocida una ruta de sesión válida. No se repite `/connect` ni se cierra globalmente la cuenta Microsoft.
+
+El token Passport se usa únicamente para construir `userToken`, con caracteres y longitud acotados, y se borra después del envío. Los registros incluyen etapas fijas, estados y códigos HTTP; no incluyen credenciales ni cuerpos de respuesta. `/connect` requiere 2xx y cuerpo vacío o un objeto JSON válido sin `errorDetails` no nulo. Un valor JSON de otro tipo se rechaza.
+
+La pantalla y el registro distinguen preparación, autorización y cierre. `connection_authorized` indica aceptación de `/connect` y se conserva en el resultado final para diagnóstico; no indica recepción de video.

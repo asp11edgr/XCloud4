@@ -19,6 +19,10 @@
 #define X4_AUTH_DEVICE_URL "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
 #define X4_AUTH_TOKEN_URL "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 #define X4_AUTH_METADATA_URL "https://login.microsoftonline.com/consumers/v2.0/.well-known/openid-configuration"
+#define X4_AUTH_REFRESH_GRANT "refresh_token"
+/* Service scope of the console-transfer token sent to a session's /connect;
+ * requested with this app's own client ID, never another app's. */
+#define X4_AUTH_PASSPORT_SCOPE "service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN"
 #define X4_AUTH_USEC 1000000ull
 #define X4_AUTH_STEP_USEC 100000u
 #define X4_AUTH_DEFAULT_INTERVAL 5u
@@ -37,6 +41,14 @@ typedef struct {
     char device_code[2048];
     char form[8193];
 } X4AuthWork;
+
+/* Heap workspace of one connection authorization; wiped and freed on every
+ * path. Candidates hold a renewal until it is fully validated. */
+typedef struct {
+    char response[X4_HTTP_PASSPORT_BODY_MAX + 1];
+    char form[X4_HTTP_FORM_MAX + 1];
+    char access[X4_AUTH_TOKEN_SIZE], refresh[X4_AUTH_TOKEN_SIZE];
+} X4PassportWork;
 
 typedef struct {
     X4AuthSnapshot view;
@@ -268,13 +280,20 @@ static int exchange(X4Auth *a, X4AuthWork *w, X4Http *http, const char *url, boo
     return rc;
 }
 
+/* Reads only the "error" member; the caller wipes the body. */
+static bool error_code(const char *json, size_t length, char *code, size_t capacity)
+{
+    X4JsonField f = {.name = "error", .kind = X4_JSON_STRING, .text = code, .capacity = capacity};
+    bool ok = x4_json_fields(json, length, &f, 1) == 0 && f.found && code[0];
+    if (!ok) code[0] = 0;
+    return ok;
+}
+
 /* Reads only the "error" member; the body is wiped afterwards. */
 static bool oauth_error(X4AuthWork *w, size_t length, char *code, size_t capacity)
 {
-    X4JsonField f = {.name = "error", .kind = X4_JSON_STRING, .text = code, .capacity = capacity};
-    bool ok = x4_json_fields(w->response, length, &f, 1) == 0 && f.found && code[0];
+    bool ok = error_code(w->response, length, code, capacity);
     x4_secure_clear(w->response, sizeof(w->response));
-    if (!ok) code[0] = 0;
     return ok;
 }
 
@@ -470,6 +489,172 @@ static void check_connection(X4Auth *a, X4AuthWork *w, X4Http *http, Outcome *o)
     set(o, X4_AUTH_CONNECTED, 0, status, "TLS con Microsoft verificado");
 }
 
+/* Non-empty visible ASCII (no space or control byte) inside capacity. */
+static bool visible_token(const char *t, size_t capacity)
+{
+    size_t n = 0;
+    while (n < capacity && t[n]) {
+        unsigned char c = (unsigned char)t[n];
+        if (c < 0x21 || c > 0x7e) return false;
+        ++n;
+    }
+    return n > 0 && n < capacity;
+}
+
+/* Renews the Microsoft tokens with the stored refresh token. Once sent the
+ * request is not cancellable (cancel NULL, bounded by the HTTP layer's 30 s
+ * deadline and native timeouts): a rotated refresh token must be read and
+ * kept, never dropped midway. The stored tokens are replaced only by a fully
+ * validated answer; a transport error or malformed answer keeps them. Only
+ * invalid_grant ends the local Microsoft session, never a global sign-out. */
+static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_status, const char **stage)
+{
+    size_t used = 0, length = 0;
+    int status = 0;
+    *stage = "Microsoft no pudo renovar el acceso";
+    if (!visible_token(a->refresh_token, sizeof(a->refresh_token))) {
+        *stage = "Microsoft no entrego renovacion de acceso";
+        return X4_AUTH_E_SIGNED_OUT;
+    }
+    if (!form_add(p->form, sizeof(p->form), &used, "client_id", X4_AUTH_CLIENT_ID) ||
+        !form_add(p->form, sizeof(p->form), &used, "grant_type", X4_AUTH_REFRESH_GRANT) ||
+        !form_add(p->form, sizeof(p->form), &used, "refresh_token", a->refresh_token) ||
+        !form_add(p->form, sizeof(p->form), &used, "scope", X4_AUTH_SCOPE)) {
+        x4_secure_clear(p->form, sizeof(p->form));
+        return X4_AUTH_E_FORM;
+    }
+    /* Lifetime counted from before the request was sent. */
+    uint64_t sent = now();
+    int rc = x4_http_request(http, X4_AUTH_TOKEN_URL, p->form, p->response, sizeof(p->response), &length,
+        &status, NULL);
+    x4_secure_clear(p->form, sizeof(p->form));
+    *http_status = status;
+    if (rc) return rc;
+    if (status != 200) {
+        char code[64] = {0};
+        bool known = status == 400 && error_code(p->response, length, code, sizeof(code));
+        x4_secure_clear(p->response, sizeof(p->response));
+        bool expired = known && !strcmp(code, "invalid_grant");
+        x4_secure_clear(code, sizeof(code));
+        printf("XCloud4: renovacion Microsoft rechazada, estado HTTP %d\n", status);
+        if (!expired) return known ? X4_AUTH_E_REJECTED : X4_AUTH_E_STATUS;
+        /* This worker owns the tokens until it releases finished; main only
+         * reads them after acquiring it. The catalog goes with the token. */
+        wipe_tokens(a);
+        reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
+        publish(a, X4_AUTH_EXPIRED, 0, status, "la sesion de Microsoft caduco", NULL, NULL, 0);
+        *stage = "la sesion de Microsoft caduco";
+        return X4_AUTH_E_SIGNED_OUT;
+    }
+    char type[16] = {0};
+    X4JsonField f[] = {
+        {.name = "token_type", .kind = X4_JSON_STRING, .text = type, .capacity = sizeof(type)},
+        {.name = "access_token", .kind = X4_JSON_STRING, .text = p->access, .capacity = sizeof(p->access)},
+        {.name = "refresh_token", .kind = X4_JSON_STRING, .text = p->refresh, .capacity = sizeof(p->refresh)},
+        {.name = "expires_in", .kind = X4_JSON_UINT},
+    };
+    rc = x4_json_fields(p->response, length, f, sizeof(f) / sizeof(f[0]));
+    x4_secure_clear(p->response, sizeof(p->response));
+    /* A missing refresh_token keeps the current one; a present one must be
+     * usable, since it replaces the current one. */
+    bool valid = rc == 0 && f[0].found && bearer(type) && f[1].found &&
+        visible_token(p->access, sizeof(p->access)) && f[3].found && f[3].number >= 1 &&
+        f[3].number <= 86400 && (!f[2].found || visible_token(p->refresh, sizeof(p->refresh)));
+    if (!valid) {
+        x4_secure_clear(p->access, sizeof(p->access));
+        x4_secure_clear(p->refresh, sizeof(p->refresh));
+        *stage = "renovacion de Microsoft no valida";
+        return X4_AUTH_E_RESPONSE;
+    }
+    memcpy(a->access_token, p->access, sizeof(a->access_token));
+    if (f[2].found) memcpy(a->refresh_token, p->refresh, sizeof(a->refresh_token));
+    a->token_expiry = sent + f[3].number * X4_AUTH_USEC;
+    x4_secure_clear(p->access, sizeof(p->access));
+    x4_secure_clear(p->refresh, sizeof(p->refresh));
+    printf("XCloud4: acceso Microsoft renovado, estado HTTP %d\n", status);
+    return 0;
+}
+
+/* Console-transfer token from the (possibly rotated) refresh token, written
+ * to out only. Any refresh token in this answer is service specific and
+ * ignored: it never replaces the Microsoft one. */
+static int passport_token(X4Auth *a, X4PassportWork *p, X4Http *http, char *out, size_t capacity,
+    int *http_status, const char **stage, const _Atomic int *cancel)
+{
+    size_t used = 0, length = 0;
+    int status = 0;
+    *stage = "Microsoft rechazo la autorizacion de conexion";
+    if (!form_add(p->form, sizeof(p->form), &used, "client_id", X4_AUTH_CLIENT_ID) ||
+        !form_add(p->form, sizeof(p->form), &used, "scope", X4_AUTH_PASSPORT_SCOPE) ||
+        !form_add(p->form, sizeof(p->form), &used, "grant_type", X4_AUTH_REFRESH_GRANT) ||
+        !form_add(p->form, sizeof(p->form), &used, "refresh_token", a->refresh_token)) {
+        x4_secure_clear(p->form, sizeof(p->form));
+        *stage = "formulario de autorizacion de conexion";
+        return X4_AUTH_E_FORM;
+    }
+    int rc = x4_http_passport_request(http, p->form, p->response, sizeof(p->response), &length, &status, cancel);
+    x4_secure_clear(p->form, sizeof(p->form));
+    *http_status = status;
+    if (rc == X4_HTTP_CANCELLED || atomic_load(cancel)) {
+        x4_secure_clear(p->response, sizeof(p->response));
+        *stage = "autorizacion cancelada";
+        return X4_XBOX_PASSPORT_CANCELLED;
+    }
+    if (rc) {
+        *stage = "Microsoft no pudo autorizar la conexion";
+        return rc;
+    }
+    if (status != 200) {
+        x4_secure_clear(p->response, sizeof(p->response));
+        printf("XCloud4: autorizacion de conexion rechazada, estado HTTP %d\n", status);
+        return status == 400 ? X4_AUTH_E_REJECTED : X4_AUTH_E_STATUS;
+    }
+    X4JsonField f = {.name = "access_token", .kind = X4_JSON_STRING, .text = out,
+        .capacity = capacity < X4_AUTH_TOKEN_SIZE ? capacity : X4_AUTH_TOKEN_SIZE};
+    rc = x4_json_fields(p->response, length, &f, 1);
+    x4_secure_clear(p->response, sizeof(p->response));
+    if (rc || !f.found || !visible_token(out, f.capacity)) {
+        x4_secure_clear(out, capacity);
+        *stage = "autorizacion de conexion no valida";
+        return X4_AUTH_E_RESPONSE;
+    }
+    printf("XCloud4: autorizacion de conexion obtenida, estado HTTP %d\n", status);
+    return 0;
+}
+
+/* X4XboxPassport for session runs: same worker, same HTTPS context. The
+ * Microsoft tokens stay in the private context; only the console-transfer
+ * token reaches out, and only for the caller's /connect body. */
+static int passport_provider(void *context, X4Http *http, char *out, size_t capacity, int *http_status,
+    const char **stage, const _Atomic int *cancel)
+{
+    X4Auth *a = context;
+    if (!stage) return X4_AUTH_E_ARGUMENT;
+    *stage = "autorizacion de conexion no disponible";
+    if (!http_status || !out || capacity < 2) return X4_AUTH_E_ARGUMENT;
+    *http_status = 0;
+    out[0] = 0;
+    if (!a || !http || !cancel) return X4_AUTH_E_ARGUMENT;
+    if (atomic_load(cancel)) { *stage = "autorizacion cancelada"; return X4_XBOX_PASSPORT_CANCELLED; }
+    X4PassportWork *p = malloc(sizeof(*p));
+    if (!p) {
+        *stage = "sin memoria para autorizar la conexion";
+        return X4_AUTH_E_ALLOCATION;
+    }
+    memset(p, 0, sizeof(*p));
+    int rc = refresh_tokens(a, p, http, http_status, stage);
+    /* A cancel during the renewal is honoured only after it was kept. */
+    if (!rc && atomic_load(cancel)) {
+        *stage = "autorizacion cancelada";
+        rc = X4_XBOX_PASSPORT_CANCELLED;
+    }
+    if (!rc) rc = passport_token(a, p, http, out, capacity, http_status, stage, cancel);
+    if (rc) x4_secure_clear(out, capacity);
+    x4_secure_clear(p, sizeof(*p));
+    free(p);
+    return rc;
+}
+
 /* The Microsoft token is only read here; account state is never changed, so
  * it stays AUTHORIZED after any catalog outcome while the token is valid. */
 static void catalog_run(X4Auth *a)
@@ -487,10 +672,12 @@ static void catalog_run(X4Auth *a)
     a->xwork = NULL;
 }
 
-/* Reads the Microsoft token only; account and catalog views are untouched.
- * The Xbox credentials are reacquired inside the run and wiped by it. The
- * final view is published as returned: it already reflects any cancel, and
- * a failed remote cleanup must never be replaced by CANCELLED. */
+/* The Xbox credentials are reacquired inside the run and wiped by it. At
+ * READY the run calls passport_provider on this same worker, which renews
+ * (and may rotate) the Microsoft tokens; account and catalog views change
+ * only when Microsoft answers invalid_grant. The final view is published as
+ * returned: it already reflects any cancel, and a failed remote cleanup must
+ * never be replaced by CANCELLED. */
 static void session_run(X4Auth *a)
 {
     X4XboxWork *w = a->xwork;
@@ -499,7 +686,7 @@ static void session_run(X4Auth *a)
             a->session_title.name[0] ? a->session_title.name : a->session_title.id, a->session_offering, NULL);
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
-            &a->cancel, session_progress, a);
+            &a->cancel, session_progress, a, passport_provider, a);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);
@@ -814,7 +1001,8 @@ void x4_auth_session_snapshot(X4Auth *a, X4SessionSnapshot *out)
      * is never replaced. */
     if (busy && a->action == X4_AUTH_XBOX_SESSION && atomic_load(&a->cancel) &&
         (out->state == X4_SESSION_STARTING || out->state == X4_SESSION_WAITING ||
-            out->state == X4_SESSION_READY || out->state == X4_SESSION_STOPPING)) {
+            out->state == X4_SESSION_READY || out->state == X4_SESSION_AUTHORIZING ||
+            out->state == X4_SESSION_AUTHORIZED || out->state == X4_SESSION_STOPPING)) {
         out->state = X4_SESSION_STOPPING;
         out->seconds_left = 0;
         copy_text(out->stage, sizeof(out->stage), "cerrando sesion...");

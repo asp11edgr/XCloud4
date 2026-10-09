@@ -27,10 +27,11 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.5.0\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.6.0\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
-/* Cloud session preparation (milestone 0.5.0). Timings in monotonic usec. */
+/* Cloud session preparation (milestone 0.5.0) and connection authorization
+ * (0.6.0). Timings in monotonic usec. */
 #define X4_SESSION_USEC 1000000ull
 #define X4_SESSION_PROVISION_USEC (180ull * X4_SESSION_USEC)
 #define X4_SESSION_READY_USEC (45ull * X4_SESSION_USEC)
@@ -64,6 +65,9 @@ struct X4XboxWork {
     char origin[X4_XBOX_URL_SIZE];
     /* Validated ID of the remote session; private, never logged. */
     char session_id[X4_SESSION_ID_MAX + 1];
+    /* Console-transfer token from the provider; private, wiped once the
+     * /connect body was built. */
+    char passport[X4_XBOX_TOKEN_SIZE];
     X4Http *http;
     const _Atomic int *cancel;
     X4XboxProgress progress;
@@ -71,6 +75,8 @@ struct X4XboxWork {
     X4CatalogSnapshot result;
     /* Session runs only; progress above is NULL then. */
     X4SessionProgress session_progress;
+    X4XboxPassport passport_provider;
+    void *passport_context;
     X4SessionSnapshot session;
     uint64_t session_start;
 };
@@ -653,11 +659,13 @@ const X4CatalogSnapshot *x4_xbox_catalog(X4XboxWork *w, const char *microsoft_to
     return r;
 }
 
-/* Cloud session preparation. Only the lifecycle up to "ready to negotiate"
- * exists here: no /connect passport, SDP, ICE, WebRTC or media. No keepalive
- * is sent: nothing shows a session needs one before /connect, and READY is
- * held at most 45 s before the session is deleted. Session path, ID, bearer
- * and bodies never leave the workspace, logs only carry literals and codes. */
+/* Cloud session preparation and connection authorization. The lifecycle
+ * reaches "ready to negotiate" and then sends the console-transfer token to
+ * /connect once; no SDP, ICE, WebRTC or media exists yet. No keepalive is
+ * sent: nothing verified shows one is needed during this short pre-SDP hold,
+ * and AUTHORIZED is held at most 45 s before the session is deleted. Session
+ * path, ID, bearer, Passport token and bodies never leave the workspace,
+ * logs only carry literals and codes. */
 
 /* Terminal outcome decided before the cleanup DELETE runs. */
 typedef struct {
@@ -959,13 +967,123 @@ static bool session_provision(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     }
 }
 
-/* READY is held at most 45 s so no ready session is left idle on the
- * server; without a connect step there is nothing else to do with it. */
+/* {"userToken":"<token>"} into w->request. '"' and '\' are escaped and any
+ * byte outside printable ASCII is refused, so the untrusted token can never
+ * end the string or add a control character. The worst case (16 KiB, all
+ * escaped) stays far below the request buffer; every step is bounded. */
+static bool connect_body(X4XboxWork *w)
+{
+    static const char head[] = "{\"userToken\":\"", tail[] = "\"}";
+    size_t used = sizeof(head) - 1, i = 0;
+    memcpy(w->request, head, used);
+    for (; i < sizeof(w->passport) && w->passport[i]; ++i) {
+        unsigned char c = (unsigned char)w->passport[i];
+        if (c < 0x20 || c > 0x7e) return false;
+        bool escape = c == '"' || c == '\\';
+        /* Room for this character, the tail and its NUL. */
+        if (used + (escape ? 2 : 1) + sizeof(tail) > sizeof(w->request)) return false;
+        if (escape) w->request[used++] = '\\';
+        w->request[used++] = (char)c;
+    }
+    if (i == 0 || i == sizeof(w->passport)) return false;
+    memcpy(w->request + used, tail, sizeof(tail));
+    return true;
+}
+
+/* 2xx /connect body: empty (JSON whitespace only) is accepted; otherwise it
+ * must be one valid JSON object, refused when it carries a
+ * non-null errorDetails. 1 accepted, 0 refused by Xbox, -1 malformed or
+ * ambiguous. Nothing from the body is kept or logged. */
+static int connect_result(X4XboxWork *w, size_t length)
+{
+    size_t i = 0;
+    while (i < length && (w->response[i] == ' ' || w->response[i] == '\t' || w->response[i] == '\r' ||
+        w->response[i] == '\n')) ++i;
+    if (i == length) return 1;
+    X4JsonSpan root, v;
+    if (x4_json_parse(w->response, length, &root)) return -1;
+    if (x4_json_type(root) != X4_JSON_T_OBJECT) return -1;
+    int found = x4_json_member(root, "errorDetails", &v);
+    if (found < 0) return -1;
+    return found == 1 && x4_json_type(v) != X4_JSON_T_NULL ? 0 : 1;
+}
+
+/* READY -> AUTHORIZING -> AUTHORIZED. The private provider renews the
+ * Microsoft access and obtains the console-transfer token on this worker and
+ * this HTTPS context; that token only lives in w->passport and w->request
+ * and is wiped once the body is built and sent. /connect is posted at most
+ * once and never after a cancel was seen. true once Xbox accepted it;
+ * otherwise *end holds the outcome and the DELETE still follows. */
+static bool session_authorize(X4XboxWork *w, SessionEnd *end)
+{
+    session_state(w, X4_SESSION_AUTHORIZING, "autorizando conexion con Microsoft", 0);
+    if (atomic_load(w->cancel)) { end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada"); return false; }
+    int passport_status = 0;
+    const char *stage = NULL;
+    int rc = w->passport_provider(w->passport_context, w->http, w->passport, sizeof(w->passport),
+        &passport_status, &stage, w->cancel);
+    w->session.passport_http_status = passport_status;
+    if (rc) {
+        x4_secure_clear(w->passport, sizeof(w->passport));
+        if (rc == X4_XBOX_PASSPORT_CANCELLED) end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada");
+        else end_with(end, X4_SESSION_ERROR, rc, passport_status,
+            stage ? stage : "Microsoft no pudo autorizar la conexion");
+        return false;
+    }
+    bool built = connect_body(w) && session_url(w, w->session_id, "/connect");
+    x4_secure_clear(w->passport, sizeof(w->passport));
+    if (!built) {
+        x4_secure_clear(w->request, sizeof(w->request));
+        end_with(end, X4_SESSION_ERROR, X4_AUTH_E_FORM, 0, "solicitud de autorizacion de conexion");
+        return false;
+    }
+    /* Last point where a cancel provably keeps /connect unsent. */
+    if (atomic_load(w->cancel)) {
+        x4_secure_clear(w->request, sizeof(w->request));
+        end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada");
+        return false;
+    }
+    session_state(w, X4_SESSION_AUTHORIZING, "enviando autorizacion a Xbox", 0);
+    size_t length = 0;
+    int status = 0;
+    /* Cancellable: whatever /connect did, the cleanup DELETE follows. */
+    rc = session_call(w, X4_SESSION_HTTP_POST, w->request, w->cancel, &length, &status);
+    if (rc == X4_HTTP_CANCELLED) { end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada"); return false; }
+    if (rc) { transport_end(w, end, rc); return false; }
+    w->session.connect_http_status = status;
+    printf("XCloud4: sesion Xbox /connect estado HTTP %d\n", status);
+    if (status < 200 || status > 299) {
+        wipe_response(w, length);
+        end_with(end, X4_SESSION_ERROR, status == 401 || status == 403 ? X4_AUTH_E_XBOX : X4_AUTH_E_STATUS,
+            status, "Xbox rechazo la autorizacion de conexion");
+        return false;
+    }
+    int result = connect_result(w, length);
+    wipe_response(w, length);
+    if (result < 0) {
+        end_with(end, X4_SESSION_ERROR, X4_AUTH_E_RESPONSE, status, "respuesta de autorizacion no valida");
+        return false;
+    }
+    if (result == 0) {
+        end_with(end, X4_SESSION_ERROR, X4_AUTH_E_SESSION, status, "Xbox rechazo la autorizacion de conexion");
+        return false;
+    }
+    /* Accepted (202 included): authorization only, no media connection. */
+    w->session.connection_authorized = 1;
+    w->session.http_status = status;
+    if (atomic_load(w->cancel)) { end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada"); return false; }
+    session_state(w, X4_SESSION_AUTHORIZED, "Xbox acepto la autorizacion de conexion",
+        (unsigned)(X4_SESSION_READY_USEC / X4_SESSION_USEC));
+    return true;
+}
+
+/* AUTHORIZED is held at most 45 s so no authorized session is left idle on
+ * the server; without SDP/ICE there is nothing else to do with it yet. */
 static void session_hold(X4XboxWork *w, SessionEnd *end)
 {
     if (session_wait(w, UINT64_MAX, session_now() + X4_SESSION_READY_USEC) == 1)
         end_with(end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada");
-    else end_with(end, X4_SESSION_CLOSED, 0, 0, "sesion cerrada: conexion de video pendiente");
+    else end_with(end, X4_SESSION_CLOSED, 0, 0, "sesion cerrada: conexion autorizada, video pendiente");
 }
 
 /* One DELETE, deliberately not cancellable (cancel NULL): bounded by the
@@ -1016,13 +1134,13 @@ static void session_run(X4XboxWork *w, const char *microsoft_token, const X4Cata
     /* From here a validated path exists: every outcome ends in the DELETE. */
     SessionEnd end;
     if (atomic_load(w->cancel)) end_with(&end, X4_SESSION_CANCELLED, 0, 0, "sesion cancelada");
-    else if (session_provision(w, deadline, &end)) session_hold(w, &end);
+    else if (session_provision(w, deadline, &end) && session_authorize(w, &end)) session_hold(w, &end);
     session_cleanup(w, &end);
 }
 
 const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_token,
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
-    X4SessionProgress progress, void *context)
+    X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context)
 {
     memset(&w->result, 0, sizeof(w->result));
     memset(&w->session, 0, sizeof(w->session));
@@ -1032,6 +1150,8 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->progress = NULL;
     w->session_progress = progress;
     w->context = context;
+    w->passport_provider = passport;
+    w->passport_context = passport_context;
     w->session_start = session_now();
     size_t index = sizeof(offerings) / sizeof(offerings[0]);
     for (size_t i = 0; offering && i < sizeof(offerings) / sizeof(offerings[0]); ++i)
@@ -1045,6 +1165,11 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     if (!title || id == sizeof(title->id) || !title_id(title->id) ||
         index == sizeof(offerings) / sizeof(offerings[0])) {
         session_end(w, X4_SESSION_ERROR, X4_AUTH_E_ARGUMENT, 0, "titulo u oferta no valida");
+        return &w->session;
+    }
+    /* Refused before any request, so no remote session can exist. */
+    if (!passport) {
+        session_end(w, X4_SESSION_ERROR, X4_AUTH_E_ARGUMENT, 0, "autorizacion de conexion no disponible");
         return &w->session;
     }
     copy_text(w->session.title_name, sizeof(w->session.title_name), title->name[0] ? title->name : title->id);
@@ -1063,9 +1188,14 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     x4_secure_clear(w->url, sizeof(w->url));
     x4_secure_clear(w->origin, sizeof(w->origin));
     x4_secure_clear(w->session_id, sizeof(w->session_id));
+    x4_secure_clear(w->passport, sizeof(w->passport));
+    w->passport_provider = NULL;
+    w->passport_context = NULL;
     memset(w->result.titles, 0, sizeof(w->result.titles));
-    printf("XCloud4: sesion Xbox fin estado=%d http=%d error=0x%08x lista=%d limpieza=%d/%d/0x%08x\n",
+    printf("XCloud4: sesion Xbox fin estado=%d http=%d error=0x%08x lista=%d autorizada=%d passport=%d "
+        "connect=%d limpieza=%d/%d/0x%08x\n",
         (int)w->session.state, w->session.http_status, (unsigned)w->session.error, w->session.ready_seen,
+        w->session.connection_authorized, w->session.passport_http_status, w->session.connect_http_status,
         w->session.cleanup_failed, w->session.cleanup_http_status, (unsigned)w->session.cleanup_error);
     return &w->session;
 }
