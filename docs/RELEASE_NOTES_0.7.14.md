@@ -1,6 +1,6 @@
 # XCloud4 0.7.14 — nested SDP diagnostics
 
-This checkpoint adds numeric diagnostics for a parsed nested exchange before the existing direct SDP validation. Source scope, focused read-only review, full package build, matching source and transfer integrity are confirmed. **Console evidence is pending. No valid remote answer, corrected negotiation or game video/audio is established.**
+This checkpoint adds numeric diagnostics for a parsed nested exchange before the existing direct SDP validation. Source scope, focused read-only review, full package build, matching source and transfer integrity are confirmed. **The console repeats `ConnectionExchangeFailed`, with the SDP command keyword mask; the new nested helper is not entered. The root cause remains unknown and no valid remote answer or game video/audio is established. Development is paused at the owner's request.**
 
 ## Previous confirmed evidence
 
@@ -64,8 +64,16 @@ Application checkpoint `285ed7edff1e26fe524a0ee8368b8cb133fce78c` supplies the a
 
 Pinned vendors, RTC adapters and configuration are unchanged, with matching notices. Generated artifacts, Git metadata, local credentials and logs are excluded; original public upstream fixtures remain. Both application source and the dependency/native-adapter archive, with retained licenses, accompany the package checkpoint. Every earlier snapshot stays immutable.
 
-## Console status
+## Console result
 
-The verified package is available on the PS4. No 0.7.14 console result is recorded yet. Build/review/integrity evidence does not establish nested-field classifications, an accepted remote answer or received game media.
+The console identifies the installed application as **0.7.14**. Xbox user, XSTS and cloud authentication return **HTTP 200**; session creation returns **HTTP 202**. Passport returns **HTTP 200**, `/connect` returns **HTTP 202** and provisioning reaches **HTTP 200**. Native DNS lookup returns **0** in **16617 microseconds**, with the nonzero-address boolean **1**. The current offer is **1286 bytes / two candidates / three media sections**, and `POST /sdp` returns **HTTP 202**.
+
+After **33** pending HTTP 204 answer polls, keepalive dispatched at **29381 ms** succeeds with **HTTP 200 / 37 bytes**. The next normal SDP GET returns **HTTP 200 / 243 bytes**, poll **34**, at **30712 ms**. The direct public code is **`ConnectionExchangeFailed`**. Message diagnostics record **valid 1 / raw span 156 bytes / decoded 154 bytes / mask 0x00010400**: only **bit 10 (`command`)** and **bit 16 (`PerformSdpExchangeV1Command`)**. These terms reference the operation without establishing its underlying failure cause.
+
+No new nested-field diagnostic is emitted, because the logical outer error precedes the parsed-exchange helper. The final outcome is **ERROR / `0xFFFFF824`**, stage **“Xbox rejected the SDP exchange.”** ICE/RTC/video/audio counters remain **zero**. Remote deletion returns **HTTP 200**, without a cleanup error. This repeats the refusal pattern from the second 0.7.13 attempt; there is no evidence of a valid remote SDP answer, corrected negotiation or game media.
+
+## Paused state
+
+The owner requested a pause after reading and storing this error. Development is paused as of **October 9, 2026, 09:00 UTC (03:00 local)**. No further research, implementation, packages, builds or tests are undertaken during the pause. The refusal's root cause remains unknown. Package, corresponding source archives and frozen notices remain unchanged.
 
 No automated tests were added or run. The PS4 UI stays Spanish, repository documentation stays English and GitHub stays private. See [WebRTC status](WEBRTC_PS4.md) and [third-party notices](../THIRD_PARTY_NOTICES.md).

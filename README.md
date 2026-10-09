@@ -8,11 +8,13 @@ The owner confirmed that connection authorization completes without an error. Th
 
 Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth client identifier also used by GreenVita. The original XCloud4 registration is preserved. All authentication steps use the same selected client; refresh tokens are never reused across clients. The own registration worked for account access and the catalog but returned `invalid_scope` for Passport. See [connection authorization](docs/AUTORIZACION_CONEXION.md) and [the Passport investigation](docs/INVESTIGACION_PASSPORT.md).
 
-**Actual game video, game audio and game input are not present in this confirmed version.** Work has resumed on WebRTC negotiation and native media reception. Successful connection authorization alone does not establish a media connection.
+**Actual game video, game audio and game input are not present in this confirmed version.** Development reached WebRTC negotiation and native media integration, and is now paused at the owner's request. Successful connection authorization alone does not establish a media connection.
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development work: 0.7.14 nested SDP diagnostics
+## Development paused at 0.7.14
+
+The owner requested a pause after recording the current error. Work is paused as of **October 9, 2026, 09:00 UTC (03:00 local)**. No further research, implementation, package changes or builds are in progress.
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -42,7 +44,7 @@ The 0.7.1 diagnostics located failure during creation of a thread pool incorrect
 
 `XCloud4-0.7.13.pkg` summarizes a direct errorDetails message using fixed keyword bits and lengths, while keeping message contents private. Full build, matching source and VM/PC/PS4 retrieval hashes are confirmed. **Two attempts have distinct outcomes:** a 2458-byte HTTP 200 response fails validation before remote SDP application, without keyword output; a later 243-byte response reports **`ConnectionExchangeFailed`**, with mask **`0x00010400`** identifying the terms `command` and `PerformSdpExchangeV1Command`. Those terms identify the referenced operation, not its underlying failure cause. Cleanup succeeds in both attempts, with **no RTP/game media**. Peer inspection and Claude Opus 5.5's focused read-only review completed without a material finding. Product 0.7.13 uses **APP_VER 00.83**. See [0.7.13 both attempts and exact evidence](docs/RELEASE_NOTES_0.7.13.md).
 
-`XCloud4-0.7.14.pkg` classifies a parsed nested exchange's direct SDP and other field shapes using numeric diagnostics, without changing the accepted SDP rule or printing remote text. Claude Opus 5.5's focused read-only review completed in three turns / two reads. Full build, matching source and VM/PC/PS4 retrieval hashes are confirmed. Product 0.7.14 uses **APP_VER 00.84**. **Console evidence is pending; no valid remote answer, corrected negotiation or game media is established.** See [0.7.14 package, source and limits](docs/RELEASE_NOTES_0.7.14.md).
+`XCloud4-0.7.14.pkg` classifies a parsed nested exchange's direct SDP and other field shapes using numeric diagnostics, without changing the accepted SDP rule or printing remote text. Full build, focused Claude review, matching source and transfer integrity are confirmed. The console again reports **`ConnectionExchangeFailed`**, message mask **`0x00010400`** (`command` / `PerformSdpExchangeV1Command`), after successful keepalive. The new nested-field helper is **not entered**, because the logical outer error occurs first. Cleanup succeeds, with ICE/RTC/video/audio counters at zero. **The root cause remains unknown; no valid remote answer or game media is established.** Product 0.7.14 uses **APP_VER 00.84**. See [0.7.14 actual capture and paused status](docs/RELEASE_NOTES_0.7.14.md).
 
 The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, native DNS/entropy/thread adapters, bounded H.264 RTP reconstruction, Videodec2 output and Opus/AudioOut. Game controller messages remain pending. See [0.7.2 hardware evidence](docs/RELEASE_NOTES_0.7.2.md), [WebRTC status](docs/WEBRTC_PS4.md) and [live media limits](docs/MULTIMEDIA_EN_VIVO.md).
 
@@ -68,6 +70,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.7.11, scheduling | SDP is polled before heartbeat; keepalive still returns SessionNotActive without errorDetails, cleanup succeeds, no RTP/media. |
 | 0.7.12, diagnostic | Logical SDP refusal is identified as ConnectionExchangeFailed after successful keepalive; terminal GET not entered, cleanup succeeds, no media. |
 | 0.7.13, two attempts | A 2458-byte response fails validation; a later refusal identifies ConnectionExchangeFailed and the SDP command name, not its cause. Cleanup succeeds, no media. |
+| 0.7.14, paused | ConnectionExchangeFailed repeats with the SDP command mask; nested helper not entered, cleanup succeeds, ICE/RTC/media zero. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
@@ -86,7 +89,7 @@ Detailed evidence and package hashes are in the [development log](docs/JORNADA.m
 1. Prepare OpenOrbis and produce a minimal native application — confirmed.
 2. Establish local video, audio and DualShock 4 input — local media and UI confirmed.
 3. Implement Microsoft account authorization and the Xbox catalog — confirmed.
-4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; actual streaming in progress.
+4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; paused during negotiation before actual streaming.
 5. Improve reconnection, errors and performance — future work.
 
 The proposed first beta target is **720p at 30 FPS**. Its feasibility depends on actual decoder and transport behavior on the console. Title search remains a [future request](docs/MEJORAS_FUTURAS.md), not part of the current stage.

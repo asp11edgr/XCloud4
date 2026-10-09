@@ -409,6 +409,16 @@ Product 0.7.14 uses APP_VER 00.84. Claude Opus 5.5's focused static review compl
 
 The full VM package build succeeded: `XCloud4-0.7.14.pkg`, **8912896 bytes**, SHA-256 `891d1077c4d949534353023eafe27f0d4c7ec68839dba8fdb567fd6ac0602dc8`. VM, PC and PS4 retrieval hashes match. Application revision `285ed7edff1e26fe524a0ee8368b8cb133fce78c` supplies the authentication diagnostic separately from the immutable dependency/native-adapter archive: **83561616 bytes**, SHA-256 `55592c70d91bb259aed346273a2eb0cc23afb153e315538daea33dd2a8dc2c4d`. All **9367** manifest hashes matched locally, covering **150843700 source bytes**; the copied PC archive matches the guest hash and contains byte-identical frozen NOTICE. Generated artifacts/Git metadata/local credentials/logs are excluded, public upstream fixtures remain and every earlier snapshot is preserved.
 
-The verified package is available on the PS4; console results remain pending. A parsed exchange or fixed header class does not establish an accepted remote answer or game media.
+### 0.7.14 console attempt
+
+The console identifies the installed application as 0.7.14. Xbox user/XSTS/cloud authentication return HTTP 200; session creation returns HTTP 202. Passport returns HTTP 200, connect returns HTTP 202 and provisioning reaches HTTP 200. Native DNS lookup returns **0** in **16617 microseconds**, with the nonzero-address boolean **1**. Current offer is **1286 bytes / two candidates / three media sections**. SDP POST returns **HTTP 202**, followed by **33** pending HTTP 204 polls.
+
+Keepalive dispatched at **29381 ms** succeeds with **HTTP 200 / 37 bytes**. The next normal SDP GET returns **HTTP 200 / 243 bytes**, poll **34**, at **30712 ms**. Direct public code is **`ConnectionExchangeFailed`**. Message diagnostics record **valid 1 / raw span 156 / decoded 154 / mask 0x00010400**, only **bit 10 (`command`)** and **bit 16 (`PerformSdpExchangeV1Command`)**. No message content is logged; the underlying failure cause remains unknown.
+
+No nested-field diagnostic is emitted, because the logical outer error precedes the helper for a parsed exchange (`result == 1`). Final outcome is **ERROR / 0xFFFFF824**, stage “Xbox rejected the SDP exchange”; ICE/RTC/video/audio remain zero. Remote deletion returns **HTTP 200** without cleanup error. This repeats the second 0.7.13 refusal pattern, with no evidence of a valid remote SDP answer or game media.
+
+### Pause requested by the owner
+
+On **October 9, 2026, at 09:00 UTC (03:00 local)**, the owner asks to pause after reading/storing the current error. Work stops with the diagnostic captured and the root cause unresolved. No further research, implementation, package, build or test work is undertaken. Frozen NOTICE and package/source artifacts remain unchanged.
 
 The 0.7.13 documentation checkpoint was committed/pushed at `846b07f5ccc3bda69e7890d7dbab7d09be0b218a`; its private draft has three verified matching package/source/sidecar assets. Earlier snapshots stay immutable. See [0.7.14 frozen enum scope](RELEASE_NOTES_0.7.14.md).
