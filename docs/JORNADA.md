@@ -1,153 +1,166 @@
-# Jornada del 8 de octubre de 2026
+# Development log — October 8, 2026
 
-## Avance
+## Current confirmed state
 
-- Entorno de Lubuntu preparado y acceso local desde Windows.
-- Interfaz propia con inicio, control y proyecto.
-- VideoOut con dos buffers y manejo de errores.
-- Lectura del DualShock 4, detección de pulsaciones y reconexión.
-- Compilación a ELF/eboot y generación del primer PKG.
-- Icono propio, licencia GPL-3.0-only y avisos de dependencias.
-- Fuentes y licencias de GreenVita, Better xCloud y Moonlight PS4 revisadas; adaptación pendiente.
+The owner and console logs confirm **0.6.2** through Microsoft authorization, Xbox catalog, remote preparation, Passport HTTP 200, `/connect` HTTP 202 and automatic DELETE HTTP 200, with no cleanup error. Actual WebRTC game video/audio and input are the next milestone. The owner authorized continued work toward real video and audio.
 
-## Pendiente inmediato
+Repository documentation and GitHub content are English; the PS4 interface remains Spanish. The GitHub repository must be private. Historical entries below distinguish preparation, static review, compilation and subsequent console confirmation. No automated tests were added or run during these milestones.
 
-El usuario instaló el paquete 0.1.0 en su PS4 12.00 con GoldHEN v2.4b18.7. Al abrirlo, la consola mostró que los datos de la aplicación están dañados. La foto confirma el fallo de inicio; todavía no demuestra cuál es su causa. Pantalla y control siguen sin confirmarse en la consola. Xbox, audio y decodificación siguen pendientes. No se han ejecutado pruebas automatizadas.
+## Initial environment and application
 
-Se obtuvo acceso al registro de la consola por el servidor Klog de GoldHEN. En el segundo intento se registró `EXEC /app0/eboot.bin`, seguido de `Loading /app0/sce_module/libSceFios2.prx fails (0x80020002)` y `PRX_SCE_MODULE_LOAD_ERROR` (`0xa0020102`). Esto identifica una dependencia ausente antes de `main`. Los registros completos se guardan fuera del repositorio.
+The existing Lubuntu VM was prepared with local Windows access. XCloud4 added an original home/controller/project UI, double-buffered VideoOut with errors, DualShock 4 reading/pressed transitions/reconnection, ELF/eboot/PKG generation, an original icon, GPL-3.0-only licensing and dependency notices. GreenVita, Better xCloud and Moonlight PS4 sources/licenses were researched; source adaptation was still pending.
 
-La corrección 0.1.1 agregó Fios2 al paquete desde una carpeta externa de módulos locales. Se utiliza la variante SELF del ejemplo `hello_world` incluido en el archivo verificado de OpenOrbis v0.5.4. No se cambia su contenido ni se incorpora el módulo a Git.
+### 0.1.0: missing Fios2
 
-El paquete 0.1.1 se compiló y generó en Lubuntu. El GP4 incluye `sce_module/libSceFios2.prx`; el módulo tiene SHA-256 `3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01`. El PKG mide 6619136 bytes y tiene SHA-256 `f38e3321f1327d4c2bfeffce42b732840e3d705e1c5f5bf9f662fd867a544497`. Se transfirió a `/data/pkg/XCloud4-0.1.1.pkg` mediante FTP y se descargó esa copia para comparar su huella: coincide. Se solicita al propietario instalar y abrir la versión corregida.
+The owner installed 0.1.0 on PS4 12.00 with GoldHEN v2.4b18.7. Startup showed the damaged-application-data screen. The photo established a startup failure but not its cause.
 
-También se obtuvo una copia local de Fios2 de la consola por FTP. Empieza con la cabecera ELF: el servidor entrega el módulo descifrado, no un SELF listo para empaquetar. Se conserva fuera de Git como evidencia; no se utilizó en el paquete. El empaquetador rechaza esta entrada sin convertir.
+Klog access was obtained. The second launch recorded `EXEC /app0/eboot.bin`, `Loading /app0/sce_module/libSceFios2.prx fails (0x80020002)` and `PRX_SCE_MODULE_LOAD_ERROR` (`0xa0020102`). This identified a missing dependency before `main`. Complete logs stay outside the repository.
 
-El usuario instaló y abrió la 0.1.1. El registro confirmó que Fios2 se cargó y que el siguiente bloqueo es `/app0/sce_module/libc.prx` ausente, con los mismos códigos de error de carga. La 0.1.2 agrega libc desde el mismo ejemplo del SDK y exige ambos módulos durante el empaquetado.
+### 0.1.1: Fios2 added, libc missing
 
-Se corrigió la identificación inicial de estos módulos: las fuentes de ambos están en `src/modules` de OpenOrbis v0.5.4, y su script `build-and-copy.sh` genera los módulos que acompañan a los ejemplos. Son auxiliares abiertos de OpenOrbis, no módulos propietarios de Sony. El módulo real de sistema obtenido por FTP se conserva aparte y no se utiliza. SHA-256 del auxiliar `libc.prx`: `39ad53672bb0b14895f8465eb1619478ab935f5afe5dbf69c15f02cfc0a75ce6`.
+Version 0.1.1 added Fios2 from an external module directory, using the SELF from the verified OpenOrbis v0.5.4 hello_world example without modifying it or committing the binary. GP4 includes `sce_module/libSceFios2.prx`. Its SHA-256 is `3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01`.
 
-La 0.1.2 se compiló y empaquetó en Lubuntu con ambos auxiliares. Mide 6619136 bytes; SHA-256 `4c42328bed5150f2f7654a4b9b37c31c8abdcfa88447899c09966e3724141bee`. Se copió por FTP a `/data/pkg/XCloud4-0.1.2.pkg` y la copia descargada de vuelta tiene la misma huella. Se avisó al usuario para instalar y abrir esta versión mientras se captura el registro. Inicio, pantalla y control de esta versión siguen pendientes de confirmación.
+The PKG was built in Lubuntu, sent to `/data/pkg/XCloud4-0.1.1.pkg` and downloaded back over FTP with a matching hash. The owner's launch then confirmed Fios2 loaded, followed by missing `/app0/sce_module/libc.prx` with the same loading errors.
 
-## Resultado confirmado de la 0.1.2
+A native Fios2 copy was also obtained from the console by FTP. It began with ELF, as the server returned a decrypted module rather than a package-ready SELF. It stayed outside Git and was not used. The packager rejects an unconverted ELF.
 
-El registro de la consola muestra `EXEC /app0/eboot.bin` y `XCloud4 0.1.2: inicio de interfaz y control` para el proceso 75, sin el error de módulos ausentes de los procesos anteriores. El propietario confirmó: "aparecen 2 opciones la de control y da de proyecto, las dos funcionan bien". Quedan confirmados el inicio y las dos vistas en PS4 12.00 con GoldHEN v2.4b18.7. No se han comprobado individualmente todos los botones, ejes y gatillos; tampoco Xbox, decodificación ni audio. Se conserva el PKG verificado y se registra esta versión como base funcional.
+### 0.1.2: startup confirmed
 
-## Revisión con Claude Code
+Version 0.1.2 added libc from the same SDK example and made packaging require both modules. The original characterization was corrected: their corresponding source is in OpenOrbis v0.5.4 `src/modules`, with `build-and-copy.sh` generating the auxiliaries. They are open OpenOrbis modules, not proprietary Sony modules. The console-derived module was not used. Auxiliary libc SHA-256: `39ad53672bb0b14895f8465eb1619478ab935f5afe5dbf69c15f02cfc0a75ce6`.
 
-Claude Code Pro se utilizó para dos revisiones estáticas con Sonnet 5. Se contrastaron sus propuestas con los encabezados y ejemplos del SDK y con los archivos generados. Las dudas sobre el tipo de memoria, el pitch de vídeo y la lista de archivos del paquete no demostraron defectos. Una propuesta posterior sobre GOT/RELRO requiere confirmar el comportamiento del cargador y no se ha aplicado.
+The package built in Lubuntu and its FTP round-trip hash matched. Klog shows `EXEC /app0/eboot.bin` and the 0.1.2 startup header for process 75 without previous missing-module errors. The owner confirmed that `CONTROL` and `PROYECTO` appear and both work. Startup and those views are confirmed on PS4 12.00; every button/axis/trigger was not checked individually. Xbox, decoding and sound were still future work at this stage. This milestone is preserved as `v0.1.2`.
 
-El usuario pidió utilizar Opus 5.5. La versión 2.1.220 rechazó ese modelo porque requiere 2.1.280 o posterior; Claude Code se actualizó mediante WinGet a 2.1.292. Dos revisiones posteriores registran efectivamente `claude-opus-5-5`. La primera rechazó el cambio propuesto sobre GOT/RELRO por no resolver su propia hipótesis y eliminar una sección que requiere el conversor. La segunda, con el registro real, confirmó que la dependencia ausente es la explicación respaldada por la evidencia y señaló que la aceptación del módulo agregado sigue pendiente. Ninguna revisión sustituye la ejecución real en PS4.
+## Claude Code setup and initial reviews
 
-## Preparación de la muestra 0.2.0
+Claude Code Pro performed two static reviews with Sonnet 5. Proposals were compared with SDK headers/examples and generated files. Concerns about memory type, video pitch and package file lists did not establish defects. A later GOT/RELRO proposal depended on unverified loader behavior and was not applied.
 
-Se agregó la tercera opción IMAGEN Y SONIDO con muestra H.264 sintética, Videodec2 cargado al entrar, buffers de memoria directa, conversión NV12 a RGB y tonos PCM de 48 kHz mediante AudioOut en un hilo nativo. X repite, cuadrado conserva el silencio y círculo vuelve. Son una imagen y tonos independientes, sin conexión con Xbox ni demostración de sincronización WebRTC. Las estructuras ABI se adaptaron de la propuesta GPL OpenOrbis #213 con fuente fijada y atribución; no se copió la implementación de Moonlight.
+The owner requested Opus 5.5. Claude Code 2.1.220 rejected that model because it required 2.1.280 or newer; WinGet updated it to 2.1.292. Two later reviews actually recorded `claude-opus-5-5`. One rejected the proposed GOT/RELRO change because it did not resolve its hypothesis and removed a section needed by the converter. The review with console evidence identified the missing dependency as the supported explanation, while noting that the added module still needed console confirmation. Static review never substitutes for PS4 execution.
 
-Claude Code Pro realizó una revisión estática con `claude-opus-5-5`, confirmada en `modelUsage` del resultado. Se contrastaron sus propuestas con tipos y formatos reales y se aplicaron correcciones sobre capacidad de enumeración de módulos, nombres con extensión, aceptación de buffers, fallos de mapeo y estado del audio. Los límites de esta revisión están en `MULTIMEDIA.md`. No se ejecutaron pruebas automatizadas.
+## 0.2.0: local media sample
 
-El paquete final se compiló y generó en Lubuntu sin errores de compilación. El GP4 incluye la muestra, el ejecutable y ambos auxiliares OpenOrbis. Tamaño: 6619136 bytes. SHA-256: `a67ddc21d3d2e5fc2e700ec24407862f83238c6c2b5f3e633171c531671f0a5d`. Se copió a `/data/pkg/XCloud4-0.2.0.pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalar, abrir IMAGEN Y SONIDO e informar el resultado mientras se captura Klog. Inicio y reproducción de la 0.2.0 pendientes; la base 0.1.2 sigue conservada.
+The third home option, `IMAGEN Y SONIDO`, adds an eight-second synthetic H.264 pattern and alternating soft stereo PCM tones. It uses native Videodec2 and AudioOut; it is not Xbox footage or an audiovisual synchronization result.
 
-## Resultado de video 0.2.0 y corrección de audio 0.2.1
+Claude Opus 5.5 reviewed module-list capacity, names with extensions, decoder buffer ownership, mapping failures and audio state. The review limits and ABI attribution are in [MULTIMEDIA.md](MULTIMEDIA.md). The package built in Lubuntu without compile errors and GP4 includes the sample, executable and both OpenOrbis auxiliaries. The transferred and downloaded package hashes matched.
 
-El propietario informó que el video parece ir bien. Su foto de IMAGEN Y SONIDO muestra la imagen sintética y 217 / 240 imágenes; el audio indica `0x809B0001`. Klog confirma `primera imagen H264 640x368 pitch=640`, `MUESTRA TERMINADA` y `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` al iniciar audio. Queda confirmada la reproducción de esta muestra H.264 en PS4 12.00. No demuestra rendimiento a 720p ni reproducción desde WebRTC.
+The owner reported apparently working video. The photo shows 217 / 240 frames and audio error `0x809B0001`. Klog confirms first H.264 frame `640x368 pitch=640`, sample completion and `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007`. This confirms the local H.264 sample on 12.00, not 720p performance or WebRTC reception.
 
-La 0.2.1 abre MAIN con el usuario SYSTEM (0xFF), siguiendo el ejemplo oficial de audio-wav de OpenOrbis v0.5.4, y espera el consumo antes de reutilizar el bloque PCM. Agrega registros de init, open, hilo y finalización. Claude Code Pro revisó el ajuste con `claude-opus-5-5`; no detectó defectos concretos de ABI, hilo o vida útil del buffer. Se contrastó el código de ALREADY_INIT con el encabezado del SDK. No se ejecutaron pruebas automatizadas.
+## 0.2.1: local sound confirmed, exit failure located
 
-La corrección se compiló y empaquetó en Lubuntu sin errores. Paquete `XCloud4-0.2.1.pkg`, 6619136 bytes, SHA-256 `6023aeacd4521e3e486ad3fb335bafab77631bd92613c56a5383037f341ab2e9`. Se copió a `/data/pkg` y la copia recuperada por FTP tiene la misma huella. Se avisó al propietario para instalarla mientras se captura Klog; sonido 0.2.1 pendiente. La implementación de video no cambió.
+Version 0.2.1 opens MAIN with SYSTEM (`0xFF`) following OpenOrbis v0.5.4's public audio-wav example, waits for consumption before reusing PCM and logs init/open/thread/completion. Claude Opus 5.5 found no concrete ABI, thread or buffer-lifetime defect in that change. The ALREADY_INIT constant was compared with the SDK header. Video remained unchanged. The package built and its FTP round-trip hash matched.
 
-## Confirmación de sonido y corrección del cierre 0.2.2
+The owner confirmed sound works. Klog records successful SYSTEM AudioOutOpen and two plays of 384000 samples with error zero.
 
-El propietario confirmó que el sonido de la 0.2.1 funciona. Klog registra AudioOutOpen SYSTEM correcto y dos reproducciones de 384000 muestras sin error. Informó también CE-34878-0 al pulsar OPTIONS. El proceso 84 termina con SIGSYS en libkernel después de un salto desde `0x409330`; el ELF exacto de la 0.2.1 contiene `_exit@plt` en `0x9330`, y el retorno de main termina en esa función. El fallo está ubicado en la salida final.
+The owner also reported `CE-34878-0` on `OPTIONS`. Process 84 ended with SIGSYS in libkernel after a branch from `0x409330`; the exact 0.2.1 ELF contains `_exit@plt` at `0x9330`, reached by returning from `main`. This locates the failure at final process exit.
 
-La 0.2.2 prepara y resuelve SystemService antes del cierre de recursos, solicita LoadExec con `"exit"` y evita retornar de main. Permite reintentar desde la interfaz si falla la preparación, se rechaza la solicitud o pasan diez segundos sin que la consola retire el proceso. Claude Opus 5.5 revisó el flujo; se aplicó su observación sobre la espera limitada y la pausa entre reintentos. Se conservaron las implementaciones confirmadas de audio y video. No se ejecutaron pruebas automatizadas.
+## 0.2.2: clean exit confirmed
 
-Se compiló y empaquetó en Lubuntu sin errores. `XCloud4-0.2.2.pkg`: 6619136 bytes, SHA-256 `be3c6ceceaac2fd5ccc20a169bc2f2127ef83dc616eb1f4e4001803adc2f497e`. Se copió a `/data/pkg` de PS4 y se comparó la huella del archivo recuperado por FTP: coincide. Se avisó al propietario para instalar y comprobar OPTIONS con captura Klog. Cierre real de esta versión pendiente.
+Version 0.2.2 prepares/resolves SystemService before releasing resources, requests LoadExec with `"exit"` and avoids returning from `main`. The UI allows another attempt if preparation or the request fails, or ten seconds pass without process removal. Claude Opus 5.5 reviewed the flow; bounded waiting and a pause between attempts were applied. Confirmed audio/video implementations were preserved. The package built and its FTP round-trip hash matched.
 
-## Resultado confirmado de la 0.2.2
+After installing, the owner confirmed return to the PS4 home screen without `CE-34878-0`. Klog for process 90 records resources released, exit request, `Kill for LoadExec(0x5a)` and `Kill for LoadExec(0x5a) => 0`. Local video, PCM tones and clean exit are confirmed and preserved as `v0.2.2`. Microsoft, catalog, Opus and WebRTC were still pending at that point.
 
-El propietario instaló la 0.2.2 y confirmó: "si ya funciono correctamente" al preguntar si OPTIONS regresa al inicio sin CE-34878-0. Quedan confirmados video de la muestra, tonos PCM y cierre al menú de PS4. Se conserva la 0.2.2 como nueva base funcional. Cuenta Microsoft, catálogo, Opus y WebRTC siguen pendientes.
+## Microsoft registration and 0.3.0
 
-Klog registra `recursos cerrados`, `solicitar salida al menu PS4`, `Kill for LoadExec(0x5a)` y `Kill for LoadExec(0x5a) => 0` para el proceso 90. Esto confirma la solicitud de cierre de la nueva versión y coincide con el resultado visual informado por el propietario.
+The owner requested continued Claude use and a project-owned registration, authorizing a temporary reference client if the own registration could not be obtained. Microsoft Entra was switched to the personal account directory. XCloud4 was configured for personal accounts and the owner authorized pressing Register, accepting Microsoft's policies. The portal issued public client ID `f9ac8684-1032-4131-bb47-d2f58da9bb93`; public client flows were enabled and saved. No secret, redirect URI or administrator consent was created. The own client was used for this milestone.
 
-## Registro Microsoft y preparación 0.3.0
+Claude Opus 5.5 wrote the native HTTPS layer and device-code worker in two scoped assignments. Codex integrated `CUENTA`, bounded JSON, own registration, module loading and cancellation before exit. Retained HTTP inputs and the worker completion/cancellation race were reviewed. Confirmed 0.2.2 audio/video sources stayed intact.
 
-El propietario pidió continuar usando Claude y preparar el registro propio, con GreenVita como alternativa temporal si no se obtenía. En Microsoft Entra se cambió al directorio de su cuenta personal, se preparó XCloud4 para cuentas personales y el propietario autorizó pulsar Registrar, que acepta las directivas de Microsoft. El portal entregó el identificador público `f9ac8684-1032-4131-bb47-d2f58da9bb93`. Se guardó Permitir flujos de clientes públicos habilitado. No se creó un secreto, no se concedió consentimiento administrativo y no se usa el identificador de GreenVita.
+A third Claude integration review reported no serious defect and noted the `sceHttpReadData` size argument. Its 64-bit declaration was confirmed and adjusted to `size_t`. The final 0.3.0 package built without errors/warnings and its FTP round-trip hash matched. Actual HTTPS and device authorization were still pending before installation.
 
-Claude Code Pro con `claude-opus-5-5` escribió la capa HTTPS nativa y el trabajador de OAuth por dispositivo en dos encargos separados, con edición limitada a esos archivos. Codex integró CUENTA, el lector JSON acotado, el registro propio, la carga de módulos y la cancelación antes de salir. Se revisaron las entradas retenidas por solicitudes HTTP y la carrera de cancelación al finalizar el trabajador. Audio y decodificación conservan las fuentes confirmadas en 0.2.2. La conexión y autorización desde la PS4 todavía están pendientes.
+### 0.3.0 SSL lookup failure
 
-En una tercera revisión de la integración, Claude no encontró defectos graves y señaló el tamaño del argumento de `sceHttpReadData`. Se confirmó la declaración de 64 bits y se ajustó a `size_t`. Se compiló y empaquetó la versión final en Lubuntu sin errores ni avisos. No se añadieron ni ejecutaron pruebas automatizadas.
+The owner's photo shows `INICIO HTTPS (RED/TLS)`, detail `0x80020002`, HTTP 0. Klog shows `Sysmodule libSceSsl -> 0x00000000`, followed by `modulo libSceSsl -> 0x80020002`: name lookup failed and the fallback returned ENOENT. No Microsoft request had been sent, so this was not evidence of account, registration or TLS-negotiation failure. FTP listings placed Ssl/Http under `/system/priv/lib`, but that view did not establish access from the application sandbox.
 
-`XCloud4-0.3.0.pkg`: 6619136 bytes. SHA-256: `13d826e4b2e682f4ec40aeeaec0ecf4fc9b39b4d577ff08aff86416cd7485859`. Se copió a `/data/pkg/XCloud4-0.3.0.pkg`; la huella del archivo recuperado por FTP coincide. Se inició captura Klog para que el propietario instale, abra CUENTA y compruebe conexión antes del acceso por código. Resultados de esta versión en consola pendientes.
+## 0.3.1: HTTPS and Microsoft authorization confirmed
 
-## Fallo HTTPS de 0.3.0 y corrección 0.3.1
+Claude Opus 5.5 analyzed the log and reviewed the concrete fix. Name lookup was retained and matching Init/Term exports were added for SSL/HTTP. Equal export addresses identify one provider; differing addresses stop lookup as ambiguous. Probes work even without a module name. The native sandbox common path uses the declared OpenOrbis function without logging its identifier. Existing fallbacks and private native paths are later attempts, with result logging. Media loading order stayed intact; no invented aliases or disabled TLS validation were introduced.
 
-La fotografía del propietario muestra `INICIO HTTPS (RED/TLS)`, detalle `0x80020002` y HTTP 0. Klog confirma `Sysmodule libSceSsl -> 0x00000000` seguido de `modulo libSceSsl -> 0x80020002`: la búsqueda por nombre no localiza el módulo y la ruta de respaldo devuelve ENOENT. Todavía no se envió la solicitud a Microsoft; no demuestra un fallo de cuenta, registro ni de negociación TLS. Las listas obtenidas por FTP sitúan Ssl/Http en `/system/priv/lib`, pero esa vista no garantiza acceso desde el sandbox de la aplicación.
+The first build found OpenOrbis lacks `strnlen`; a bounded scan replaced it. The final package built without errors/warnings and its FTP round-trip hash matched.
 
-Claude Opus 5.5 analizó el registro y revisó la corrección concreta. La 0.3.1 conserva la búsqueda por nombre y añade la resolución de las parejas Init/Term para SSL y HTTP. Coincidencias con las mismas direcciones corresponden al mismo proveedor; direcciones distintas detienen la resolución por ambigüedad. Los sondeos también funcionan si no se obtiene el nombre del módulo. Se añadió la ruta común del sandbox usando la función declarada por OpenOrbis; no se imprime su identificador. Los respaldos existentes y la ruta privada nativa quedan como últimos intentos, con registro de cada resultado. Los medios conservan su orden de carga anterior. No se inventaron alias de bibliotecas ni se desactivó la validación TLS.
+The owner's photo shows `CUENTA MICROSOFT AUTORIZADA`. Klog identifies 0.3.1, resolves `sceSslInit` from `libSceSsl2.sprx` (handle `0x3a`), initializes Net with zero and marks Net/Ssl/Http HTTPS ready. The connection check ends state 3, HTTP 200, error zero. Device-code and token requests return HTTP 200; authorization ends state 4 (`X4_AUTH_AUTHORIZED`), error zero.
 
-La primera compilación detectó que OpenOrbis no declara `strnlen`; se sustituyó por un recorrido acotado. La versión final compiló y se empaquetó sin errores ni avisos. `XCloud4-0.3.1.pkg`: 6619136 bytes, SHA-256 `abb2ca847e67998e8534d51bc59441d9979d28c9424d4e8821486dd1be7c3022`. Se copió a `/data/pkg/XCloud4-0.3.1.pkg` y la huella del archivo recuperado por FTP coincide. No se ejecutaron pruebas automatizadas. Conexión HTTPS y acceso Microsoft reales pendientes de instalar y abrir esta versión en la consola.
+Native HTTPS and Microsoft authorization with XCloud4's own registration are confirmed on PS4 12.00, preserved as `v0.3.1`. Logs contain states/sizes, not codes or tokens. The account exists only in memory and is lost on exit. That result alone did not establish Xbox credentials, catalog, streaming eligibility or game media.
 
-## Resultado confirmado de la 0.3.1: cuenta Microsoft autorizada
+## 0.4.0: Xbox catalog
 
-El propietario envió una fotografía de CUENTA con `CUENTA MICROSOFT AUTORIZADA`. Klog identifica `XCloud4 0.3.1`, localiza `sceSslInit` en `libSceSsl2.sprx` (handle `0x3a`), inicializa Net con retorno cero y registra `HTTPS listo (Net/Ssl/Http)`. La consulta de conexión termina en estado 3, HTTP 200, error cero. La solicitud de código recibe HTTP 200; después de las consultas de espera, el intercambio de token recibe HTTP 200 y termina en estado 4 (`X4_AUTH_AUTHORIZED`), error cero.
+The owner asked to proceed with Xbox and asked about progress. At that time, stage 3 of 5 had Microsoft confirmed, with Xbox credentials/catalog under construction; WebRTC was the next stage.
 
-La fotografía y el registro coinciden: funciona la conexión HTTPS y el acceso Microsoft mediante el registro propio de XCloud4 en PS4 12.00. Los registros contienen estados y tamaños, nunca códigos ni tokens. Se conserva esta entrega con la etiqueta `v0.3.1`. La sesión Microsoft permanece solo en memoria y se pierde al cerrar la aplicación. Este resultado todavía no confirma una sesión Xbox, derechos de juego, catálogo ni streaming. La siguiente etapa es el intercambio de credenciales Xbox y el acceso al catálogo real.
+Claude Opus 5.5 implemented and statically reviewed Xbox requests, JSON and the span reader. Its final run completed **56 turns** without tool denials and recorded the selected model. Codex integrated account → R1 → catalog, Square refresh, D-pad selection and L1/R1 movement by eight. One worker reuses private Microsoft access for RPS, XSTS, cloud credentials and default-region `/v2/titles`. Valid Microsoft access survives catalog error/cancellation. The list retains 128 entries; the first 32 request Store names in batches of eight. Public snapshots/logs receive no tokens or bodies. TLS validation, time limits and disabled redirects remain enabled.
 
-## Preparación del catálogo Xbox 0.4.0
+Codex removed XErr meanings that Claude acknowledged were unverified, adjusted the received counter/local-limit indicator and added cancellation during catalog traversal. The package built without errors/warnings and the FTP round-trip hash matched.
 
-El propietario pidió avanzar con Xbox y preguntó la etapa del proyecto. Se mantiene la etapa 3 de 5: Microsoft confirmado, sesión Xbox y catálogo en preparación; streaming/WebRTC es la etapa siguiente. Claude Code Pro, modelo `claude-opus-5-5`, implementó y revisó por lectura la capa Xbox, las solicitudes JSON y el lector por tramos. Su ejecución final completó 56 turnos sin denegaciones de herramientas; el resultado local confirma el modelo. No se añadieron ni ejecutaron pruebas automatizadas.
+### Confirmed catalog result
 
-Codex integró CUENTA → R1 → CATALOGO, actualización con cuadrado, selección con cruceta y páginas con L1/R1. El mismo trabajador reutiliza el token Microsoft privado para RPS, XSTS, credenciales cloud y `/v2/titles` de la región predeterminada. Mantiene el token Microsoft vigente si falla o se cancela el catálogo. La lista conserva hasta 128 entradas; se consultan nombres Store para las primeras 32. La vista pública y los registros no reciben tokens ni cuerpos. El transporte conserva TLS, plazos y redirecciones desactivadas. Codex retiró interpretaciones de XErr que Claude reconoció no haber verificado, ajustó el contador recibido y el indicador de límite, y añadió cancelación durante el recorrido del catálogo.
+The owner sent a photo showing 0.4.0, 2733 titles received and 128 locally retained. Klog confirms Microsoft AUTHORIZED, then RPS, XSTS, `xgpuweb` login and `/v2/titles`, all HTTP 200. The regional response is 1247270 bytes with 2733 valid entries, 128 retained and 21 of those marked with access by Xbox. Four Store batches obtain eight names each, 32 total. Final state is READY, HTTP 200, error zero, XErr zero.
 
-La aplicación final compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.4.0.pkg`: 6619136 bytes, SHA-256 `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1`. Se copió a `/data/pkg/XCloud4-0.4.0.pkg` y la huella recuperada por FTP coincide. Se inició captura Klog y se prepararon instrucciones para instalar, autorizar Microsoft nuevamente y pulsar R1. Credenciales Xbox, catálogo real y compatibilidad de la descripción propia de dispositivo permanecen pendientes de confirmar en la PS4. No se inicia ningún juego en esta versión.
+The own XCloud4/PS4 description was accepted. The free-to-play fallback was unnecessary. This milestone is preserved as `v0.4.0`. Catalog navigation, refresh and cancellation were not checked separately, and no game was started or streamed. Stage 3 reached its first real account/catalog milestone.
 
-## Resultado confirmado de la 0.4.0: catálogo Xbox
+## 0.5.0: game preparation and closure
 
-El propietario informó "Listo si lo mostró" y envió fotografía de la 0.4.0 con el catálogo, 2733 títulos recibidos y 128 en la lista por el límite local. Klog confirma nuevamente Microsoft AUTHORIZED, HTTP 200 y error cero; después RPS, XSTS, login `xgpuweb` y `/v2/titles` reciben HTTP 200. La respuesta regional tiene 1247270 bytes, 2733 entradas válidas, 128 guardadas y 21 de esas 128 con permiso indicado por Xbox. Los cuatro lotes Store obtienen ocho nombres cada uno, 32 en total. El catálogo termina READY, HTTP 200, error cero y XErr cero.
+The owner requested title search as a future update, not implementation now. It is recorded in [MEJORAS_FUTURAS.md](MEJORAS_FUTURAS.md). Existing applications remain research bases: GreenVita for Xbox exchanges, Better xCloud for settings and Moonlight PS4 for native APIs. WebRTC candidates and SDK evidence were recorded in [WEBRTC_PS4.md](WEBRTC_PS4.md); none was integrated at this point.
 
-Se guarda la 0.4.0 como base funcional con la etiqueta `v0.4.0`. Quedan confirmados la autorización Microsoft, los intercambios Xbox, la descripción propia XCloud4/PS4 aceptada por la consulta y la visualización del catálogo real. No fue necesario el fallback de juegos gratuitos. No se ha iniciado ni transmitido un juego; la navegación, actualización y cancelación de catálogo todavía no se comprobaron por separado. La etapa 3 del plan (cuenta y catálogo) alcanza su primer hito real; lo siguiente es la etapa 4, sesión de juego y WebRTC.
+Claude Opus 5.5 implemented session transport, private Xbox credential reuse and account-worker integration, completing **52 turns** successfully. Codex integrated X from the catalog, the session view, waiting for closure on return/exit, fixed local error messages and packaging. Static reading added a deadline check after the remote state response, preventing late READY, and validated the title identifier before public display.
 
-## Preparación de sesión de juego 0.5.0
+The worker POSTs `/v5/sessions/cloud/play` once for the selected title, then polls readiness. It uses the own XCloud4/PS4/Orbis registration/profile. Creation is not repeated after transport failure. ReadyToConnect or Provisioned mean prepared for negotiation, not a connected game. A ready session is held at most 45 seconds before automatic deletion. Circle waits for closure before returning; `OPTIONS` waits before native exit. DELETE remains bounded after cancellation; unconfirmed closure remains an error. No Passport, SDP, ICE or game media was present in 0.5.0.
 
-El propietario pidió anotar búsqueda de títulos para actualizaciones futuras y continuar con la siguiente etapa. Quedó registrada en `docs/MEJORAS_FUTURAS.md`, sin implementar búsqueda ni modificar su entrada de texto. Preguntó también por aprovechar las aplicaciones investigadas: se mantiene GreenVita como base de los intercambios Xbox, Better xCloud como referencia de configuración y Moonlight PS4 como investigación de APIs de medios, con adaptación nativa de PS4. Las candidatas WebRTC y la evidencia del SDK se documentaron en `docs/WEBRTC_PS4.md`; ninguna se integró ni compiló todavía.
+The package built without errors/warnings and its FTP round-trip hash matched.
 
-Claude Code Pro con `claude-opus-5-5` implementó el transporte de sesión, la reutilización privada de los intercambios Xbox y su integración con el trabajador de cuenta. Su resultado confirma 52 turnos, éxito y ausencia de error. Codex integró X desde el catálogo, la pantalla de sesión, espera del cierre al volver/salir, mensajes de errores locales y empaquetado. En la revisión por lectura, Codex añadió comprobación del plazo después de recibir el estado remoto para impedir READY tardío y validó el identificador del título antes de copiarlo al mensaje público. No se añadieron ni ejecutaron pruebas automatizadas.
+### Confirmed preparation result
 
-La nueva entrega solicita `/v5/sessions/cloud/play` para el título elegido y consulta su estado. Usa el registro y descripción propios de XCloud4/PS4/Orbis. No se repite la creación ante fallos de transporte. ReadyToConnect o Provisioned indican únicamente preparación remota para negociar; una sesión lista se mantiene como máximo 45 segundos y después se elimina. Círculo espera el cierre antes de volver al catálogo; OPTIONS espera antes de la salida nativa. DELETE se intenta con tiempo limitado aun después de cancelar. Un cierre sin confirmar permanece como error. No se envía autorización Passport de conexión, SDP ni ICE y no se recibe un juego; no se afirma compatibilidad WebRTC.
+The owner's AMONGUS photo shows Xbox preparation, readiness to negotiate and 34 seconds remaining. Klog identifies 0.5.0: creation HTTP 202 (153 bytes), resource wait HTTP 200 (75 bytes), readiness HTTP 200 (70 bytes), READY. At timeout: STOPPING, DELETE HTTP 200 with empty response, error zero, CLOSED. Result: `ready_seen=1`, `cleanup_failed=0`, cleanup HTTP 200.
 
-La 0.5.0 compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.5.0.pkg`: 6619136 bytes, SHA-256 `bda87ebf4f46faf427c5ee54724789cb41020f890f26417152071dce3a252440`. Se copió a `/data/pkg/XCloud4-0.5.0.pkg`; el archivo recuperado por FTP tiene la misma huella. Preparación de sesión y cierre reales pendientes de instalar y abrir esta versión en PS4. La base confirmada anterior sigue siendo `v0.4.0`.
+Creation, preparation and automatic deletion with the own device description are confirmed, preserved as `v0.5.0`. Passport, WebRTC, game media and input were still pending. Circle, cancellation during creation and `OPTIONS` with an active session were not checked separately.
 
-## Resultado confirmado de la 0.5.0: sesión preparada y cerrada
+## 0.6.0: authorization implementation and external WebRTC builds
 
-El propietario envió una fotografía de SESION DE JUEGO con AMONGUS, "XBOX PREPARO LA SESION", "XBOX LISTA PARA NEGOCIAR LA CONEXION" y 34 segundos restantes. Klog identifica la 0.5.0; después de los intercambios Xbox registra creación HTTP 202 (153 bytes), espera de recursos HTTP 200 (75 bytes), estado listo HTTP 200 (70 bytes) y READY. Al terminar el plazo registra STOPPING, DELETE HTTP 200 con cuerpo vacío, error cero y estado final CLOSED. El resultado conserva `ready_seen=1`, `cleanup_failed=0` y cierre HTTP 200.
+Claude Opus 5.5 implemented Microsoft renewal, Passport and regional `/connect` in **53 turns**, successfully. It retained own registration, in-memory secrets, verified TLS, restricted routes, cancellation and final DELETE. Codex integrated states/UI and tightened `/connect` response validation: reject malformed JSON, a non-object root or non-null `errorDetails`. Accepted authorization does not establish WebRTC or visible media.
 
-Quedan confirmadas la creación, preparación y eliminación automática de una sesión remota con la descripción propia XCloud4/PS4/Orbis. Se guarda el hito con `v0.5.0`; todavía no hay autorización Passport de conexión, SDP/ICE, WebRTC ni medios o mando dentro de un juego. Círculo, cancelación durante creación y OPTIONS con sesión activa no se comprobaron por separado. No se ejecutaron pruebas automatizadas. La búsqueda de títulos continúa aplazada. El siguiente trabajo de la etapa 4 es completar la autorización de conexión y adaptar un transporte WebRTC real.
+Mbed TLS 3.6.7 built static archives for OpenOrbis without running programs/tests. libdatachannel configuration completed, but the first build stopped on missing BSD types and `pthread_np.h`; ABI, DNS and entropy work was still required. Pins/configuration/limits are in [WEBRTC_PS4.md](WEBRTC_PS4.md). Those dependencies were not in the 0.6.0 package.
 
-## Autorización de conexión 0.6.0 y comienzo de la adaptación WebRTC
+Lubuntu stopped responding to SSH and VirtualBox guest execution; the hypervisor log reported an unresponsive guest. Restoring NAT forwarding and requesting a normal shutdown did not recover it. The VM was reset; SSH recovered and saved Windows source/external archives were retained. The cause of the hang was not established.
 
-Claude Code Pro con el modelo `claude-opus-5-5` implementó renovación del acceso Microsoft, solicitud Passport y autorización regional `/connect`, completando 53 turnos con éxito. Conserva el registro propio, secretos en memoria, TLS verificado, rutas restringidas, cancelación y DELETE final. Codex revisó el código, integró estados y pantalla 0.6.0 y ajustó la interpretación de `/connect` para rechazar JSON que no sea un objeto, además de cuerpos mal formados o con `errorDetails` no nulo. La autorización aceptada todavía no significa WebRTC ni un juego visible.
+The 0.6.0 package built without errors/warnings and its FTP round-trip hash matched. Before the owner's console result, `v0.5.0` remained the last confirmed milestone.
 
-Se inició la compilación de bibliotecas existentes para OpenOrbis. Mbed TLS 3.6.7 produjo las tres bibliotecas estáticas sin ejecutar programas ni pruebas. La configuración de libdatachannel terminó, pero su primer intento de compilación se detuvo por tipos BSD y `pthread_np.h` ausentes; requiere ajustes y revisión de ABI, DNS y entropía antes de incorporarla. Quedaron registradas versiones, configuración y limitaciones en `WEBRTC_PS4.md`. Esas bibliotecas no se incluyen en el PKG 0.6.0.
+### Observed Passport refusal
 
-Lubuntu dejó de responder a SSH y al servicio de ejecución de VirtualBox; el registro del hipervisor indicó falta de respuesta del invitado. Reponer la regla NAT y pedir apagado normal no lo recuperó. Se reinició la VM y SSH volvió a responder; el código de Windows y las bibliotecas guardadas en disco se conservaron. La causa del bloqueo no se estableció.
+The owner's 1000XRESIST photo shows remote readiness and Microsoft's authorization refusal, detail `0xfffff828`, HTTP 400. Klog confirms account/catalog success, creation HTTP 202, readiness HTTP 200, Microsoft renewal HTTP 200, Passport HTTP 400 (211 bytes). `/connect` was not sent. DELETE returned HTTP 200 without cleanup error.
 
-La 0.6.0 compiló y se empaquetó sin errores ni avisos. `XCloud4-0.6.0.pkg`: 6619136 bytes, SHA-256 `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474`. Se transfirió a `/data/pkg/XCloud4-0.6.0.pkg` y la copia recuperada por FTP coincide. Se inició captura Klog y se pidió instalar y comprobar autorización con un título CON ACCESO. No se añadieron ni ejecutaron pruebas automatizadas. Confirmación real de Passport, `/connect` y cierre posterior pendiente; se conserva `v0.5.0` como último hito confirmado. La búsqueda de títulos sigue aplazada.
+The specific OAuth code was not retained in 0.6.0. At that point, no account/network fault or exact cause could be concluded.
 
-## Rechazo Passport en 0.6.0 y diagnóstico 0.6.1
+## 0.6.1: safe OAuth diagnosis
 
-El propietario envió una foto de 1000XRESIST con sesión lista y rechazo de autorización Microsoft, detalle `0xfffff828`, HTTP 400. Klog confirma Microsoft y catálogo correctos, creación HTTP 202, estado listo HTTP 200, renovación de Microsoft HTTP 200 y Passport HTTP 400 (211 bytes). `/connect` no se envió. La sesión se eliminó mediante DELETE HTTP 200, sin error de limpieza. El código de error específico de Microsoft no se conservó en 0.6.0, por lo que no se concluye una causa ni un problema de cuenta o red.
+Claude Opus 5.5 implemented safe error classification in `device_auth.c`, completing **15 turns** successfully. Codex reviewed it, updated version/error-heading color and documented diagnosis separately from a fix. No external identifier, retry or scope change was added to that version. The package built without errors/warnings and its FTP round-trip hash matched.
 
-Claude Code Pro con `claude-opus-5-5` realizó la revisión e implementó clasificación segura de errores en `device_auth.c`, con 15 turnos y resultado de éxito. Codex revisó el cambio, ajustó versión y color del encabezado, documentó la diferencia entre diagnóstico y corrección y compiló la 0.6.1. No se incorporó un identificador ajeno, reintentos ni un cambio de permiso sin evidencia. No se añadieron ni ejecutaron pruebas automatizadas.
+The owner's next photo and Klog identified **`invalid_scope`**. Remote preparation/renewal succeeded, Passport returned HTTP 400, `/connect` was not sent, and DELETE HTTP 200 confirmed closure. No numeric Microsoft subcode was obtained. The cause comparison is documented in [INVESTIGACION_PASSPORT.md](INVESTIGACION_PASSPORT.md).
 
-La 0.6.1 compiló y se empaquetó sin errores ni avisos. PKG de 6619136 bytes, SHA-256 `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e`; transferido a `/data/pkg/XCloud4-0.6.1.pkg` y recuperado con la misma huella. Se inició captura Klog y se pidió al propietario instalar y repetir para identificar el motivo concreto. Resultado de ese diagnóstico y corrección del rechazo pendientes. La base confirmada sigue siendo `v0.5.0`.
+## 0.6.2: connection authorization confirmed
 
-## Confirmed 0.6.2 result
+With the owner's prior fallback authorization, Claude Opus 5.5 implemented the shared authentication profile in **12 turns**, successfully. All steps use one selected client; no refresh tokens cross clients. The own registration remains available. The interface/log announce the temporary public client also used by GreenVita, without implying this project owns that registration.
 
-The owner confirmed that the temporary reference client completes without an error. Klog identifies XCloud4 0.6.2 and records Microsoft renewal HTTP 200, Passport HTTP 200 (1090 bytes), `/connect` HTTP 202 (empty response), AUTHORIZED, and automatic DELETE HTTP 200. Final state is CLOSED with `connection_authorized=1`, `cleanup_failed=0`, and error zero. The own client had returned `invalid_scope`; the comparison establishes a client-dependent difference, but does not establish Microsoft's exact registration policy.
+The owner confirmed that no error occurred. Klog identifies 0.6.2 and records Microsoft renewal **HTTP 200**, Passport **HTTP 200** (1090 bytes), `/connect` **HTTP 202** (empty response), AUTHORIZED and automatic DELETE **HTTP 200**. Final state: CLOSED, `connection_authorized=1`, `cleanup_failed=0`, error zero.
 
-Claude Code Pro with `claude-opus-5-5` implemented the shared authentication profile in 12 turns. All authentication stages use the same selected client, without mixing refresh tokens. The own registration remains available. No SDP, ICE, game video, game audio or game input is present in this version. Automated tests were not added or run. The confirmed package is 6619136 bytes, SHA-256 `25c724aca93728d53c9d4c6b7e52f0acff3dff45c263779bdbcc87e25699b601`.
+The reference client accepts the same flow that the own client refused. This supports a client-dependent difference, not a verified explanation of Microsoft's exact registration policy. No SDP, ICE, game video/audio or game input was present in this version. This milestone is preserved as **`v0.6.2`**.
 
-The owner requested a private GitHub repository with English repository documentation, while retaining the Spanish PS4 interface, and then authorized continued work toward actual video and audio.
+## Package integrity record
 
-## GitHub al terminar la jornada
+Every listed PKG is **6619136 bytes**. Each was transferred to `/data/pkg/XCloud4-VERSION.pkg`, downloaded back over FTP and matched to the development PC hash. These checks establish file integrity, not hardware behavior.
 
-El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.
+| Version | SHA-256 |
+|---|---|
+| 0.1.1 | `f38e3321f1327d4c2bfeffce42b732840e3d705e1c5f5bf9f662fd867a544497` |
+| 0.1.2 | `4c42328bed5150f2f7654a4b9b37c31c8abdcfa88447899c09966e3724141bee` |
+| 0.2.0 | `a67ddc21d3d2e5fc2e700ec24407862f83238c6c2b5f3e633171c531671f0a5d` |
+| 0.2.1 | `6023aeacd4521e3e486ad3fb335bafab77631bd92613c56a5383037f341ab2e9` |
+| 0.2.2 | `be3c6ceceaac2fd5ccc20a169bc2f2127ef83dc616eb1f4e4001803adc2f497e` |
+| 0.3.0 | `13d826e4b2e682f4ec40aeeaec0ecf4fc9b39b4d577ff08aff86416cd7485859` |
+| 0.3.1 | `abb2ca847e67998e8534d51bc59441d9979d28c9424d4e8821486dd1be7c3022` |
+| 0.4.0 | `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1` |
+| 0.5.0 | `bda87ebf4f46faf427c5ee54724789cb41020f890f26417152071dce3a252440` |
+| 0.6.0 | `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474` |
+| 0.6.1 | `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e` |
+| 0.6.2 | `25c724aca93728d53c9d4c6b7e52f0acff3dff45c263779bdbcc87e25699b601` |
+
+## GitHub and continuing work
+
+The owner requested publication, selecting a **private** repository. The connected account previously observed was `asapedgr`; live authentication/visibility must be checked during publication. Keep SDK, credentials, private keys, logs and generated packages outside source history. Packages are stored separately from source.
+
+The owner clarified that English applies to GitHub content, while the PS4 interface stays Spanish. After briefly preserving 0.6.2, the owner authorized the next streaming stage and reiterated use of Claude. Current work targets real WebRTC negotiation, H.264 reception and Opus/AudioOut, with actual console results still required before calling that milestone complete.

@@ -1,17 +1,18 @@
-# XCloud4
+# XCloud4 development instructions
 
-Native PS4 client project using OpenOrbis v0.5.4, C23 and Clang/LLD 21. Firmware 12.00 with GoldHEN v2.4b18.7. Package 0.1.0 installs but fails at startup: kernel logs identify missing /app0/sce_module/libSceFios2.prx, PRX_SCE_MODULE_LOAD_ERROR 0xa0020102.
+Native PS4 client using OpenOrbis v0.5.4, C23 and Clang/LLD 21. Target hardware: firmware 12.00 with GoldHEN v2.4b18.7.
 
-- Source of truth: this Git repository. Compilation runs in the existing Lubuntu VM at `~/Projects/XCloud4`, with `~/.config/xcloud4/env.sh`.
-- Build: `X4_RUNTIME_MODULES=/external/local/runtime make -j2 package`. Host libraries used by the legacy packaging tool are isolated outside the repository. Packaging must require both libSceFios2.prx and libc.prx as SELF modules. Package 0.1.1 passed the initial Fios2 lookup but then the console reported missing libc.prx; 0.1.2 addresses that dependency.
-- Package 0.1.2 started successfully according to the PS4 kernel log; the owner confirmed CONTROL and PROYECTO appear and work. Full per-button/axis verification, Xbox auth, media decode and audio remain pending. Preserve this working baseline.
-- Confirmed milestone 0.2.2: own UI, VideoOut, DualShock 4 and a local H264/PCM demo. Owner confirmed video, sound and clean OPTIONS exit in PS4 12.00. PCM uses SYSTEM0xFF for MAIN and waits for consumed buffers. OPTIONS resolves SystemServiceLoadExec exit, closes resources and waits for shell removal (10sec timeout/recoverUI on rejection). Preserve this working baseline. Next milestone: Microsoft device-code auth and Xbox catalog. WebRTC and Opus remain pending.
-- Use `docs/REFERENCIAS.md` for pinned upstream references. No code from GreenVita, Better xCloud or Moonlight PS4 has been incorporated yet.
-- Videodec2 ABI types are adapted from GPL OpenOrbis PR213 (Backporter commit 9b9e82a2ec4e8cd3c34a086ca82339032cf69da0). Preserve source pin and attribution. Do not confuse research on numeric API constants with copying Moonlight implementation.
-- Preserve source attribution and GPL-3.0-only licensing. Do not incorporate unlicensed source or proprietary Sony SDK binaries. The required libc/Fios2 modules are open auxiliary modules built from OpenOrbis v0.5.4 src/modules; preserve their attribution. Keep their compiled binaries outside Git.
-- The owner requested Claude Opus 5.5. Use it explicitly for Claude Code review. Treat review hypotheses as unconfirmed until supported by actual artifacts or console logs.
-- Do not add or run tests unless the owner explicitly requests them. Do not claim hardware behavior from a successful build.
-- Keep credentials, tokens, private keys, SDK files and generated packages outside Git.
-- GitHub publication is requested for the end of the workday, with a private repository. Do not publish earlier.
-
-- Exit evidence: 0.2.1 OPTIONS triggered SIGSYS at _exit (runtimeBrF0x409330 corresponds ELF _exit@plt0x9330). Owner confirmed 0.2.2 clean exit. Keep media implementations unchanged.
+- Source of truth: this Git repository. Compile in the existing Lubuntu VM at `~/Projects/XCloud4`, loading `~/.config/xcloud4/env.sh`.
+- Build: `X4_RUNTIME_MODULES=/external/local/runtime make -j2 package`. Legacy packaging libraries are isolated outside the repository. Require `libSceFios2.prx` and `libc.prx` as SELF modules. Versions 0.1.0 and 0.1.1 failed before `main` because these dependencies were missing; 0.1.2 fixed startup.
+- Preserve confirmed milestones: `v0.1.2` (startup and views), `v0.2.2` (local H.264/PCM and clean exit), `v0.3.1` (Microsoft), `v0.4.0` (catalog), `v0.5.0` (session preparation/deletion), and `v0.6.2` (connection authorization/deletion).
+- Version 0.6.2's Passport HTTP 200, `/connect` HTTP 202 and DELETE HTTP 200 are confirmed by the owner and Klog. It uses the authorized temporary public client also used by GreenVita. The original registration is preserved. Never mix refresh tokens between clients.
+- Actual game media and input were not received in the confirmed 0.6.2 milestone. The owner has authorized continued work toward real video and audio. Do not describe authorization acceptance as a connected WebRTC stream.
+- Preserve the confirmed native media and exit paths. PCM uses SYSTEM (`0xFF`) for MAIN and waits before buffer reuse. `OPTIONS` resolves SystemServiceLoadExec, releases resources and requests `"exit"`; do not return through `_exit`, which triggered SIGSYS in 0.2.1. Keep the ten-second exit timeout and recoverable UI on rejection.
+- Use `docs/REFERENCIAS.md` for pinned references. GreenVita's Rust and Moonlight PS4's implementations have not been copied into the confirmed baseline.
+- Videodec2 ABI types are adapted from OpenOrbis PR #213, Backporter commit `9b9e82a2ec4e8cd3c34a086ca82339032cf69da0`, under GPL-3.0. Preserve attribution and distinguish API research from source copying.
+- Preserve applicable notices and GPL-3.0-only licensing. Do not incorporate unlicensed code or proprietary Sony SDK binaries. Required libc/Fios2 auxiliary modules have source in OpenOrbis v0.5.4 `src/modules`; keep their compiled binaries outside Git.
+- The owner requested **Claude Opus 5.5**. Select `claude-opus-5-5` explicitly for Claude Code work. Review hypotheses remain unconfirmed until supported by source, generated artifacts or console evidence.
+- Do not add or run tests unless the owner explicitly requests them. Do not claim hardware behavior from successful compilation.
+- Keep credentials, device codes, tokens, private keys, SDK files, generated packages and private logs outside Git.
+- The owner authorized **private GitHub publication**. Repository documentation and GitHub content must be English; **the PS4 UI stays Spanish**.
+- Title search is recorded in `docs/MEJORAS_FUTURAS.md` for a later update. Do not implement it in the current streaming stage.

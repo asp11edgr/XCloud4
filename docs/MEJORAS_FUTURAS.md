@@ -1,11 +1,11 @@
-# Mejoras futuras
+# Future improvements
 
-## Buscar títulos en el catálogo
+## Search titles in the catalog
 
-Solicitud del propietario, 8 de octubre de 2026: añadir una opción para buscar títulos desde el catálogo de Xbox.
+Owner request, October 8, 2026: add an option to search titles from the Xbox catalog.
 
-**Estado: anotada, pendiente. No implementar en esta etapa.**
+**Status: recorded for a later update. Do not implement during the current stage.**
 
-Antes de desarrollarla, acordar la entrada de texto con DualShock 4 y cómo consultar o recorrer los títulos que exceden las 128 entradas conservadas actualmente. La búsqueda debe distinguir el catálogo completo de la lista local y permitir volver a la selección sin perder la sesión.
+Before implementation, agree on DualShock 4 text entry and how to query or navigate titles beyond the currently retained 128 entries. Search must distinguish the full catalog from the local list and allow returning to selection without losing the account session.
 
-La prioridad actual sigue siendo iniciar la sesión de juego y conectar WebRTC, imagen, sonido y mando.
+The current priority is game-session connection, WebRTC, actual video/audio and controller input.

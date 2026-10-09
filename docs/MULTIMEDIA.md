@@ -1,47 +1,51 @@
-# Muestra local 0.2.0
+# Native local media sample
 
-## Alcance
+## Scope and confirmed results
 
-La pantalla IMAGEN Y SONIDO permite ejecutar el primer camino de reproducción nativo. No tiene conexión con Xbox. En la 0.2.0, el propietario informó que el video va bien y la foto muestra 217 / 240 imágenes. Klog registra la primera imagen H.264 de 640 × 368 con pitch 640 y `MUESTRA TERMINADA`. El audio de esa versión falló con `0x809B0001`.
+`IMAGEN Y SONIDO` exercises the initial native playback path without connecting to Xbox. In 0.2.0, the owner reported working video and the photo shows 217 / 240 frames. Klog records the first H.264 frame, 640 × 368 with pitch 640, and sample completion. That version's audio failed with `0x809B0001`.
 
-- Clip sintético H.264 Annex B, baseline 3.0, 640 × 368, 30 cuadros por segundo, ocho segundos, sin B-frames y con un delimitador AUD por cuadro. Lo genera `scripts/generar-muestra.sh` con FFmpeg y libx264 en la PC.
-- SHA-256 del clip incluido: `fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31`. Se incluye el archivo para compilar sin requerir FFmpeg. Para regenerarlo, usar `bash scripts/generar-muestra.sh`; `X4_FFMPEG` permite indicar la ruta del ejecutable local.
-- El archivo completo queda en memoria directa ONION mientras existe el decoder; no se sobrescriben unidades comprimidas en vuelo. Las imágenes utilizan cuatro buffers de memoria directa GARLIC y una copia RGB para la interfaz. Profundidad de decodificación: uno.
-- Se resuelven las funciones de Videodec2 y AudioOut al entrar. Sysmodule solicita sus dependencias; el cargador consulta módulos ya presentes y admite nombre con o sin extensión. No se agregan estas bibliotecas a las dependencias iniciales del ejecutable.
-- La salida esperada es NV12 lineal de 640 × 368. Se comprueban dimensiones, pitch, tamaño y pertenencia del buffer antes de convertirlo. Una salida diferente se muestra como error, sin interpretar memoria ajena.
-- Tonos triangulares suaves de 440 Hz, PCM S16 estéreo, 48 kHz, en bloques de 1024 muestras. Se alternan izquierda y derecha con pausas; un hilo nativo alimenta AudioOut. No es una banda sonora del video y no demuestra sincronización audiovisual de xCloud.
-- X reinicia la muestra; cuadrado conserva el estado de silencio incluso al repetir; círculo vuelve. OPTIONS sale. El cierre espera al hilo de audio y elimina el decoder antes de liberar su memoria. Si falla eliminar el decoder o su cola, se conservan sus buffers hasta que termine el proceso.
+Version 0.2.1 fixed local sound and the owner confirmed it. Version 0.2.2 fixed application exit and the owner confirmed clean return to the PS4 menu. These results establish the local sample, not 720p performance or WebRTC reception.
 
-## Fuentes y límites
+## Media and memory layout
 
-Las estructuras de Videodec2 se adaptan de OpenOrbis PR213, fijadas en `THIRD_PARTY_NOTICES.md`. El SDK v0.5.4 aporta AudioOut, kernel, Pad y VideoOut. El código de reproducción y conversión es propio. No se copió código de Moonlight PS4 ni se aplicaron cambios al kernel.
+- Synthetic H.264 Annex B clip, baseline 3.0, 640 × 368, 30 FPS, eight seconds, no B-frames, one AUD delimiter per frame. `scripts/generar-muestra.sh` creates it with FFmpeg/libx264 on the PC.
+- Included clip SHA-256: `fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31`. The file is included so builds do not require FFmpeg. Regenerate with `bash scripts/generar-muestra.sh`; `X4_FFMPEG` selects a local executable.
+- The entire compressed file stays in ONION direct memory while the decoder exists; compressed units in flight are not overwritten. Frames use four GARLIC direct-memory buffers and one RGB copy for the UI. Decode depth is one.
+- Videodec2 and AudioOut are resolved on entering the sample. Sysmodule requests dependencies; the loader checks existing modules and names with/without extensions. These libraries are not added to startup dependencies.
+- Expected decoder output is linear NV12, 640 × 368. Dimensions, pitch, size and buffer ownership are validated before conversion. Unexpected output becomes an error without reading foreign memory.
+- Soft triangular 440 Hz tones: stereo S16 PCM, 48 kHz, blocks of 1024 samples. Left/right alternate with pauses; a native thread feeds AudioOut. These tones are not a video soundtrack and do not establish cloud audiovisual synchronization.
+- X restarts the sample; Square retains mute state even across repeats; Circle returns; `OPTIONS` exits. Closure joins audio and removes the decoder before freeing memory. If decoder or queue removal fails, buffers are retained until the process ends.
 
-El formato de pantalla es A8B8G8R8_SRGB, igual que en la base confirmada. Los tamaños ABI se comprueban al compilar. Una compilación correcta no demuestra que el decodificador, sus parámetros o el sonido funcionen en el firmware de la consola.
+## Sources and limits
 
-## Revisión
+Videodec2 types adapt OpenOrbis PR #213, pinned in [third-party notices](../THIRD_PARTY_NOTICES.md). OpenOrbis v0.5.4 supplies AudioOut, kernel, Pad and VideoOut. Playback/conversion code is original. Moonlight PS4 code and kernel patches were not incorporated.
 
-Claude Code Pro 2.1.292 ejecutó una revisión estática con `claude-opus-5-5` (proveedor firstParty). Se aplicaron ajustes sobre capacidad de la lista de módulos, nombres con extensión, buffers aceptados por el decoder, direcciones tras fallos de mapeo y estado del audio. La capacidad expresada en entradas se contrastó con la implementación primaria de flatz: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c
+The display format is `A8B8G8R8_SRGB`, as in the confirmed UI baseline. ABI sizes are checked during compilation. Compilation does not establish decoder, parameter or sound behavior on the console.
 
-Se descartaron propuestas sin defecto demostrado: intercambiar rojo/azul (la pantalla usa ABGR), borrar archivos de empaquetado (el GP4 enumera explícitamente sus archivos) o quitar la primera presentación (cada flip espera su finalización). No se cambiaron profile/level a cero: esa sugerencia era una hipótesis de hardware. Los registros de la consola decidirán cualquier cambio posterior de parámetros.
+## Static review
 
-No se añadieron ni ejecutaron pruebas automatizadas. La 0.1.2 y su etiqueta se conservan como base confirmada.
+Claude Code Pro 2.1.292 reviewed the source using `claude-opus-5-5` (firstParty provider). Adjustments covered module-list capacity, extension-bearing names, accepted decoder buffers, addresses after mapping failure and audio state. Entry-count capacity was compared against [flatz's primary module source](https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c).
 
-## Audio 0.2.1
+Proposals without a demonstrated defect were not applied: swapping red/blue (the display uses ABGR), removing packaging files (GP4 explicitly lists files), or removing the first presentation (each flip waits for completion). Profile/level were not changed to zero because that was an unconfirmed hardware hypothesis. Console evidence guides later parameter changes.
 
-El registro real contiene `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` en cada inicio de la muestra 0.2.0. La pantalla y la foto del propietario muestran `0x809B0001`; la implementación pasaba a MAIN el usuario obtenido de UserService. El ejemplo público OpenOrbis v0.5.4 abre MAIN con `ORBIS_USER_SERVICE_USER_ID_SYSTEM` (0xFF). La 0.2.1 adopta esa asociación y elimina la consulta del usuario para el audio.
+No automated tests were added or run. The earlier `v0.1.2` milestone is retained.
 
-También sigue la espera explícita con `sceAudioOutOutput(handle, NULL)` antes de reutilizar el bloque PCM y al finalizar, y registra los resultados de init, open y creación del hilo. Fuente primaria: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp. Las credenciales de Microsoft no intervienen. Se conserva el video de la 0.2.0. La corrección de sonido queda pendiente de confirmación real.
+## Audio fix in 0.2.1
 
-El propietario confirmó después: "La version 2.1 ya corrigio el sonido funciona bien". El registro muestra `AudioOutOpen MAIN SYSTEM(0xff) -> 0x20000007`, creación del hilo y `PCM terminado, muestras=384000 error=0x00000000` en dos reproducciones. Esta confirmación cubre la muestra local; Opus, WebRTC y sincronización siguen pendientes.
+Actual 0.2.0 Klog contains `[AudioOut] Error:sceMbusAddHandleByUserId 0x20000007` on each sample start. The UI/photo show `0x809B0001`; MAIN was given the UserService user. OpenOrbis v0.5.4's public example opens MAIN with `ORBIS_USER_SERVICE_USER_ID_SYSTEM` (`0xFF`). Version 0.2.1 adopts that association and removes the audio user lookup.
 
-## Cierre 0.2.2
+It also waits via `sceAudioOutOutput(handle, NULL)` before reusing PCM and at completion, and logs init/open/thread results. [Primary source](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp). Microsoft credentials are unrelated. Video remains unchanged from 0.2.0.
 
-OPTIONS causó CE-34878-0 en la 0.2.0 y la 0.2.1. Para el proceso 84 de la 0.2.1, Klog registra SIGSYS en el hilo principal: RIP `libkernel + 0x28bc`, último salto desde `0x409330` hacia `libkernel + 0x28b0`. El ELF de esa versión contiene `_exit@plt` en el desplazamiento `0x9330`, y su inicio C retorna de main hacia `exit` → `_Exit` → `_exit`. Esta evidencia ubica el fallo en la salida final del programa.
+The owner later confirmed that 0.2.1 sound works. Klog shows `AudioOutOpen MAIN SYSTEM(0xff) -> 0x20000007`, thread creation and `PCM terminado, muestras=384000 error=0x00000000` for two plays. This confirms local PCM only; Opus, WebRTC and synchronization remain subsequent work.
 
-La 0.2.2 resuelve `sceSystemServiceLoadExec` al pedir salir y solicita `"exit"` después de cerrar los recursos. Espera a que el sistema retire la aplicación en vez de retornar de main. Si preparar la solicitud falla, conserva la interfaz; si la solicitud es rechazada después del cierre, la vuelve a abrir para permitir otro intento. Se agregan registros por etapa de cierre. Audio y video permanecen iguales a la 0.2.1.
+## Exit fix in 0.2.2
 
-La espera de retirada está limitada a diez segundos; si se agota, vuelve a abrir la interfaz con un error. Se añade una pausa antes de reabrir para evitar un ciclo rápido de fallo de presentación y rechazo de salida. Claude Opus 5.5 revisó el cambio; esas medidas responden a sus observaciones. La comparación del último salto con `_exit@plt` se hizo contra el ejecutable exacto de la 0.2.1. La revisión estática no confirma el resultado de LoadExec en la consola.
+`OPTIONS` caused `CE-34878-0` in 0.2.0 and 0.2.1. For 0.2.1 process 84, Klog shows SIGSYS on the main thread: RIP `libkernel + 0x28bc`, last branch from `0x409330` to `libkernel + 0x28b0`. The exact version's ELF has `_exit@plt` at offset `0x9330`, and C startup returns from `main` through `exit` → `_Exit` → `_exit`. This locates the failure at final process exit.
 
-Contrato de la función: `include/orbis/SystemService.h` de OpenOrbis v0.5.4. Ejemplo primario de uso investigado, sin copiar su implementación: https://github.com/bucanero/PS4CheatsManager/blob/main/source/main.c (`terminate`, solicitud LoadExec con `"exit"`). La salida real sin CE-34878-0 queda pendiente hasta abrir la 0.2.2 en la consola. No se ejecutaron pruebas automatizadas.
+Version 0.2.2 resolves `sceSystemServiceLoadExec` when exit is requested, releases resources and requests `"exit"`. It waits for the system to remove the application instead of returning from `main`. Preparation failure leaves the UI open; a rejected request after closure reopens it for another attempt. Shutdown stages are logged. Audio/video remain as in 0.2.1.
 
-Resultado posterior confirmado: el propietario informó que la 0.2.2 cierra correctamente. Klog muestra recursos cerrados, solicitud de salida y `Kill for LoadExec(0x5a) => 0`, sin un nuevo SIGSYS en ese cierre. Se conserva `v0.2.2` como base de reproducción local y salida correcta.
+Removal waiting is limited to ten seconds; timeout reopens the UI with an error. A pause before reopening avoids a fast presentation-failure/exit-refusal loop. Claude Opus 5.5 reviewed the change and informed those measures. The last-branch comparison used the exact 0.2.1 executable; static review alone did not establish LoadExec behavior.
+
+Function contract: OpenOrbis v0.5.4 `include/orbis/SystemService.h`. Usage research, without copying its implementation: [PS4CheatsManager `terminate`](https://github.com/bucanero/PS4CheatsManager/blob/main/source/main.c), requesting LoadExec with `"exit"`. No automated tests were run.
+
+**Subsequent confirmed result:** the owner reported correct 0.2.2 exit. Klog shows resources released, exit requested and `Kill for LoadExec(0x5a) => 0`, with no new SIGSYS for that closure. `v0.2.2` is preserved as the local media and clean-exit baseline.

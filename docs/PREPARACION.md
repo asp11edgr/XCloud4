@@ -1,23 +1,25 @@
-# Preparación del entorno — 8 de octubre de 2026
+# Environment preparation — October 8, 2026
 
-## PC y máquina virtual
+This records the observed setup at preparation time. Later builds and console results are in [JORNADA.md](JORNADA.md); space figures are historical snapshots.
 
-- Máquina existente: `Lubuntu 26.04`, en VirtualBox 7.2.18.
-- Sistema observado: Ubuntu 26.04.1 LTS, x86_64; usuario `edgarg`.
-- Recursos: 4096 MB de RAM, 2 procesadores, disco virtual de 16 GB.
-- Espacio después de instalar: 5.7 GB libres en Lubuntu; aproximadamente 6.9 GiB libres en C:.
-- Red NAT; acceso SSH desde esta PC mediante `127.0.0.1:2224`.
-- Pantalla configurada a 1280 × 720, escala de VirtualBox de 85 %, con autoredimensionado desactivado. Escritorio completo comprobado después del reinicio.
+## PC and virtual machine
 
-## Contraseña
+- Existing VM: `Lubuntu 26.04`, VirtualBox 7.2.18.
+- Observed guest OS: Ubuntu 26.04.1 LTS, x86_64; user `edgarg`.
+- Resources: 4096 MB RAM, two processors, 16 GB virtual disk.
+- Free space after installation: 5.7 GB in Lubuntu; approximately 6.9 GiB on C:.
+- NAT networking; SSH from this PC through `127.0.0.1:2224`.
+- Display configured to 1280 × 720, VirtualBox scale 85%, automatic resize disabled. The complete desktop was checked after reboot.
 
-Se restableció la contraseña de `edgarg` desde el modo de recuperación, por solicitud del propietario. Lubuntu confirmó `passwd: password updated successfully`. La contraseña no se incluye en el proyecto ni en este informe.
+## Password reset
 
-## Herramientas instaladas
+At the owner's request, the `edgarg` password was reset from recovery mode. Lubuntu confirmed `passwd: password updated successfully`. The password is not included in the project or this report.
 
-Se instalaron desde los repositorios configurados de Ubuntu. Versiones observadas:
+## Installed tools
 
-| Herramienta | Versión |
+Tools were installed from the configured Ubuntu repositories. Observed versions:
+
+| Tool | Version |
 |---|---|
 | Clang | 21.1.8 |
 | LLD | 21.1.8 |
@@ -27,38 +29,42 @@ Se instalaron desde los repositorios configurados de Ubuntu. Versiones observada
 | Git | 2.53.0 |
 | Python | 3.14.4 |
 
-También se instalaron build-essential, pkg-config, curl y OpenSSH Server. Clang/LLD 18 no estaban disponibles en los repositorios configurados; se usa la versión de la distribución. Su compatibilidad con la aplicación aún debe comprobarse al compilar.
+Also installed: build-essential, pkg-config, curl and OpenSSH Server. Clang/LLD 18 were unavailable in the configured repositories, so the distribution's version was used. Subsequent XCloud4 builds succeeded with Clang/LLD 21; this does not establish compatibility of every external library.
 
 ## SDK
 
-OpenOrbis v0.5.4, archivo oficial `toolchain-llvm-18.tar.gz` de 158688666 bytes. Su SHA-256 coincide con el publicado por GitHub y se comprobó de nuevo dentro de Lubuntu:
+OpenOrbis v0.5.4, official `toolchain-llvm-18.tar.gz`, 158688666 bytes. Its SHA-256 matches GitHub's published value and was checked again inside Lubuntu:
 
-`3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526`
+```text
+3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526
+```
 
-Se extrajeron cabeceras, bibliotecas, herramientas Linux, archivo del enlazador y licencias. Las dependencias dinámicas de `PkgTool.Core` aparecen presentes; `create-fself` es un ejecutable estático.
+Headers, libraries, Linux tools, linker script and licenses were extracted. `PkgTool.Core` dynamic dependencies were present; `create-fself` is a static executable.
 
-## Ubicaciones en Lubuntu
+## Guest locations
 
-- Proyecto: `/home/edgarg/Projects/XCloud4`.
+- Project: `/home/edgarg/Projects/XCloud4`.
 - SDK: `/home/edgarg/.local/share/xcloud4/OpenOrbis/PS4Toolchain`.
-- Variables: `/home/edgarg/.config/xcloud4/env.sh`, cargadas desde `.bashrc`.
-- Registro del SDK: `/home/edgarg/.local/share/xcloud4/sdk-*.log`.
-- Registro de herramientas: `/tmp/xcloud4-herramientas.log`.
+- Environment: `/home/edgarg/.config/xcloud4/env.sh`, loaded from `.bashrc`.
+- SDK log: `/home/edgarg/.local/share/xcloud4/sdk-*.log`.
+- Tool installation log: `/tmp/xcloud4-herramientas.log`.
 
-La preparación inicializó Git en `main`. El avance de implementación y compilación posterior se describe en `JORNADA.md`; la publicación en GitHub queda para el cierre de la jornada.
+Preparation initialized Git on `main`. The owner subsequently authorized private GitHub publication with English repository documentation; the PS4 UI stays Spanish.
 
-## Acceso desde Windows
+## Access from Windows
 
-OpenSSH está habilitado y se comprobó una conexión como `edgarg` con clave pública. El reenvío de VirtualBox escucha únicamente en `127.0.0.1:2224` de esta PC. La clave privada permanece fuera del proyecto; la clave autorizada restringe terminal interactiva y reenvíos SSH.
+OpenSSH is enabled and a public-key connection as `edgarg` was confirmed. VirtualBox forwarding listens only on `127.0.0.1:2224` on this PC. The private key stays outside the repository; the authorized key restricts interactive terminal use and SSH forwarding.
 
-La transferencia inicial utilizó un servidor temporal en `127.0.0.1:8765`, accesible desde Lubuntu como `10.0.2.2:8765`. El archivo del proyecto también pasó la comprobación SHA-256. El servidor temporal se detuvo al terminar.
+Initial transfer used a temporary server on `127.0.0.1:8765`, accessible from Lubuntu as `10.0.2.2:8765`. The project archive passed SHA-256 comparison. The temporary server was stopped afterward.
 
-## Siguiente etapa
+## Build progression
 
-La preparación inicial no compiló la aplicación. Después se generó la versión 0.1.0 con interfaz y control, incluidos ELF, eboot y PKG. El empaquetado usa las bibliotecas privadas de OpenSSL 1.1 descritas en `THIRD_PARTY_NOTICES.md`. Todavía no existe un cliente funcional de Xbox Cloud Gaming ni un PKG comprobado en la consola.
+Initial preparation did not compile the application. Version 0.1.0 later produced UI/controller ELF, eboot and PKG artifacts. Packaging uses the isolated OpenSSL 1.1 libraries documented in [third-party notices](../THIRD_PARTY_NOTICES.md).
 
-## Fuentes
+Since then, console-confirmed milestones reached 0.6.2: local media, Microsoft authorization, catalog, remote preparation and connection authorization. Actual Xbox game video/audio remains under development. See [the current status](../README.md).
+
+## Sources
 
 - [OpenOrbis v0.5.4](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/releases/tag/v0.5.4).
-- [Instrucciones oficiales de OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain).
-- [Red NAT de VirtualBox](https://docs.oracle.com/en/virtualization/virtualbox/7.2/user/networkingdetails.html).
+- [Official OpenOrbis instructions](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain).
+- [VirtualBox NAT documentation](https://docs.oracle.com/en/virtualization/virtualbox/7.2/user/networkingdetails.html).

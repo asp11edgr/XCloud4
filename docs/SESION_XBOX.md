@@ -1,37 +1,39 @@
-# Preparación de sesión Xbox — 0.5.0
+# Xbox session preparation — 0.5.0
 
-## Alcance
+## Historical scope
 
-Desde el catálogo, X solicita a Xbox la preparación del título seleccionado. La pantalla informa la respuesta del servicio y el cierre. Esta entrega no recibe ni presenta medios del juego, no envía controles y no negocia SDP/ICE. La preparación y el cierre automático están confirmados en PS4 con 0.5.0.
+From the catalog, X requests preparation of the selected title. The view shows the service response and closure. Version 0.5.0 did not receive game media, send controller messages or negotiate SDP/ICE. Preparation and automatic closure are confirmed on PS4.
 
-## Resultado confirmado el 8 de octubre de 2026
+Connection authorization was subsequently confirmed in 0.6.2; see [AUTORIZACION_CONEXION.md](AUTORIZACION_CONEXION.md). Actual streaming remains under development.
 
-El propietario envió una fotografía de AMONGUS con "XBOX PREPARO LA SESION", "XBOX LISTA PARA NEGOCIAR LA CONEXION" y 34 segundos restantes antes del cierre automático.
+## Confirmed result on October 8, 2026
 
-Klog identifica XCloud4 0.5.0 y confirma creación con HTTP 202, espera de recursos con HTTP 200 y transición READY con la etapa "Xbox lista para negociar la conexion". Después registra el cierre DELETE con HTTP 200 y cuerpo vacío. El resultado final es CLOSED, error cero, `ready_seen=1`, `cleanup_failed=0` y cierre HTTP 200. La solicitud propia XCloud4/PS4/Orbis fue aceptada para esta preparación.
+The owner's photo shows AMONGUS, the Spanish messages that Xbox prepared the session and was ready to negotiate, and 34 seconds remaining before automatic closure.
 
-Se conserva este hito con la etiqueta `v0.5.0`. No se ha confirmado autorización Passport de conexión, negociación WebRTC, imagen, audio ni mando dentro de un juego. Tampoco se comprobaron por separado la cancelación manual durante la creación, el cierre desde Círculo o el cierre de una sesión activa mediante OPTIONS.
+Klog identifies XCloud4 0.5.0 and confirms creation **HTTP 202**, resource wait **HTTP 200**, and transition to READY. It then records DELETE **HTTP 200** with an empty response. Final state is CLOSED, error zero, `ready_seen=1`, `cleanup_failed=0`, cleanup HTTP 200. The own XCloud4/PS4/Orbis request was accepted for preparation.
 
-Se usa el flujo descrito por [GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs) y una implementación C para nuestro entorno. Las credenciales se obtienen mediante el registro propio de XCloud4. La solicitud describe el dispositivo como Sony PS4 / Orbis.
+This milestone is preserved as `v0.5.0`. It did not confirm Passport, WebRTC, game media or game input. Manual cancellation during creation, closure through Circle and `OPTIONS` with an active session were not checked separately.
 
-## Uso previsto
+The protocol is researched from [GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs) and implemented in C for the native environment. The 0.5.0 credentials used XCloud4's own registration. The request describes Sony PS4 / Orbis.
 
-1. Autorizar Microsoft en CUENTA y abrir el catálogo con R1.
-2. Seleccionar un título, preferiblemente marcado CON ACCESO, y pulsar X.
-3. Esperar la respuesta de Xbox. El servicio puede poner la solicitud en espera o rechazarla.
-4. Si Xbox informa ReadyToConnect o Provisioned, la pantalla indica que preparó la sesión. Eso todavía no confirma una conexión WebRTC ni un juego visible.
-5. Círculo pide cerrar la sesión y vuelve al catálogo cuando termina el trabajador. OPTIONS espera el cierre antes de solicitar la salida al menú de PS4.
+## User flow
 
-La espera de preparación tiene un límite de tres minutos. Una sesión lista se conserva como máximo 45 segundos en esta entrega y después se cierra automáticamente. Si no se confirma el cierre, la aplicación lo muestra como error; no se presenta como una cancelación correcta.
+1. Authorize Microsoft in `CUENTA` and open the catalog with R1.
+2. Select a title, preferably marked `CON ACCESO`, and press X.
+3. Wait for Xbox. The service may queue or refuse the request.
+4. If Xbox reports ReadyToConnect or Provisioned, the UI shows that the session is prepared. This does not confirm a WebRTC connection or visible game.
+5. Circle requests closure and returns after the worker finishes. `OPTIONS` waits for closure before requesting the PS4 menu.
 
-## Propiedad y límites
+Preparation is limited to three minutes. In the confirmed preparation/authorization milestones, a ready session is held for at most 45 seconds, then closed automatically. Unconfirmed closure remains an error, rather than being presented as successful cancellation.
 
-- Un solo trabajador realiza acceso, catálogo o sesión; el hilo de interfaz no hace solicitudes de red.
-- La cuenta Microsoft y el catálogo se conservan durante la preparación mientras el token es válido.
-- Las credenciales Xbox, origen regional y ruta de sesión permanecen privados y se borran al terminar.
-- La vista pública contiene estados, nombre del título, tiempos y errores numéricos. No contiene tokens, rutas ni identificadores de sesión.
-- La creación no se repite automáticamente ante un error de transporte; podría haber llegado al servidor.
-- El cierre usa DELETE sobre la ruta validada del servidor, con tiempo limitado aunque el usuario ya haya cancelado.
-- Solo se permiten los métodos y rutas previstos bajo el dominio regional de Xbox; se conservan TLS, redirecciones desactivadas y límites del transporte existente.
+## Ownership and limits
 
-La adaptación de recepción de medios y canales de mando se documenta en [WEBRTC_PS4.md](WEBRTC_PS4.md).
+- One worker performs account, catalog or session actions; the UI thread does not make network requests.
+- The Microsoft account and catalog are retained during preparation while the token is valid.
+- Xbox credentials, regional origin and session path stay private and are wiped when the action ends.
+- Public snapshots contain states, title name, timing and numeric errors, not tokens, paths or session identifiers.
+- Creation is not retried automatically after transport failure; it may already have reached the server.
+- Closure uses DELETE on a validated server path with a bounded timeout, even after cancellation.
+- Only expected methods/routes under the regional Xbox domain are allowed. TLS validation, disabled redirects and transport limits are retained.
+
+Media reception and controller channels are documented in [WEBRTC_PS4.md](WEBRTC_PS4.md).

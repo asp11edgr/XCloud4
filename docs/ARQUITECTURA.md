@@ -1,25 +1,29 @@
-# Arquitectura prevista
+# Planned architecture
 
-Este plan proviene de la conversación original “Buscar xCloud en PS4”. Sus propuestas de compatibilidad están pendientes de comprobar en código y en la consola.
+This plan comes from the original conversation, “Buscar xCloud en PS4.” Compatibility proposals require evidence from source and the owner's console.
 
-La conversación inicial mencionaba firmware 11.00. El 8 de octubre el propietario confirmó que su consola está en **12.00**, con GoldHEN activado. Esa versión sustituye el objetivo inicial; la compatibilidad se comprobará en esa consola.
+The initial conversation mentioned firmware 11.00. On October 8, the owner confirmed **12.00** with GoldHEN enabled. That replaces the original target. Confirmed milestones through 0.6.2 use this console.
 
 ```mermaid
 flowchart TD
-    GV[GreenVita: referencia para autenticación y sesiones] --> XC[XCloud4: cliente nativo PS4]
-    BX[Better xCloud: referencia para configuración y regiones] --> XC
-    ML[Moonlight PS4: referencia para video, audio y control] --> XC
-    OO[OpenOrbis: compilación y herramientas] --> XC
+    GV[GreenVita: authentication and session protocol research] --> XC[XCloud4: native PS4 client]
+    BX[Better xCloud: settings and region research] --> XC
+    ML[Moonlight PS4: native media and controller API research] --> XC
+    OO[OpenOrbis: toolchain and public APIs] --> XC
     XC --> PS[PS4 Fat · firmware 12.00 · GoldHEN]
 ```
 
-La laptop se utiliza para desarrollar y compilar. El objetivo final es que la PS4 reciba el juego directamente desde Xbox Cloud Gaming.
+The laptop is used for development and compilation. The final goal is for PS4 to receive the game directly from Xbox Cloud Gaming.
 
-## Decisiones iniciales
+## Decisions
 
-- Usar la máquina de Lubuntu existente; no crear otra máquina ni instalar WSL.
-- Usar C/C++ con OpenOrbis, comenzando con una entrada mínima en C.
-- Mantener NAT durante la preparación.
-- Priorizar la viabilidad de video/audio/control antes de desarrollar toda la interfaz.
-- Evitar incorporar parches de otro firmware sin revisar su necesidad en 12.00.
-- Mantener el repositorio local hasta que se solicite su publicación.
+- Use the existing Lubuntu VM; do not create another VM or install WSL.
+- Use C/C++ with OpenOrbis, starting from a minimal C entry point.
+- Keep NAT during environment preparation.
+- Establish video/audio/controller feasibility before expanding the interface.
+- Review whether firmware-specific patches are necessary on 12.00 before incorporating any.
+- Publish only when authorized. The owner has now requested a **private** GitHub repository with English content; the PS4 interface remains Spanish.
+
+## Current boundary
+
+The own native UI, local H.264/PCM sample, account, catalog, remote preparation and connection authorization are confirmed. Receiving actual game video/audio and sending Xbox controller messages are still under development. See [the roadmap](../README.md) and [WebRTC adaptation](WEBRTC_PS4.md).

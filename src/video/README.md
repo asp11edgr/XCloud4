@@ -1,7 +1,9 @@
-# Pantalla y video
+# Display and video
 
-`display.c` reserva dos buffers de 1920 × 1080 para VideoOut y espera la presentación antes de reutilizarlos. Esa salida de interfaz funcionó en PS4 con la 0.1.2.
+`display.c` allocates two 1920 × 1080 VideoOut buffers and waits for presentation before reusing them. This UI output worked on PS4 in version 0.1.2.
 
-`h264_demo.c` agrega en la 0.2.0 una muestra H.264 local de 640 × 368. Resuelve Videodec2 al abrir la muestra, consulta su memoria, conserva el clip y convierte las imágenes NV12 a RGB para la interfaz. `videodec2_abi.h` adapta tipos públicos de OpenOrbis con atribución en `THIRD_PARTY_NOTICES.md`. El propietario informó que el video va bien; su foto muestra 217 / 240 imágenes y Klog confirma la primera imagen y el final de la muestra. La 0.2.1 conserva esta implementación de video.
+`h264_demo.c` adds a local 640 × 368 H.264 sample in version 0.2.0. It resolves Videodec2 when opening the sample, queries memory requirements, retains compressed data and converts NV12 frames to RGB for the UI. `videodec2_abi.h` adapts public OpenOrbis types, with attribution in [third-party notices](../../THIRD_PARTY_NOTICES.md).
 
-No decodifica una sesión de Xbox. Recepción desde WebRTC, manejo de pérdida de cuadros, sincronización y rendimiento a 720p siguen pendientes. Consulta `docs/MULTIMEDIA.md`.
+The owner reported working video; the photo shows 217 / 240 frames, and Klog confirms the first frame and sample completion. Versions 0.2.1 and 0.2.2 preserve this video implementation.
+
+The confirmed sample does not decode an Xbox session. WebRTC reception, frame loss handling, synchronization and 720p performance remain subsequent work. See [native media](../../docs/MULTIMEDIA.md).

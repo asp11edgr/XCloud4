@@ -1,48 +1,56 @@
-# Transporte WebRTC en PS4
+# Native WebRTC transport on PS4
 
-## Base de aplicaciones existentes
+## Existing application references
 
-GreenVita es la referencia principal del protocolo de Xbox: creación de la sesión, consulta de estado, autorización de conexión, SDP, ICE, mantenimiento y cierre. Better xCloud aporta ajustes y regiones. Moonlight PS4 aporta investigación de las APIs de consola; su transporte Sunshine no conecta por sí mismo con Xbox.
+GreenVita is the main Xbox protocol reference: session creation, readiness, connection authorization, SDP, ICE, keepalive and closure. Better xCloud supplies settings/region research. Moonlight PS4 supplies native API research; its Sunshine transport does not itself connect to Xbox.
 
-XCloud4 ya implementa en C los intercambios descritos por GreenVita para Microsoft, RPS, XSTS, credenciales cloud y catálogo, confirmados en la PS4 con 0.4.0. Reutilizar el protocolo permite conservar ese trabajo y adaptar la parte de consola a OpenOrbis. No se ha incorporado código Rust de GreenVita ni la implementación de Moonlight PS4.
+XCloud4's original C implementation of Microsoft, RPS, XSTS, cloud credentials and catalog was confirmed on PS4 in 0.4.0. Session preparation/deletion followed in 0.5.0 and Passport plus `/connect` in 0.6.2. Reusing protocol research retains that work while adapting console operations to OpenOrbis. GreenVita's Rust and Moonlight PS4's implementations have not been copied.
 
-## Bibliotecas revisadas el 8 de octubre de 2026
+**The confirmed 0.6.2 milestone does not receive game video/audio.** Native WebRTC and actual media reception are the current development stage.
 
-| Biblioteca | Fuente fijada | Componentes observados | Decisión actual |
+## Libraries reviewed on October 8, 2026
+
+| Library | Pinned revision | Observed components | Status at the confirmed baseline |
 |---|---|---|---|
-| libdatachannel | `bdc5ff28e9d3b863144c94a677ecf5bf043aaf15` | C++17, API C, ICE con libjuice, DTLS, SRTP, SCTP; opción de Mbed TLS | Configurada para OpenOrbis; primer intento de compilación detenido por encabezados incompatibles; no integrada |
-| libpeer | `5b849de378545c31d34759a145413846953e1366` | C, sockets BSD, Mbed TLS, libsrtp, usrsctp y cJSON | Alternativa pendiente de comparar recepción de medios y canales con los requisitos de Xbox |
+| libdatachannel | `bdc5ff28e9d3b863144c94a677ecf5bf043aaf15` | C++17, C API, libjuice ICE, DTLS, SRTP, SCTP; optional Mbed TLS | Configured for OpenOrbis; first build stopped on incompatible headers; not included in 0.6.2 |
+| libpeer | `5b849de378545c31d34759a145413846953e1366` | C, BSD sockets, Mbed TLS, libsrtp, usrsctp, cJSON | Alternative requiring comparison against Xbox media and channel requirements |
 
-Fuentes primarias: [libdatachannel](https://github.com/paullouisageneau/libdatachannel/tree/bdc5ff28e9d3b863144c94a677ecf5bf043aaf15), [libpeer](https://github.com/sepfy/libpeer/tree/5b849de378545c31d34759a145413846953e1366). Licencias observadas en esas versiones: MPL-2.0 y MIT, respectivamente. Las dependencias conservan licencias propias y deberán quedar fijadas antes de incorporarlas.
+Primary sources: [libdatachannel](https://github.com/paullouisageneau/libdatachannel/tree/bdc5ff28e9d3b863144c94a677ecf5bf043aaf15), [libpeer](https://github.com/sepfy/libpeer/tree/5b849de378545c31d34759a145413846953e1366). Observed licenses are MPL-2.0 and MIT, respectively. Dependencies retain separate licenses and must be pinned/attributed before distribution.
 
-## Evidencia del entorno local
+## Local toolchain evidence
 
-En el SDK OpenOrbis v0.5.4 instalado en Lubuntu existen `include/c++/v1`, `libc++.a`, `libc++abi.a`, los encabezados `pthread.h`, `poll.h` y `sys/socket.h`, y la biblioteca de importaciones `libScePosix.so`. La inspección de símbolos muestra `pthread_create`, `pthread_join`, `socket`, `sendto`, `recvfrom`, `select` y `clock_gettime` en Posix; `poll` también aparece en libkernel.
+The Lubuntu OpenOrbis v0.5.4 installation contains `include/c++/v1`, `libc++.a`, `libc++abi.a`, `pthread.h`, `poll.h`, `sys/socket.h` and import library `libScePosix.so`. Symbol inspection finds `pthread_create`, `pthread_join`, `socket`, `sendto`, `recvfrom`, `select` and `clock_gettime` in Posix; `poll` also appears in libkernel.
 
-La presencia de encabezados y símbolos permite estudiar una adaptación. No confirma el funcionamiento de esas llamadas, estructuras o bibliotecas WebRTC en firmware 12.00. No se ejecutó una prueba de transporte.
+Available declarations/symbols support porting research. They do not establish that calls, ABI structures or WebRTC libraries work on firmware 12.00. No transport runtime result is claimed from this inspection.
 
-## Primer trabajo de compilación para OpenOrbis
+## Initial external build work
 
-Mbed TLS 3.6.7, commit `068ff080b369adfac81509f9b57b2afabaf82dc5`, se compiló como bibliotecas estáticas `libmbedcrypto.a`, `libmbedx509.a` y `libmbedtls.a` en Lubuntu para el destino OpenOrbis. Las bibliotecas y sus fuentes externas permanecen fuera del PKG y de Git. Se conservaron `scripts/webrtc/openorbis.cmake` y `mbedtls-user-config.h` para describir la configuración. No se ejecutaron programas ni pruebas de Mbed TLS.
+Mbed TLS **3.6.7**, revision `068ff080b369adfac81509f9b57b2afabaf82dc5`, built static `libmbedcrypto.a`, `libmbedx509.a` and `libmbedtls.a` in Lubuntu for OpenOrbis. External source and archives stay outside Git/PKG at the confirmed 0.6.2 baseline. `scripts/webrtc/openorbis.cmake` and `mbedtls-user-config.h` record configuration. No Mbed TLS programs or tests were run.
 
-El perfil habilita DTLS-SRTP, desactiva sockets/archivos propios de Mbed TLS y exige `mbedtls_hardware_poll` para entropía nativa. Ese adaptador todavía no está implementado: estos archivos no bastan para conectar una sesión y no hay semilla fija ni sustitución por un generador no criptográfico.
+The profile enables DTLS-SRTP, disables Mbed TLS's own network/file layers and requires `mbedtls_hardware_poll` for native cryptographic entropy. Initial configuration did not yet include that adapter. A fixed seed or non-cryptographic substitute is not acceptable.
 
-La configuración de libdatachannel con Mbed TLS terminó correctamente; el primer intento de generar solo `datachannel-static` se detuvo por tipos BSD `u_int`/`u_long` ausentes en usrsctp y `pthread_np.h` ausente en libjuice. No se incorporó esa biblioteca a XCloud4. Falta revisar además el diseño de `sockaddr_storage` del SDK, resolución DNS y descubrimiento de interfaces, hilos y entropía de libjuice antes de ejecutar un transporte en la consola.
+libdatachannel configuration with Mbed TLS succeeded. Its first `datachannel-static` build stopped on missing BSD `u_int`/`u_long` types in usrsctp and missing `pthread_np.h` in libjuice. Before console use, the port must also review SDK `sockaddr_storage`, DNS/interface discovery, thread ABI and libjuice entropy. The current stage addresses those items; successful archive compilation must be distinguished from a working native session.
 
-Submódulos fijados por esa revisión: libjuice `b89c792e3612faf2f12cf35bcc56857313a06be3`, libsrtp `d33b8ffb1491a0b4b58a206889f09800cf7310ab` y usrsctp `fec583d54493f879d2ae44a743423bf8a04371ab`. Cada componente conserva su licencia; antes de distribuirlos se deben incluir avisos y modificaciones aplicables. Fuentes primarias: [Mbed TLS 3.6.7](https://github.com/Mbed-TLS/mbedtls/tree/068ff080b369adfac81509f9b57b2afabaf82dc5), [compilación de libdatachannel](https://github.com/paullouisageneau/libdatachannel/blob/bdc5ff28e9d3b863144c94a677ecf5bf043aaf15/BUILDING.md).
+Pinned submodules from that review:
 
-## Trabajo necesario
+- libjuice: `b89c792e3612faf2f12cf35bcc56857313a06be3`.
+- libsrtp: `d33b8ffb1491a0b4b58a206889f09800cf7310ab`.
+- usrsctp: `fec583d54493f879d2ae44a743423bf8a04371ab`.
 
-1. Fijar dependencias y configurar compilación estática para OpenOrbis, con ejemplos y pruebas desactivados.
-2. Revisar ABI de sockets, hilos, tiempo, resolución DNS y entropía criptográfica. Resolver funciones que el SDK no declare o exporte, conservando límites y cancelación.
-3. Generar una oferta SDP y huella DTLS reales en la PS4; intercambiarlas con Xbox siguiendo el contrato de GreenVita. No fabricar una oferta para aparentar conexión.
-4. Recibir SRTP, reconstruir imágenes H.264 y adaptarlas al decodificador nativo; decodificar Opus y alimentar AudioOut.
-5. Implementar los canales de control y entrada de Xbox y conectar los datos del DualShock 4.
+Each retains its own license; distribution requires applicable notices and modification/source references. Primary sources: [Mbed TLS 3.6.7](https://github.com/Mbed-TLS/mbedtls/tree/068ff080b369adfac81509f9b57b2afabaf82dc5) and [libdatachannel build documentation](https://github.com/paullouisageneau/libdatachannel/blob/bdc5ff28e9d3b863144c94a677ecf5bf043aaf15/BUILDING.md).
 
-La primera entrega de sesión puede confirmar preparación y cierre remotos sin recibir medios. Ese resultado no significa que WebRTC o el juego completo funcionen.
+## Implementation requirements
 
-## Referencias del protocolo
+1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
+2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
+3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.
+4. Receive SRTP, reconstruct H.264 frames for native decoding, decode Opus and feed AudioOut.
+5. Implement Xbox control/input channels and connect DualShock 4 state.
 
-- [Creación de sesión y ajustes](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/api.rs).
-- [Estado, conexión, SDP, ICE y cierre](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs).
-- [Sesión RTC de GreenVita](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api/streaming/rtc/session.rs).
+Session preparation or accepted `/connect` is not evidence of functioning WebRTC or a complete game.
+
+## Protocol sources
+
+- [Session creation/settings](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/api.rs).
+- [State, connection, SDP, ICE and closure](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/stream.rs).
+- [GreenVita RTC session](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api/streaming/rtc/session.rs).

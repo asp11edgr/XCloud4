@@ -1,24 +1,27 @@
-# Registro propio de XCloud4
+# XCloud4's own Microsoft registration
 
-El propietario autorizó crear XCloud4 en su directorio personal de Microsoft Entra. El portal confirmó el registro y la configuración guardada de cliente público.
+The owner authorized creating XCloud4 in the personal Microsoft Entra directory. The portal confirmed the registration and saved public-client configuration.
 
-- Nombre: **XCloud4**.
-- Id. público de aplicación (cliente): `f9ac8684-1032-4131-bb47-d2f58da9bb93`.
-- Cuentas admitidas: solo cuentas personales de Microsoft.
-- Permitir flujos de clientes públicos: habilitado y guardado.
-- Compatibilidad con SDK de Live: habilitada, valor inicial del portal.
-- Sin URI de redirección ni secreto de cliente para el flujo de dispositivo.
+- Name: **XCloud4**.
+- Public application/client ID: `f9ac8684-1032-4131-bb47-d2f58da9bb93`.
+- Supported accounts: personal Microsoft accounts only.
+- Allow public client flows: enabled and saved.
+- Live SDK compatibility: enabled, the portal's initial value.
+- No redirect URI or client secret for the device-code flow.
 
-Este identificador es público y puede incluirse en el código. Las contraseñas, códigos de dispositivo y tokens nunca se incluyen en este documento ni en Git. El registro propio se utilizó hasta 0.6.1 y queda conservado.
+This identifier is public and may appear in source. Passwords, device codes and tokens are never included in this document or Git. The own registration was used through 0.6.1 and is preserved.
 
-## Perfil temporal 0.6.2
+## Temporary profile in 0.6.2
 
-El registro propio completa acceso y catálogo, pero Passport rechaza el permiso de conexión con `invalid_scope`. Por autorización previa del propietario, 0.6.2 usa temporalmente el identificador público `1f907974-e22b-4810-a9de-d9647380c97e` que utiliza GreenVita. No es una aplicación registrada por este proyecto ni se presume que pertenezca a GreenVita. La interfaz informa del cliente temporal; Microsoft mostrará el nombre asociado al identificador en su autorización.
+The own registration completes account access and catalog requests, but Passport refuses the connection permission with `invalid_scope`. With the owner's prior authorization, 0.6.2 temporarily uses public identifier `1f907974-e22b-4810-a9de-d9647380c97e`, also used by GreenVita. It was not registered by XCloud4 and ownership by GreenVita is not assumed. The interface announces the temporary client; Microsoft shows its associated application name during authorization.
 
-Cada ejecución usa un único cliente para código, intercambio, renovación y Passport. Se requiere acceso nuevo completo; los tokens privados del registro propio no se reutilizan con otro cliente. La selección se conserva en `src/auth/auth_profile.h`. No se afirma resuelto el permiso hasta comprobar el cliente de referencia en consola. Consulta [INVESTIGACION_PASSPORT.md](INVESTIGACION_PASSPORT.md).
+One selected client is used for device code, exchange, renewal and Passport throughout the execution. A complete new authorization is required; private tokens from the own registration are never reused with another client. Selection lives in `src/auth/auth_profile.h`.
 
-El registro no demuestra que Microsoft haya emitido credenciales de Xbox ni que la consola pueda iniciar un juego. Esos resultados se comprobarán en sus respectivas etapas. El propietario deberá autorizar el acceso en la página de Microsoft cuando solicite un código desde la PS4.
+The owner and Klog confirmed Passport HTTP 200, `/connect` HTTP 202 and automatic DELETE HTTP 200 in 0.6.2, without a cleanup error. This establishes a client-dependent difference from the own registration's refusal, but not Microsoft's exact registration policy. See [the investigation](INVESTIGACION_PASSPORT.md).
 
-Guía del registro: https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app
+Registration itself is not proof that Microsoft has issued Xbox credentials or that a game can stream. Those outcomes require console evidence at their respective stages. The owner authorizes each device-code request on Microsoft's website.
 
-Flujo por código: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code
+## Microsoft documentation
+
+- [Register an application](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app).
+- [Device-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).

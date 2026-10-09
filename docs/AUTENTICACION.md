@@ -1,40 +1,51 @@
-# Siguiente etapa: cuenta Microsoft y catálogo
+# Microsoft authentication and Xbox credentials
 
-La base 0.2.2 ya reproduce la muestra y cierra correctamente. La siguiente entrega preparará conexión HTTPS y acceso por código desde PS4; después se integrará el catálogo de Xbox. Todavía no hay un código real, sesión ni token emitidos para XCloud4.
+## Current confirmed state
 
-## Flujo previsto
+Native HTTPS and Microsoft device-code authorization were confirmed in **0.3.1** with XCloud4's own registration. The Xbox catalog and credential exchanges were confirmed in **0.4.0**. Session creation/deletion followed in **0.5.0**; **0.6.2** confirms Passport and `/connect` using an authorized temporary reference client. Actual WebRTC game media remains pending.
 
-1. Al elegir iniciar sesión, pedir a Microsoft un código de dispositivo. Mostrar su dirección de verificación, código del usuario y tiempo restante.
-2. El propietario autoriza desde el navegador de su teléfono o PC. Su contraseña se introduce en Microsoft.
-3. Consultar el estado respetando el intervalo y la caducidad devueltos. Permitir cancelar, manejar acceso pendiente, rechazo y expiración.
-4. Con la autorización, obtener las credenciales de Xbox y del servicio cloud mediante los intercambios revisados en GreenVita.
-5. Solicitar el catálogo, mostrar los títulos y su disponibilidad real. La creación de la sesión de juego y WebRTC será otra etapa.
+The own registration is retained, but its Passport request returned `invalid_scope` in 0.6.1. Version 0.6.2 uses the public client identifier also used by GreenVita for the entire authentication flow. See [registration](REGISTRO_MICROSOFT.md), [connection authorization](AUTORIZACION_CONEXION.md), and [the investigation](INVESTIGACION_PASSPORT.md).
 
-## Implementación en PS4
+## Device-code flow
 
-- HTTP y TLS con las bibliotecas nativas del SDK (`Http.h`, `Ssl.h`, `Net.h`); funciones resueltas al entrar, igual que en la muestra multimedia. Validación de certificados habilitada.
-- Solicitudes fuera del hilo de dibujo, con límites de tiempo y respuesta. El menú debe seguir aceptando el mando durante el acceso.
-- JSON con límites y comprobación de tipos; distinguir fallos de conexión, del protocolo y del servicio.
-- El propietario registró XCloud4 y se incorporó su identificador público de aplicación OAuth. El portal confirma que permite cuentas personales y flujos de clientes públicos. Consulta `REGISTRO_MICROSOFT.md`. El identificador de GreenVita no se utiliza.
-- Tokens solo en memoria durante el primer hito; evitar imprimirlos o incluirlos en Git, paquetes o registros. Persistencia y renovación se diseñarán después.
+1. On the owner's request, ask Microsoft for a device code. Display the verification address, user code and remaining time.
+2. The owner authorizes access from a phone or PC browser. The password is entered on Microsoft's website.
+3. Poll at the returned interval and respect expiry. Handle pending authorization, refusal, expiration and cancellation.
+4. After authorization, exchange Microsoft credentials for Xbox and cloud credentials using the protocol researched in GreenVita.
+5. Request the catalog and display actual title identifiers and service-reported access. Account authorization alone does not demonstrate streaming eligibility or a playable game.
 
-## Fuentes revisadas
+## Native implementation
 
-- Microsoft, flujo OAuth de dispositivo: https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code
-- GreenVita, MPL-2.0, `src/api_xbox/auth.rs`, versión fijada en `REFERENCIAS.md`. Es una referencia de los intercambios Xbox; todavía no se ha adaptado su implementación.
+- Native SDK HTTP/TLS libraries (`Http.h`, `Ssl.h`, `Net.h`) are resolved when needed, as with the local media sample. Certificate validation remains enabled.
+- Requests run outside the drawing thread, with request and response limits. The UI continues reading the controller while authorization is pending.
+- Bounded JSON parsing checks types and distinguishes transport, protocol and service failures.
+- Tokens remain in private memory for the current execution. They are not printed, persisted, packaged or committed.
+- Microsoft renewal is implemented for connection authorization in 0.6.x; persistent account storage is future work. Valid rotated refresh tokens are retained before a cancellation is honored.
+- One client profile is selected for device code, token exchange, renewal and Passport. Tokens are never reused across client identifiers.
 
-Este documento describe la siguiente implementación. No demuestra autenticación ni disponibilidad de juegos en la PS4.
+## Version history
 
-## Entrega 0.3.0
+### 0.3.0: first account view
 
-Se añade CUENTA al menú. X solicita acceso por código, cuadrado comprueba HTTPS con los metadatos públicos de Microsoft y triángulo borra la sesión local. Entrar en la pantalla no solicita un código automáticamente. Círculo cancela una solicitud pendiente y vuelve al menú; OPTIONS espera su cancelación manteniendo la interfaz antes de solicitar la salida nativa confirmada en 0.2.2.
+The confirmed 0.2.2 local media/exit baseline was extended with `CUENTA`. X requests device-code access, Square checks HTTPS using public Microsoft metadata, and Triangle clears the local account. Entering the view does not request a code automatically. Circle cancels a pending action and returns; `OPTIONS` keeps the interface responsive while cancellation finishes, then uses the confirmed native exit path.
 
-El intercambio de credenciales Xbox y el catálogo aún no forman parte de esta entrega. Una cuenta autorizada solo significa que se obtuvo un token Microsoft para los permisos solicitados. No demuestra inicio de un juego ni acceso cloud. No se ejecutaron pruebas automatizadas; los resultados en consola se documentarán por separado.
+Xbox credential exchanges and catalog access were not part of that version. The initial plan had no emitted Microsoft token until execution on the console; later results below supersede that historical pending status.
 
-## Corrección 0.3.1
+### 0.3.1: HTTPS and account confirmed
 
-La 0.3.0 falló al localizar el módulo SSL, antes de enviar una solicitud HTTPS. La 0.3.1 amplía la localización por exportaciones y rutas nativas del sandbox. El propietario confirmó con una fotografía la cuenta Microsoft autorizada. Klog confirma comprobación de conexión con HTTP 200 y finalización del acceso en `X4_AUTH_AUTHORIZED`, HTTP 200, error cero. El token permanece en memoria durante esta ejecución. Sesión Xbox, catálogo y juegos siguen pendientes.
+Version 0.3.0 failed to locate SSL before sending an HTTPS request. Version 0.3.1 expands module lookup through exports and native sandbox paths. The owner's photo shows an authorized Microsoft account. Klog confirms the connection check with HTTP 200 and authorization ending in `X4_AUTH_AUTHORIZED`, HTTP 200, error zero. The token stays in memory until the application closes.
 
-## Resultado 0.4.0
+### 0.4.0: Xbox credentials and catalog confirmed
 
-Se confirmó en PS4 el acceso Microsoft, los intercambios RPS y XSTS, las credenciales cloud `xgpuweb` y la consulta regional del catálogo, todos con HTTP 200. La fotografía y Klog coinciden en 2733 títulos recibidos y 128 en la lista local. Klog confirma además 32 nombres Store obtenidos y finalización sin errores. Consulta CATALOGO_XBOX.md. La creación de una sesión de juego y WebRTC siguen pendientes.
+Microsoft access, RPS, XSTS, `xgpuweb` cloud credentials and the regional catalog all returned HTTP 200 on PS4. The photo and Klog agree on 2733 titles received and 128 retained locally. Klog also confirms 32 Store names and completion without errors. See [catalog evidence](CATALOGO_XBOX.md).
+
+### 0.6.2: connection authorization confirmed
+
+After a new device-code authorization with the temporary reference client, Microsoft renewal returned HTTP 200, Passport HTTP 200 and `/connect` HTTP 202. Automatic session deletion returned HTTP 200. This establishes authorization acceptance; it does not establish WebRTC, game video/audio or game input.
+
+## Sources
+
+- [Microsoft OAuth device-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-device-code).
+- GreenVita, MPL-2.0, `src/api_xbox/auth.rs`, pinned in [REFERENCIAS.md](REFERENCIAS.md). Its protocol is researched; the Rust implementation has not been copied.
+
+No automated tests were added or run. Console outcomes are documented separately from static review and compilation.

@@ -1,5 +1,7 @@
 # Audio
 
-`demo_audio.c` genera tonos PCM S16 suaves a 48 kHz, alternando izquierda y derecha durante ocho segundos. Un hilo nativo alimenta AudioOut en bloques de 1024 muestras; el silencio persiste al repetir la muestra. El audio 0.2.0 falló con 0x809B0001 al asociar el usuario a la salida. La 0.2.1 abre MAIN con SYSTEM (0xFF), siguiendo el ejemplo público OpenOrbis, y espera antes de reutilizar los datos. El propietario confirmó el sonido; Klog registra 384000 muestras sin error. La 0.2.2 conserva esta implementación.
+`demo_audio.c` generates soft S16 PCM tones at 48 kHz, alternating left and right for eight seconds. A native thread feeds AudioOut in blocks of 1024 samples; mute state persists when the sample repeats.
 
-Decodificar Opus, alimentar audio desde WebRTC y sincronizarlo con video son etapas posteriores. Consulta `docs/MULTIMEDIA.md`.
+Version 0.2.0 failed with `0x809B0001` when associating the user with the output. Version 0.2.1 opens MAIN with SYSTEM (`0xFF`), following the public OpenOrbis example, and waits before reusing PCM data. The owner confirmed sound; Klog records 384000 samples without an error. Version 0.2.2 preserves this implementation.
+
+Live Opus decoding, WebRTC audio reception and audiovisual synchronization are subsequent work. See [native media](../../docs/MULTIMEDIA.md).

@@ -1,39 +1,39 @@
-# Sesión Xbox y catálogo — confirmado en 0.4.0
+# Xbox credentials and catalog — confirmed in 0.4.0
 
-## Punto de partida confirmado
+## Confirmed starting point
 
-La 0.3.1 completó HTTPS y OAuth por dispositivo con el registro propio de XCloud4 en PS4 12.00. La foto del propietario muestra la autorización y Klog confirma HTTP 200, estado AUTHORIZED y error cero. El token Microsoft permanece en memoria durante esa ejecución.
+Version 0.3.1 completed native HTTPS and device-code OAuth with XCloud4's own registration on PS4 12.00. The owner's photo shows authorization and Klog confirms HTTP 200, AUTHORIZED and error zero. The Microsoft token remains in memory for that execution.
 
-## Siguiente entrega
+## Catalog behavior
 
-Desde CUENTA, después de autorizar Microsoft, R1 abre CATALOGO DE XBOX. La aplicación consulta los servicios de Xbox con la sesión actual. La cruceta recorre los resultados, L1/R1 cambian ocho posiciones, cuadrado actualiza y círculo vuelve a CUENTA. OPTIONS conserva el cierre confirmado, esperando la cancelación de una consulta pendiente.
+From `CUENTA`, R1 opens `CATALOGO DE XBOX` after Microsoft authorization. The application queries Xbox using the current account. The D-pad moves through results, L1/R1 move eight entries, Square refreshes and Circle returns to the account. `OPTIONS` retains the confirmed native exit flow, waiting for cancellation of a pending request.
 
-La lista tendrá un límite local explícito de 128 entradas. Los nombres procederán del catálogo público de Microsoft Store cuando se obtengan; si no hay nombre, se mostrará el identificador real devuelto por Xbox. Un resultado de catálogo no demuestra inicio de un juego. El permiso indicado por el servicio y la disponibilidad real de streaming deben mantenerse separados.
+The list has an explicit local limit of **128 entries**. Names come from the public Microsoft Store catalog when available; otherwise the actual Xbox identifier is shown. Catalog success is not evidence of a game starting. Service-reported access and actual streaming availability are separate results.
 
-## Intercambios previstos
+## Credential exchanges
 
-1. Token Microsoft → token de usuario Xbox, con RPS.
-2. Token de usuario Xbox → XSTS para `http://gssv.xboxlive.com/`.
-3. XSTS → credenciales cloud de `xgpuweb`, con alternativa `xgpuwebf2p` cuando el servicio rechaza el offering principal.
-4. Región predeterminada recibida del servicio → `/v2/titles`, con la credencial cloud correspondiente.
-5. Identificadores Store recibidos → nombres públicos localizados a MX/es-MX.
+1. Microsoft token → Xbox user token through RPS.
+2. Xbox user token → XSTS for `http://gssv.xboxlive.com/`.
+3. XSTS → `xgpuweb` cloud credentials, with `xgpuwebf2p` as an alternative after an eligible refusal of the primary offering.
+4. Service-returned default region → `/v2/titles`, using its cloud credential.
+5. Returned Store identifiers → public names localized to MX/es-MX.
 
-Estas llamadas se confirmaron desde la PS4 mediante Klog y la fotografía del propietario. No se inicia una sesión de juego ni se añade WebRTC en esta entrega. Las credenciales permanecen privadas en el trabajador de red y no se escriben en registros ni archivos.
+These calls were confirmed from PS4 by Klog and the owner's photo. Version 0.4.0 did not create a game session or add WebRTC. Credentials stay private on the network worker and are not written to files or logs.
 
-## Referencias de protocolo
+## Protocol references
 
-Se consultan archivos de GreenVita fijados en `ae2625d295b4fba005a769b1309fd70dcd6cb63f`: `src/api_xbox/auth.rs`, `api.rs`, `game_catalog.rs` y `catalog.rs`. La implementación de XCloud4 es propia; no se copia código Rust, claves, identificadores de cliente ni datos del usuario. Las referencias y licencias están en REFERENCIAS.md.
+GreenVita files pinned at `ae2625d295b4fba005a769b1309fd70dcd6cb63f`: `src/api_xbox/auth.rs`, `api.rs`, `game_catalog.rs` and `catalog.rs`. XCloud4 implements the protocol in original C; it does not copy Rust source, keys or user data. The catalog milestone used XCloud4's own OAuth identifier. The later authorized temporary identifier in 0.6.2 is documented in [registration](REGISTRO_MICROSOFT.md). See [references and licenses](REFERENCIAS.md).
 
-## Estado
+## Implementation and package
 
-Claude Opus 5.5 implementó los intercambios, las solicitudes JSON y el lector de respuestas grandes. Codex integró la interfaz y revisó el código, retiró mensajes de XErr cuyo significado no estaba verificado, ajustó el total a entradas válidas recibidas (la lista mostrada se deduplica) y añadió cancelación durante el recorrido. El indicador de límite local se activa solo al descartar entradas por capacidad. La implementación completa compiló y se empaquetó en Lubuntu sin errores ni avisos. El paquete está copiado y verificado en la PS4; catálogo confirmado por fotografía y registro.
+Claude Opus 5.5 implemented the exchanges, JSON requests and large-response reader. Codex integrated the UI and reviewed the code, removed XErr interpretations that lacked evidence, adjusted the total to valid received entries (the displayed list is deduplicated), and added cancellation during catalog traversal. The local-limit indicator activates only when entries are discarded for capacity. The implementation built and packaged in Lubuntu without errors or warnings.
 
-`XCloud4-0.4.0.pkg`: 6619136 bytes, SHA-256 `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1`. La huella del archivo recuperado desde `/data/pkg/XCloud4-0.4.0.pkg` coincide con el original.
+`XCloud4-0.4.0.pkg`: 6619136 bytes, SHA-256 `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1`. The file downloaded back from `/data/pkg/XCloud4-0.4.0.pkg` matched the original hash.
 
-Los nombres se consultan para las primeras 32 entradas en lotes de ocho. El rechazo de un lote de nombres no borra el catálogo. Las credenciales Xbox se eliminan al finalizar la consulta; un error o cancelación del catálogo conserva el token Microsoft mientras sea vigente. No se añadieron ni ejecutaron pruebas automatizadas.
+Names are requested for the first 32 entries in batches of eight. A failed name batch does not erase the catalog. Xbox credentials are wiped when the action ends; catalog error or cancellation preserves the Microsoft token while it is valid. No automated tests were added or run.
 
-## Resultado real en la consola
+## Actual console result
 
-Klog confirma HTTP 200 en RPS, XSTS, login cloud `xgpuweb` y lista regional. La lista regional contiene 1247270 bytes: 2733 entradas válidas recibidas, 128 guardadas y 21 de esas 128 con permiso indicado por el servicio. Los cuatro lotes Store recibieron HTTP 200 y aportaron ocho nombres cada uno (32 en total). La consulta finalizó en READY, HTTP 200, error cero y XErr cero. La fotografía de la 0.4.0 muestra el catálogo, el total de 2733 y el límite local de 128, con nombres y estados de acceso.
+Klog confirms HTTP 200 for RPS, XSTS, `xgpuweb` cloud login and the regional list. The response contains **1247270 bytes**, **2733 valid received entries**, **128 retained entries**, and **21 of those marked with access by the service**. Four Store batches returned HTTP 200 and eight names each, for 32 names. The action ended READY, HTTP 200, error zero and XErr zero. The owner's 0.4.0 photo shows the catalog, 2733 total, the 128 local limit, names and access labels.
 
-La descripción propia XCloud4/PS4 fue aceptada en esta consulta. No se necesitó la alternativa `xgpuwebf2p`. Este resultado confirma el catálogo y los intercambios de credenciales; no demuestra transmisión de un juego ni navegación o actualización comprobadas por separado. La siguiente etapa es crear una sesión de juego y establecer el transporte WebRTC.
+The own XCloud4/PS4 device description was accepted. The `xgpuwebf2p` alternative was not needed. This establishes catalog and credential exchanges, not game streaming. Navigation, refresh and cancellation were not checked separately. Later session milestones are documented in [SESION_XBOX.md](SESION_XBOX.md) and [AUTORIZACION_CONEXION.md](AUTORIZACION_CONEXION.md).

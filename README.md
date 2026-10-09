@@ -1,72 +1,53 @@
 # XCloud4
 
-Cliente nativo experimental de Xbox Cloud Gaming para PS4 Fat con firmware 12.00 y GoldHEN.
+Experimental native Xbox Cloud Gaming client for a PS4 Fat running firmware **12.00** and **GoldHEN v2.4b18.7**, built with OpenOrbis.
 
-## Base confirmada — 0.1.2
+## Current confirmed milestone: 0.6.2
 
-Compilada y empaquetada en Lubuntu con OpenOrbis v0.5.4 y Clang/LLD 21.1.8. Incluye pantalla de inicio, vista del proyecto y lectura del DualShock 4 con botones, palancas y gatillos. La 0.1.0 se instaló en PS4 12.00 pero falló por Fios2 ausente; la 0.1.1 pasó ese bloqueo y falló por libc ausente. Ambos resultados se confirmaron en el registro de la consola.
+The owner confirmed that connection authorization completes without an error. The PS4 kernel log confirms Microsoft token renewal **HTTP 200**, Passport **HTTP 200**, `/connect` **HTTP 202**, and automatic session deletion **HTTP 200**, with no cleanup error. This milestone is preserved as **`v0.6.2`**.
 
-La 0.1.2 incluye las dos dependencias. El registro confirma el inicio del programa y el propietario confirmó que aparecen las opciones CONTROL y PROYECTO y que ambas funcionan. Esta confirmación cubre el inicio y las dos vistas; no se han comprobado por separado todos los valores de botones, palancas y gatillos. Conexión con Xbox, reproducción de video y audio siguen pendientes.
+Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth client identifier also used by GreenVita. The original XCloud4 registration is preserved. All authentication steps use the same selected client; refresh tokens are never reused across clients. The own registration worked for account access and the catalog but returned `invalid_scope` for Passport. See [connection authorization](docs/AUTORIZACION_CONEXION.md) and [the Passport investigation](docs/INVESTIGACION_PASSPORT.md).
 
-El entorno de trabajo elegido es la máquina virtual de Lubuntu existente en VirtualBox. Se mantiene su red NAT para descargar herramientas y preparar compilaciones.
+**Actual game video, game audio and game input are not present in this confirmed version.** Work has resumed on WebRTC negotiation and native media reception. Successful connection authorization alone does not establish a media connection.
 
-## Nueva etapa — 0.2.0
+The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-Agrega IMAGEN Y SONIDO al menú: una muestra local H.264 de ocho segundos, 640 × 368, con decodificación mediante Videodec2 y presentación NV12 convertida a RGB. Reproduce tonos suaves alternados entre izquierda y derecha, mediante AudioOut a 48 kHz. X repite la muestra, cuadrado silencia y círculo vuelve al inicio. La carga de estas bibliotecas se realiza al entrar en la muestra, para conservar el inicio de la interfaz sin depender del reproductor.
+## Confirmed progress
 
-La 0.2.0 está compilada y empaquetada en Lubuntu. El propietario informó que el video va bien y su foto muestra 217 / 240 imágenes; Klog registra la primera imagen 640 × 368, pitch 640, y el final de la muestra. El audio falló con `0x809B0001` y Klog informa `sceMbusAddHandleByUserId`. No incluye cuenta Microsoft, catálogo, WebRTC ni juegos de Xbox. La 0.1.2 se conserva con la etiqueta `v0.1.2` y su paquete separado.
+| Version | Result on the owner's PS4 |
+|---|---|
+| 0.1.2 | Application startup, `CONTROL` and `PROYECTO` views work. Fios2 and libc packaging dependencies are included. |
+| 0.2.2 | Local H.264 sample, stereo PCM tones and clean `OPTIONS` exit to the PS4 menu work. |
+| 0.3.1 | Native HTTPS and Microsoft device-code authorization work with XCloud4's own registration. |
+| 0.4.0 | Real Xbox catalog: 2733 titles received, 128 retained locally, 21 of those marked with access by Xbox, and 32 Microsoft Store names obtained. |
+| 0.5.0 | Remote session creation, readiness and automatic deletion work. |
+| 0.6.2 | Passport authorization, `/connect` acceptance and automatic deletion work with the temporary reference client. |
 
-### Corrección 0.2.1
+The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
-La salida de audio MAIN usa el usuario SYSTEM (0xFF), siguiendo el ejemplo público de OpenOrbis, y espera el consumo del bloque PCM antes de sobrescribirlo. Agrega registros de inicialización, apertura, hilo y finalización. El propietario confirmó que el sonido funciona en la 0.2.1; Klog muestra 384000 muestras enviadas sin error. El video conserva la implementación de la 0.2.0. El cierre con OPTIONS mostró CE-34878-0 y SIGSYS al entrar en `_exit`.
+### Earlier failures and fixes
 
-### Corrección de cierre 0.2.2
+- **0.1.0–0.1.1:** startup stopped before `main` because the package lacked OpenOrbis Fios2, then libc. Both dependencies are present in 0.1.2.
+- **0.2.0:** H.264 playback worked; audio failed with `0x809B0001`. Version 0.2.1 uses SYSTEM (`0xFF`) for the MAIN AudioOut port and waits before reusing PCM buffers. The owner confirmed the sound.
+- **0.2.1:** exiting through `_exit` triggered `CE-34878-0`/SIGSYS. Version 0.2.2 releases resources and requests `sceSystemServiceLoadExec("exit", NULL)`. The owner confirmed clean exit.
+- **0.3.0:** locating SSL failed before any HTTPS request. Version 0.3.1 resolves native module exports and sandbox library paths, with certificate validation retained.
+- **0.6.0–0.6.1:** the own OAuth client reached session readiness but Passport returned HTTP 400, identified as `invalid_scope` in 0.6.1. Version 0.6.2's temporary reference client succeeded. The exact Microsoft registration policy has not been established.
 
-OPTIONS prepara la solicitud de salida mediante SystemService antes de cerrar recursos. Después solicita `sceSystemServiceLoadExec("exit", NULL)` y espera que la consola retire el proceso, evitando regresar a la ruta `_exit` que falló. Una solicitud rechazada permite reintentar desde la interfaz. Audio y video conservan sus implementaciones confirmadas. El propietario confirmó que la 0.2.2 regresa al inicio sin el error: esta es la nueva base funcional.
+Detailed evidence and package hashes are in the [development log](docs/JORNADA.md).
 
-## Acceso Microsoft — 0.3.0
+## Roadmap
 
-Se prepara la pantalla CUENTA con conexión HTTPS y acceso por código. Usa el registro **XCloud4** creado por el propietario, para cuentas personales y con flujos de cliente público habilitados. X solicita un código, cuadrado comprueba la conexión, triángulo elimina la sesión local y círculo cancela/vuelve. Los tokens quedan en memoria durante esta ejecución y se borran al cerrar. La muestra y salida nativa conservan la base confirmada 0.2.2.
+1. Prepare OpenOrbis and produce a minimal native application — confirmed.
+2. Establish local video, audio and DualShock 4 input — local media and UI confirmed.
+3. Implement Microsoft account authorization and the Xbox catalog — confirmed.
+4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; actual streaming in progress.
+5. Improve reconnection, errors and performance — future work.
 
-La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada por fotografía del propietario y Klog: conexión HTTPS con HTTP 200 y cuenta Microsoft autorizada mediante el registro propio de XCloud4, sin error. La sesión permanece en memoria hasta cerrar la aplicación. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
+The proposed first beta target is **720p at 30 FPS**. Its feasibility depends on actual decoder and transport behavior on the console. Title search remains a [future request](docs/MEJORAS_FUTURAS.md), not part of the current stage.
 
-## Catálogo confirmado — 0.4.0
+## Build
 
-El propietario y Klog confirmaron el catálogo real: 2733 títulos recibidos, 128 conservados por el límite local, 21 de esas 128 entradas con acceso indicado por Xbox y 32 nombres de Microsoft Store. Funcionan RPS, XSTS y credenciales cloud con el registro propio y la descripción XCloud4/PS4. Consulta `docs/CATALOGO_XBOX.md`.
-
-## Confirmed connection authorization — 0.6.2
-
-The PS4 owner confirmed that 0.6.2 completes without an error. Console Klog confirms Microsoft renewal HTTP 200, Passport HTTP 200, `/connect` HTTP 202, and automatic session deletion HTTP 200 with no cleanup error. This version uses the temporary public client identifier used by GreenVita, with the owner's authorization. The original XCloud4 registration is preserved. Actual WebRTC video, audio and game input are the next milestone and are not implemented in this confirmed version.
-
-## Preparación de sesión — 0.5.0
-
-Se añade la solicitud de sesión desde el título seleccionado y una pantalla de preparación y cierre. El propietario y Klog confirmaron preparación de AMONGUS, estado listo para negociar y cierre automático con HTTP 200, sin error. Esta entrega todavía no recibe imagen, sonido ni control del juego. Consulta [SESION_XBOX.md](docs/SESION_XBOX.md). Las bases y la adaptación de WebRTC se detallan en [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). La búsqueda de títulos queda anotada para después en [MEJORAS_FUTURAS.md](docs/MEJORAS_FUTURAS.md).
-
-## Autorización de conexión — 0.6.0
-
-La 0.6.0 renueva Microsoft, solicita Passport y envía `/connect` después de la preparación remota. Está compilada y copiada a la PS4 con huella verificada. Distingue la aceptación del permiso de conexión de la transmisión del juego, aún pendiente. Consulta [AUTORIZACION_CONEXION.md](docs/AUTORIZACION_CONEXION.md). Confirmación en consola pendiente; `v0.5.0` conserva el último hito confirmado.
-
-### Diagnóstico 0.6.1
-
-La 0.6.0 preparó y cerró correctamente la sesión, pero Passport rechazó el permiso con HTTP 400 antes de `/connect`. La 0.6.1, compilada y transferida, muestra el código OAuth específico mediante mensajes fijos y conserva la cuenta. Es una entrega de diagnóstico: la causa y solución del rechazo siguen pendientes de confirmar. Consulta [AUTORIZACION_CONEXION.md](docs/AUTORIZACION_CONEXION.md).
-
-## Catálogo Xbox — 0.4.0
-
-Desde CUENTA, después de autorizar Microsoft, R1 abre el catálogo. Se añade el intercambio de credenciales Xbox y la consulta de títulos en la región predeterminada que devuelva el servicio, con una lista local de hasta 128 entradas y nombres de Microsoft Store para las primeras 32 cuando se obtengan. La cruceta recorre los títulos; L1/R1 cambian ocho posiciones; cuadrado actualiza y círculo vuelve a la cuenta. Los permisos se muestran solo cuando los indica Xbox. La 0.4.0 está confirmada por fotografía y Klog: recibió 2733 títulos, guardó 128 por el límite local y obtuvo 32 nombres Store, con HTTP 200 y sin errores. Se conserva con la etiqueta v0.4.0. No inicia juegos ni incorpora WebRTC. Consulta `docs/CATALOGO_XBOX.md`.
-
-## Etapas
-
-1. Preparar OpenOrbis y las herramientas de compilación; generar una aplicación mínima propia.
-2. Comprobar en la PS4 la salida de video, el audio y DualShock 4.
-3. Implementar autenticación de Microsoft y catálogo.
-4. Implementar sesión de xCloud, transporte WebRTC, video/audio e instrucciones del control.
-5. Trabajar en reconexión, errores y rendimiento.
-
-Objetivo propuesto para la primera beta: 720p a 30 FPS. Su viabilidad depende de las pruebas reales de decodificación y transporte en la consola.
-
-## Compilación
-
-En Lubuntu, después de preparar el entorno:
+Use the existing Lubuntu VM in VirtualBox, after [preparing the environment](docs/PREPARACION.md):
 
 ```bash
 cd "$HOME/Projects/XCloud4"
@@ -76,29 +57,31 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-Se generan `build/xcloud4.elf`, `build/eboot.bin` y `dist/XCloud4-0.6.1.pkg`. `X4_RUNTIME_MODULES` debe apuntar a una carpeta externa con `libSceFios2.prx` y `libc.prx` en formato SELF. Son módulos auxiliares abiertos de OpenOrbis, disponibles en su distribución y con fuente en `src/modules`. Los binarios se conservan fuera de Git; el empaquetador se detiene si falta alguno o si recibe un ELF sin convertir. Consulta `THIRD_PARTY_NOTICES.md`.
+The confirmed 0.6.2 source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.6.2.pkg`. Later development versions may change the package name.
 
-El empaquetador antiguo de OpenOrbis necesita bibliotecas de OpenSSL 1.1 aisladas; prepáralas una vez con `bash scripts/preparar-empaquetador.sh`. Ese paso no las instala en el sistema. Consulta [instalación en PS4](docs/INSTALACION_PS4.md).
+`X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
-## Organización
+The legacy OpenOrbis packager needs isolated OpenSSL 1.1 libraries. Prepare them once with `bash scripts/preparar-empaquetador.sh`; this does not install them system-wide. See [PS4 installation](docs/INSTALACION_PS4.md).
 
-- `src/core`: entrada y ciclo de vida.
-- `src/auth`: HTTPS, cuenta Microsoft, catálogo Xbox y preparación de sesión. Cuenta y catálogo confirmados en consola.
-- `src/streaming`: sesión y transporte pendientes.
-- `src/video`: VideoOut y muestra H.264 con Videodec2.
-- `src/input`: lectura y reconexión del DualShock 4.
-- `src/audio`: muestra PCM con AudioOut; Opus pendiente.
-- `src/ui`: inicio, control, proyecto, imagen y sonido, cuenta, catálogo y preparación de sesión.
-- `docs`: decisiones, arquitectura, preparación y referencias.
-- `scripts`: herramientas de preparación y trabajo local.
+## Source layout
 
-No guardes contraseñas, tokens ni credenciales de Microsoft en este repositorio.
+- `src/core`: entry point and lifecycle.
+- `src/auth`: native HTTPS, Microsoft account, Xbox catalog, session preparation and authorization.
+- `src/streaming`: WebRTC integration under development.
+- `src/video`: VideoOut and the local H.264/Videodec2 sample.
+- `src/input`: DualShock 4 reading and reconnection.
+- `src/audio`: AudioOut PCM sample; live Opus reception is under development.
+- `src/ui`: Spanish home, controller, project, local media, account, catalog and session views.
+- `docs`: architecture, decisions, preparation, references and evidence.
+- `scripts`: environment and local build tools.
 
-## Referencias
+Never commit passwords, device codes, access/refresh tokens, private keys, SDK contents, generated packages or private console logs.
 
-- https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain
-- https://github.com/Day-OS/green-vita
-- https://github.com/redphx/better-xcloud
-- https://github.com/JaimeJimenezG/Moonlight-ps4
+## Upstream references and license
 
-El mapa de adaptación y las versiones revisadas están en [REFERENCIAS.md](docs/REFERENCIAS.md). XCloud4 usa GPL-3.0-only; consulta `LICENSE` y `THIRD_PARTY_NOTICES.md`.
+- [OpenOrbis](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain): native toolchain and public APIs.
+- [GreenVita](https://github.com/Day-OS/green-vita): Xbox authentication, session and WebRTC protocol research.
+- [Better xCloud](https://github.com/redphx/better-xcloud): settings and region research.
+- [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4): native media API research.
+
+Pinned versions and adaptation decisions are in [REFERENCIAS.md](docs/REFERENCIAS.md). XCloud4 is **GPL-3.0-only**; see [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

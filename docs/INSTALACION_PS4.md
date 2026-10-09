@@ -1,68 +1,73 @@
-# Instalar XCloud4
+# Installing XCloud4 on PS4
 
-## Cliente temporal — 0.6.2
+## Confirmed package: 0.6.2
 
-Cerrar XCloud4, instalar `XCloud4-0.6.2.pkg` desde Package Installer con HDD o ALL y aceptar reemplazarla. Está copiada y verificada en `/data/pkg`. CUENTA informa que usa temporalmente el identificador de referencia que utiliza GreenVita; autorizar en Microsoft desde cero. El consentimiento puede mostrar otro nombre de aplicación. Abrir catálogo con R1 y elegir un título CON ACCESO con X. Conservar el resultado de Passport y `/connect` para comparar con el rechazo `invalid_scope` del registro propio; aceptación pendiente. Todavía no se transmite el juego.
+`XCloud4-0.6.2.pkg` is installed and confirmed on the owner's PS4. Passport authorization, `/connect` acceptance and automatic session deletion work without an error. It is the latest confirmed milestone; it does not yet stream the game.
 
-## Diagnóstico Passport — 0.6.1
+- Application identifier: `XCLD00001`.
+- Package size: 6619136 bytes.
+- SHA-256: `25c724aca93728d53c9d4c6b7e52f0acff3dff45c263779bdbcc87e25699b601`.
+- Transferred location: `/data/pkg/XCloud4-0.6.2.pkg`; the FTP round-trip hash matched.
+- Target: PS4 firmware 12.00 with GoldHEN v2.4b18.7.
 
-Cerrar XCloud4 e instalar `XCloud4-0.6.1.pkg` desde Package Installer con HDD o ALL; aceptar reemplazarla. Autorizar Microsoft nuevamente, abrir catálogo con R1 y elegir un título CON ACCESO con X. Conservar una foto del mensaje `Passport:` y su código si el rechazo se repite. Esta versión identifica el motivo del HTTP 400 observado en 0.6.0; todavía no se afirma corregido. El paquete está copiado y verificado en `/data/pkg`.
+The Spanish account view announces the temporary reference client also used by GreenVita. A complete new Microsoft authorization is required when changing client profiles. Microsoft's consent page may show a different application name.
 
-## Autorización de conexión — 0.6.0
+## Installation over the network
 
-Cerrar XCloud4, instalar `XCloud4-0.6.0.pkg` y aceptar reemplazar la aplicación. Está copiada y verificada en `/data/pkg`; elegir HDD o ALL en Package Source. Autorizar Microsoft nuevamente en CUENTA, abrir el catálogo con R1, elegir un título CON ACCESO y pulsar X. La autorización Passport y `/connect` se intentan automáticamente después de la preparación. Si Xbox acepta, aparece `XBOX ACEPTO LA CONEXION`; todavía no se transmite el juego. Esperar el cierre automático de 45 segundos y conservar una fotografía del mensaje o detalle HTTP si falla. Confirmación real pendiente. Consulta [AUTORIZACION_CONEXION.md](AUTORIZACION_CONEXION.md).
+1. Close XCloud4 and enable the GoldHEN FTP server.
+2. Transfer the desired PKG to `/data/pkg`.
+3. In GoldHEN → Debug Settings, choose **Package Source: HDD** or **ALL**.
+4. Open **Package Installer**, choose the exact package filename and accept replacing XCloud4 when prompted.
+5. Open XCloud4 from the PS4 menu. Retain the actual result or a photo of any error.
 
-## Preparación de sesión — 0.5.0
+GoldHEN supports packages in `/data/pkg`; [upstream reference](https://github.com/GoldHEN/GoldHEN). Menu names and placement may vary by GoldHEN version.
 
-Cerrar XCloud4 antes de instalar `XCloud4-0.5.0.pkg`, aceptar reemplazar la aplicación y autorizar Microsoft nuevamente en CUENTA. Abrir el catálogo con R1, seleccionar un título marcado CON ACCESO y pulsar X. Esta versión prepara una sesión remota; todavía no transmite el juego.
+## Installation by USB
 
-Si Xbox prepara la sesión, anotar el mensaje mostrado. Círculo debe esperar el cierre remoto y volver al catálogo. Si se deja abierta, una sesión lista se cierra después de 45 segundos. Si aparece un error, conservar su detalle numérico y estado HTTP para el diagnóstico. OPTIONS solicita cierre de la sesión antes de salir de la aplicación. Consulta [SESION_XBOX.md](SESION_XBOX.md).
+1. Turn on PS4 and enable GoldHEN using the owner's usual procedure.
+2. Connect a FAT32/exFAT USB drive already recognized by the console to the PC. Formatting is unnecessary if it already works.
+3. Copy the desired XCloud4 PKG to the USB root and safely eject it from Windows.
+4. Connect it to PS4, open Package Installer and select the exact XCloud4 filename.
+5. Confirm the application name before accepting replacement, then open it from the console menu.
 
-El propietario y Klog confirmaron preparación de AMONGUS y cierre automático de la sesión sin error. La cancelación con Círculo y el cierre de una sesión activa mediante OPTIONS no se comprobaron por separado. Todavía no se transmite un juego.
+All versions share `XCLD00001`; a replacement installs the new version over that application.
 
-## Corrección de cierre 0.2.2
+## Using the confirmed 0.6.2 milestone
 
-Instalar `XCloud4-0.2.2.pkg` y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO y pulsar OPTIONS para salir. El propietario confirmó video, sonido y retorno correcto al inicio sin CE-34878-0; Klog confirma el cierre mediante LoadExec. Esta versión queda como base funcional.
+1. Open `CUENTA`. Press X to request access, then authorize on Microsoft's website from a phone or PC.
+2. Open the catalog with R1 after authorization.
+3. Select a title marked `CON ACCESO` and press X.
+4. Wait for preparation and connection authorization. The Spanish UI reports Xbox acceptance.
+5. The confirmed version closes the prepared/authorized session automatically after its 45-second hold. No game video or audio is expected from this milestone.
 
-## Corrección de sonido 0.2.1
+Circle requests session closure before returning; `OPTIONS` waits for closure before exiting. The automatic close path is confirmed, while those manual active-session paths were not checked separately. See [connection authorization](AUTORIZACION_CONEXION.md).
 
-Seleccionar `XCloud4-0.2.1.pkg` en Package Installer (HDD o ALL si se copió por red) y aceptar reemplazar XCloud4. Abrir IMAGEN Y SONIDO; debe conservar el video y ahora intentar abrir el audio MAIN con el usuario SYSTEM. X repite, cuadrado silencia y círculo vuelve. Sonido pendiente de confirmación. La 0.2.0 ya reprodujo video en la consola, pero su audio mostró `0x809B0001`.
+## Historical package checks
 
-## Nueva muestra 0.2.0
+These describe earlier stage-specific checks; later confirmed results supersede their original pending status.
 
-Paquete: `XCloud4-0.2.0.pkg`, mismo identificador `XCLD00001`. Compilado y empaquetado en Lubuntu; reproducción en PS4 pendiente. Conserva CONTROL y PROYECTO y agrega IMAGEN Y SONIDO. Incluye un clip H.264 sintético de ocho segundos y tonos PCM suaves alternados entre izquierda y derecha. No inicia juegos ni sesión de Xbox.
+| Version | Purpose and result |
+|---|---|
+| 0.1.2 | Included missing Fios2/libc auxiliary modules; owner confirmed startup, `CONTROL` and `PROYECTO`. |
+| 0.2.0 | Added `IMAGEN Y SONIDO`: synthetic eight-second H.264 clip and alternating PCM tones. Video worked; audio returned `0x809B0001`. |
+| 0.2.1 | SYSTEM-user MAIN AudioOut fix; owner confirmed sound. `OPTIONS` still caused `CE-34878-0`. |
+| 0.2.2 | Native LoadExec exit; owner confirmed return to PS4 without `CE-34878-0`. |
+| 0.5.0 | Owner and Klog confirmed AMONGUS preparation and automatic deletion without error. |
+| 0.6.0 | Own-client Passport refused authorization with HTTP 400 before `/connect`; deletion succeeded. |
+| 0.6.1 | Identified the exact Passport refusal as `invalid_scope`; deletion succeeded. |
+| 0.6.2 | Temporary reference client: Passport 200, `/connect` 202, DELETE 200 confirmed. |
 
-Por red: cerrar XCloud4, abrir GoldHEN → Debug Settings → Package Source: HDD o ALL → Package Installer → `XCloud4-0.2.0.pkg`. Aceptar reemplazar XCloud4 cuando lo pida. Para USB, copiar este mismo paquete a la raíz de una unidad que la PS4 ya reconozca y elegirlo en Package Installer.
+## Controls
 
-Después de instalar, abrir IMAGEN Y SONIDO con la cruceta y X. Debe aparecer una imagen de colores en movimiento y tonos alternados. X repite; cuadrado silencia o activa el sonido; círculo vuelve; OPTIONS sale. La pantalla informa el estado y códigos de error para diagnosticar el resultado real. La imagen y los tonos son demostraciones independientes; la sincronización de una transmisión WebRTC queda pendiente.
+- Home: D-pad chooses a view; X opens it.
+- `CONTROL`: button colors, stick positions and trigger values are shown. Hold L1 and press Circle to return.
+- `PROYECTO`: Circle returns.
+- `IMAGEN Y SONIDO`: X repeats the local sample; Square mutes/unmutes; Circle returns.
+- `CUENTA`: X requests authorization; Square checks connection; Triangle clears the local account; R1 opens the catalog after authorization.
+- Catalog: D-pad selects; L1/R1 move eight entries; Square refreshes; X requests the selected title's session; Circle returns to the account.
+- Session: Circle requests closure and returns after completion.
+- `OPTIONS`: requests application exit, waiting for active network cleanup.
 
-## Base funcional conservada
+The local sample contains a synthetic 640 × 368 H.264 image and soft alternating stereo tones. They are independent demonstrations, not an Xbox stream or evidence of WebRTC audiovisual synchronization.
 
-Paquete: `XCloud4-0.1.2.pkg`. Identificador: `XCLD00001`. Esta es una aplicación inicial con pantalla y control; aún no inicia sesiones ni juegos de Xbox. Incluye Fios2 y libc, módulos auxiliares de OpenOrbis ausentes en los paquetes anteriores. El propietario confirmó el inicio y funcionamiento de las opciones CONTROL y PROYECTO en su PS4 12.00 con GoldHEN v2.4b18.7.
-
-## Por USB
-
-1. Enciende tu PS4 y activa GoldHEN con tu procedimiento habitual.
-2. Conecta una USB ya preparada en FAT32 o exFAT a la PC. No es necesario formatearla si la consola ya la reconoce.
-3. Copia `XCloud4-0.1.2.pkg` a la raíz de la USB y expúlsala desde Windows.
-4. Conéctala a la PS4. En GoldHEN, abre el instalador de paquetes y selecciona XCloud4. Los nombres y ubicación exacta del menú pueden variar según la versión de GoldHEN.
-5. Si solicita reemplazar la versión anterior de XCloud4, comprueba el nombre antes de aceptar. Abre XCloud4 desde el menú de la consola.
-
-## Por FTP al disco interno
-
-GoldHEN admite paquetes en `/data/pkg` (fuente: https://github.com/GoldHEN/GoldHEN). La copia local de la 0.1.2 se transfirió allí y su SHA-256 coincide con el archivo de la PC.
-
-1. Activa el servidor FTP de GoldHEN.
-2. Copia el PKG a `/data/pkg` mediante FTP.
-3. En GoldHEN → Debug Settings, elige Package Source: HDD o ALL.
-4. En Package Installer, selecciona `XCloud4-0.1.2.pkg` y reemplaza la versión anterior de XCloud4 si lo solicita.
-5. Abre la aplicación y conserva el resultado real. Los registros permiten distinguir dependencias ausentes de errores de pantalla o control.
-
-## Controles
-
-- En inicio: cruceta para elegir CONTROL o PROYECTO; X para abrir.
-- En CONTROL: los botones cambian de color, las palancas muestran posición y los gatillos muestran su valor. Mantén L1 y pulsa círculo para volver.
-- En PROYECTO: círculo para volver.
-- OPTIONS cierra la aplicación.
-
-Si el paquete no instala, aparece pantalla negra o la aplicación se cierra, conserva el texto o una foto del error para continuar desde el resultado real. La confirmación en PS4 12.00 corresponde al inicio y a las dos vistas de esta versión; Xbox y reproducción de audio/video siguen pendientes.
+If installation fails, the screen stays black or the app closes, retain the exact message or a photo. Console logs distinguish dependency-loading, network and media failures. Individual controller values and every manual cancellation path have not been verified separately.

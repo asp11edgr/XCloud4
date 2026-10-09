@@ -1,56 +1,61 @@
-# Bases del proyecto
+# Project references
 
-Revisión de fuentes oficiales realizada el 8 de octubre de 2026. Los identificadores siguientes fijan lo que se revisó, aunque los proyectos sigan cambiando.
+Primary sources were reviewed on October 8, 2026. These identifiers pin the material reviewed even as upstream projects change.
 
-| Proyecto | Versión revisada | Uso previsto | Licencia observada |
+| Project | Reviewed revision | Intended use | Observed license |
 |---|---|---|---|
-| [GreenVita](https://github.com/Day-OS/green-vita) | `ae2625d295b4fba005a769b1309fd70dcd6cb63f` | Autenticación, sesión Xbox y transporte WebRTC | MPL-2.0 |
-| [Better xCloud](https://github.com/redphx/better-xcloud) | `f8397043f6d2148d2345d508902a38c69cf1ee20` | Preferencias de sesión y selección de región | MIT |
-| [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4) | `61427a214d4e632ee246816a98ee4f2374844a73` | Investigación de H.264, VideoOut, audio y control en PS4 | No se encontró LICENSE/COPYING en la raíz del árbol revisado; pendiente aclarar el permiso para adaptar su código propio |
+| [GreenVita](https://github.com/Day-OS/green-vita) | `ae2625d295b4fba005a769b1309fd70dcd6cb63f` | Authentication, Xbox sessions and WebRTC protocol | MPL-2.0 |
+| [Better xCloud](https://github.com/redphx/better-xcloud) | `f8397043f6d2148d2345d508902a38c69cf1ee20` | Session preferences and region selection | MIT |
+| [Moonlight PS4](https://github.com/JaimeJimenezG/Moonlight-ps4) | `61427a214d4e632ee246816a98ee4f2374844a73` | Research into PS4 H.264, VideoOut, audio and input APIs | No root LICENSE/COPYING found in the reviewed tree; permission to adapt its own code remains unresolved |
 
 ## GreenVita
 
-Su cliente está escrito en Rust para PS Vita. Se revisaron `src/api_xbox/auth.rs` y `src/api/streaming/rtc/session.rs`: contienen flujo de autenticación, tokens y abstracción de una sesión WebRTC con recepción de audio/video y envío del control. Las rutas, tipos de memoria y decodificador de Vita necesitan implementación específica de PS4.
+The client is written in Rust for PS Vita. Reviewed files `src/api_xbox/auth.rs` and `src/api/streaming/rtc/session.rs` contain authentication/token exchanges and WebRTC session abstractions for media reception and input transmission. Vita memory, paths and decoders require PS4-specific implementation.
 
-Siguiente trabajo: documentar los intercambios del protocolo y escoger bibliotecas de HTTP/TLS/JSON y WebRTC que puedan compilarse con OpenOrbis. La implementación deberá conservar los avisos aplicables a cualquier archivo adaptado. No se copiaron credenciales ni identificadores de cliente a XCloud4.
+XCloud4 uses the protocol as a reference and original native C implementation. GreenVita's Rust source and credential persistence have not been copied. The public OAuth client identifier also used by GreenVita is temporarily selected in 0.6.2 with the owner's authorization, following an observed own-client Passport refusal. It is public metadata, not a secret or an ownership claim. See [registration](REGISTRO_MICROSOFT.md) and [the investigation](INVESTIGACION_PASSPORT.md).
+
+Any future source adaptation must retain applicable attribution and license notices.
 
 ## Better xCloud
 
-Es un proyecto TypeScript para el cliente web. `src/utils/region.ts` consulta la región preferida y, cuando corresponde, la región por defecto devuelta por el servicio. `src/modules/stream/stream-settings-utils.ts` es una referencia para los ajustes de sesión. XCloud4 necesitará sus propios modelos e interfaz; no se incorpora un navegador a partir de ese script.
+A TypeScript project for the web client. `src/utils/region.ts` reads the preferred region and, where relevant, the service-returned default. `src/modules/stream/stream-settings-utils.ts` provides session-setting research. XCloud4 needs its own models and UI; the script does not provide a PS4-native browser integration.
 
 ## Moonlight PS4
 
-Se revisaron `src/video/decoder_orbis.c`, `src/audio/audio_orbis.c`, README, PLAN y documentación de consola. Su README declara validación en firmware 9.00. Eso no confirma compatibilidad con nuestro firmware 12.00.
+Reviewed `src/video/decoder_orbis.c`, `src/audio/audio_orbis.c`, README, PLAN and console documentation. Its README reports validation on firmware 9.00, which does not establish compatibility with this project's firmware 12.00.
 
-El proyecto expone decodificación H.264 con `libSceVideodec2`, presentación y audio con `sceAudioOut`. Su transporte es Moonlight/Sunshine; Xbox Cloud Gaming requiere la sesión y transporte WebRTC correspondientes. Los parches de kernel publicados para 9.00 no se incorporan al cliente de 12.00.
+The project demonstrates research paths for `libSceVideodec2`, presentation and `sceAudioOut`. Its transport is Moonlight/Sunshine; Xbox Cloud Gaming requires its corresponding session protocol and WebRTC transport. Published 9.00 kernel patches are not incorporated into the 12.00 client. Its implementation has not been copied.
 
-## Código utilizado hasta ahora
+## Incorporated source through the confirmed baseline
 
-Los tres proyectos anteriores se usan como referencias de investigación; aún no se ha incorporado su código. La versión 0.1.0 adapta las secuencias de inicialización pública de VideoOut y Pad de OpenOrbis y añade pantallas, renderizado e icono propios bajo GPL-3.0-only.
-## Contratos de red para 0.3.0
+These three applications are protocol/API research references. Version 0.1.0 adapts public OpenOrbis VideoOut/Pad initialization and adds an original UI, renderer and icon under GPL-3.0-only. Videodec2 declarations and the public AudioOut example are attributed in [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
-Se consultaron las declaraciones de Http/Net/Ssl del SDK OpenOrbis v0.5.4 y ejemplos públicos para completar firmas sin tipos. La implementación de transporte y del flujo OAuth es propia de XCloud4; no se copió la implementación de los proyectos siguientes.
+## Native network contracts researched for 0.3.x
 
-- `sceSslTerm(ctx)` y `sceNetPoolDestroy(id)` con retorno entero: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/http.c y https://github.com/flatz/ps4_remote_pkg_installer/blob/master/net.c.
-- Firmas de `sceHttpSetRecvTimeOut(id, usec)` y `sceHttpSetAutoRedirect(id, enabled)`, y opciones TLS: https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.cpp y https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.h.
+OpenOrbis v0.5.4 Http/Net/Ssl declarations and public examples were consulted to complete missing signatures. Transport and OAuth code are original XCloud4 implementations.
 
-Las declaraciones ayudan a preparar la ABI; su uso real debe confirmarse en PS4 12.00. Los resultados de consola se registran en JORNADA.md.
+- Integer returns for `sceSslTerm(ctx)` and `sceNetPoolDestroy(id)`: [flatz HTTP source](https://github.com/flatz/ps4_remote_pkg_installer/blob/master/http.c) and [network source](https://github.com/flatz/ps4_remote_pkg_installer/blob/master/net.c).
+- `sceHttpSetRecvTimeOut(id, usec)`, `sceHttpSetAutoRedirect(id, enabled)` and TLS options: [shadPS4 HTTP implementation](https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.cpp) and [declarations](https://github.com/shadps4-emu/shadPS4/blob/main/src/core/libraries/network/http.h).
 
-Para la 0.3.1 se consultó la ruta nativa de bibliotecas `/<sandbox>/common/lib/<nombre>.sprx` y el uso de `sceKernelGetFsSandboxRandomWord`: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c. La función está declarada en `orbis/libkernel.h` del SDK local. Se implementó un cargador propio con límites, comprobación de exportaciones y diagnósticos sin rutas completas; no se copió el código del proyecto de referencia.
+Declarations inform ABI work; they do not establish console execution. Actual results are recorded in [JORNADA.md](JORNADA.md).
 
-## Sesión Xbox y catálogo para 0.4.0
+For 0.3.1, the native `/<sandbox>/common/lib/<name>.sprx` path and `sceKernelGetFsSandboxRandomWord` were researched in [flatz's module source](https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c). The function is declared in the local SDK's `orbis/libkernel.h`. XCloud4 implements a bounded module loader with export validation and diagnostics that omit complete paths; the reference implementation was not copied.
 
-GreenVita, en la misma versión fijada arriba, aporta referencias del protocolo:
+## Xbox credentials and catalog for 0.4.0
 
-- Intercambio RPS, XSTS y offerings cloud: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs.
-- Consulta regional `/v2/titles` y cabeceras: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/api.rs.
-- Campos de títulos y permisos indicados por el servicio: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/game_catalog.rs.
-- Nombres públicos localizados de Microsoft Store: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/catalog.rs.
+GreenVita at the pinned revision above supplies protocol references:
 
-Se usa el registro propio de XCloud4. Se escriben implementaciones C originales; no se adapta código Rust ni la persistencia de credenciales de Vita. Los resultados reales de Xbox se documentarán después de ejecutar el paquete en PS4, sin inferirlos de estas referencias.
+- [RPS, XSTS and cloud offerings](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs).
+- [Regional `/v2/titles` and request headers](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/api.rs).
+- [Title fields and service-reported access](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/game_catalog.rs).
+- [Public localized Store names](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/catalog.rs).
 
-## Sesión y transporte: siguiente etapa
+The catalog milestone used the own XCloud4 registration and original C code. Actual credential/catalog success is supported by the owner's photo and console logs, not inferred from upstream source.
 
-Se consultó `src/api_xbox/stream.rs` y la creación de sesión de `api.rs` de GreenVita en la misma versión fijada. Describen `/v5/sessions/cloud/play`, estados de preparación, conexión, SDP, ICE y DELETE para cerrar la sesión. La implementación nativa conserva estas referencias de protocolo. Las candidatas de transporte, sus versiones y la evidencia del SDK local se detallan en [WEBRTC_PS4.md](WEBRTC_PS4.md).
+## Session, authorization and transport
 
-La búsqueda de títulos solicitada por el propietario queda aplazada en [MEJORAS_FUTURAS.md](MEJORAS_FUTURAS.md).
+GreenVita `src/api_xbox/stream.rs` and session creation in `api.rs` describe `/v5/sessions/cloud/play`, readiness, `/connect`, SDP, ICE, keepalive and DELETE. The native implementation preserves these protocol references. Session preparation/deletion are confirmed in 0.5.0; Passport and `/connect` with the temporary profile are confirmed in 0.6.2.
+
+The Passport comparison additionally reviewed [Stratix MicrosoftAuthService](https://github.com/nafields/stratix/blob/59d804185192f0c0f618836aace9229b77ce48e4/Packages/XCloudAPI/Sources/XCloudAPI/Auth/MicrosoftAuthService.swift), revision `59d804185192f0c0f618836aace9229b77ce48e4`. This is protocol research, not incorporated Swift source.
+
+Transport library candidates, pins and local SDK evidence are in [WEBRTC_PS4.md](WEBRTC_PS4.md). Title search stays deferred in [MEJORAS_FUTURAS.md](MEJORAS_FUTURAS.md).

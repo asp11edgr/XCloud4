@@ -1,34 +1,44 @@
-# Investigación de `invalid_scope`
+# Investigating Passport `invalid_scope`
 
-## Evidencia de la PS4
+## Console evidence
 
-Con el registro propio de XCloud4, 0.6.1 completa autorización Microsoft, catálogo, preparación de juego y renovación Microsoft. Passport devuelve HTTP 400 con el código exacto `invalid_scope`; `/connect` no se envía. DELETE devuelve HTTP 200 y confirma el cierre. La fotografía del propietario coincide con Klog. No se obtuvo un subcódigo numérico.
+With XCloud4's own registration, 0.6.1 completed Microsoft authorization, catalog access, game preparation and Microsoft renewal. Passport returned **HTTP 400** with the exact OAuth code **`invalid_scope`**; `/connect` was not sent. DELETE returned HTTP 200 and confirmed closure. The owner's photo matches Klog. No numeric subcode was obtained.
 
-Esto sitúa el bloqueo en la solicitud del permiso de conexión. No establece por sí solo una restricción específica de Microsoft ni que la cuenta, red o PS4 estén averiadas.
+This places the refusal at the connection-permission request. It does not by itself establish a particular Microsoft policy or a fault in the account, network or PS4.
 
-## Comparación de fuentes primarias
+## Comparison of primary sources
 
-| Fuente | Resultado observado en su código/documentación |
+| Source | Observation in its pinned code/documentation |
 |---|---|
-| GreenVita, `ae2625d295b4fba005a769b1309fd70dcd6cb63f` | Usa `1f907974-e22b-4810-a9de-d9647380c97e`, renovación Microsoft previa y el mismo scope Passport en `login.live.com/oauth20_token.srf`; lee `access_token` y envía `userToken` a `/connect` |
-| Stratix, `59d804185192f0c0f618836aace9229b77ce48e4` | Usa el mismo identificador, endpoint y scope; codifica el formulario y lee `access_token` |
-| Caso del repositorio Microsoft MSAL #3491 (2021) | Muestra el mismo identificador junto al scope Passport; el autor marca su fuente como Internal (Microsoft). Es evidencia histórica del uso, no confirmación actual del permiso de nuestro registro |
-| Microsoft Identity y OAuth RFC 6749 | `invalid_scope` identifica un scope inválido; OAuth contempla también un scope desconocido, mal formado o superior a lo concedido |
+| GreenVita, `ae2625d295b4fba005a769b1309fd70dcd6cb63f` | Uses `1f907974-e22b-4810-a9de-d9647380c97e`, prior Microsoft renewal and the same Passport scope at `login.live.com/oauth20_token.srf`; reads `access_token` and sends `userToken` to `/connect`. |
+| Stratix, `59d804185192f0c0f618836aace9229b77ce48e4` | Uses the same identifier, endpoint and scope; encodes the form and reads `access_token`. |
+| Microsoft MSAL repository issue #3491 (2021) | Shows the same identifier with the Passport scope; the author labels the source Internal (Microsoft). This is historical usage evidence, not confirmation of the own registration's current permission. |
+| Microsoft Identity documentation and OAuth RFC 6749 | `invalid_scope` indicates an invalid scope; OAuth also covers unknown, malformed or excessive requested scopes. |
 
-El formulario de XCloud4 codifica sus valores correctamente y el scope coincide con esas dos implementaciones. La diferencia identificada es el cliente OAuth: nuestro registro usa `f9ac8684-1032-4131-bb47-d2f58da9bb93`. Que el servicio no admita ese permiso para el registro propio es una hipótesis razonable, aún sin confirmar. No se encontró en las guías consultadas un procedimiento público específico que habilite este scope Passport para un registro nuevo; no se afirma que no exista.
+XCloud4 form-encodes values and requests the scope used by those implementations:
 
-## Siguiente diagnóstico preparado
+```text
+service::http://Passport.NET/purpose::PURPOSE_XBOX_CLOUD_CONSOLE_TRANSFER_TOKEN
+```
 
-La 0.6.2 usa temporalmente el identificador de referencia que utiliza GreenVita, con autorización previa del propietario. Ese identificador no es el registro propio de XCloud4 ni debe presentarse como una aplicación creada por GreenVita. La pantalla informa que es un cliente temporal de referencia. La autorización en Microsoft mostrará el nombre asociado a ese identificador; no se presume cuál será.
+The identified difference was the OAuth client: the own registration uses `f9ac8684-1032-4131-bb47-d2f58da9bb93`. At that stage, client-specific permission refusal was a hypothesis. No public procedure specifically enabling this Passport scope for a new registration was found in the consulted guides; this does not establish that no such procedure exists.
 
-Todos los pasos (código, intercambio, renovación y Passport) usan el mismo cliente en toda la ejecución. Es necesario iniciar sesión nuevamente; los tokens del registro propio no se reutilizan con otro identificador. No hay cambio automático de cliente después de un rechazo. El identificador propio se conserva en `auth_profile.h`, con selección de perfil al compilar.
+## Confirmed comparison in 0.6.2
 
-Si el cliente de referencia acepta Passport y el propio lo rechaza, tendremos evidencia concreta de una diferencia vinculada al cliente. Si también rechaza el mismo scope, habrá que investigar el endpoint o concesión inicial antes de atribuirlo al registro. El resultado todavía está pendiente: código fuente de otros clientes no demuestra funcionamiento actual en nuestra consola.
+With the owner's authorization, 0.6.2 uses the public reference identifier also used by GreenVita. It is not this project's own registration, and ownership by GreenVita is not assumed. The interface announces a temporary reference client. Microsoft displays the name associated with that identifier; no particular name is presumed.
 
-## Fuentes
+All steps — device code, token exchange, renewal and Passport — use the same client during the execution. A new sign-in is required. Tokens from the own registration are not reused with another identifier, and no automatic client switch occurs after refusal. The own identifier remains in `auth_profile.h`, selected at compilation.
 
-- [GreenVita, autorización](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs).
-- [Stratix, MicrosoftAuthService](https://github.com/nafields/stratix/blob/59d804185192f0c0f618836aace9229b77ce48e4/Packages/XCloudAPI/Sources/XCloudAPI/Auth/MicrosoftAuthService.swift).
-- [Microsoft MSAL, caso #3491](https://github.com/AzureAD/microsoft-authentication-library-for-js/issues/3491).
-- [Microsoft, errores de identidad](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes).
-- [OAuth 2.0, RFC 6749, sección 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).
+The owner confirmed no error. Klog identifies 0.6.2 and records Microsoft renewal **HTTP 200**, Passport **HTTP 200** (1090 bytes), `/connect` **HTTP 202** with an empty response, and automatic DELETE **HTTP 200**. The final state is CLOSED, `connection_authorized=1`, `cleanup_failed=0`, error zero.
+
+**Conclusion supported by this comparison:** the reference client accepts the same Passport flow that the own client refused. The outcome establishes a difference associated with the selected client. It does **not** establish Microsoft's exact registration policy or a verified portal setting that would enable the own client. The original registration remains available while work proceeds with the temporary profile.
+
+This confirms connection authorization only. No SDP/ICE, game video, game audio or game input was received in 0.6.2.
+
+## Sources
+
+- [GreenVita authentication](https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs).
+- [Stratix MicrosoftAuthService](https://github.com/nafields/stratix/blob/59d804185192f0c0f618836aace9229b77ce48e4/Packages/XCloudAPI/Sources/XCloudAPI/Auth/MicrosoftAuthService.swift).
+- [Microsoft MSAL issue #3491](https://github.com/AzureAD/microsoft-authentication-library-for-js/issues/3491).
+- [Microsoft identity error codes](https://learn.microsoft.com/en-us/entra/identity-platform/reference-error-codes).
+- [OAuth 2.0 RFC 6749, section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2).

@@ -1,51 +1,57 @@
-# Dependencias y referencias
+# Dependencies and third-party references
 
 ## OpenOrbis PS4 Toolchain
 
-Versión fijada para la preparación: v0.5.4.
+Pinned preparation version: **v0.5.4**.
 
-- Fuente: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain
-- Archivo: `toolchain-llvm-18.tar.gz`
-- SHA-256 publicado por GitHub: `3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526`
-- Licencia del repositorio: GPL-3.0. Los componentes distribuidos dentro del SDK conservan sus propias licencias.
-- El Makefile y el empaquetado adaptan parámetros de los ejemplos hello_world/input. La secuencia de VideoOut de `src/video/display.c` y la inicialización de `src/input/controller.c` se adaptaron de los ejemplos públicos del SDK. La copia de la licencia original se conserva en `docs/licenses/OpenOrbis-GPL-3.0.txt`.
+- [Source](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain).
+- Archive: `toolchain-llvm-18.tar.gz`.
+- GitHub-published SHA-256: `3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526`.
+- Repository license: GPL-3.0. Components distributed inside the SDK retain their respective licenses.
+- The Makefile and packaging adapt parameters from the hello_world/input examples. VideoOut initialization in `src/video/display.c` and controller initialization in `src/input/controller.c` adapt public SDK examples. The original license is retained in `docs/licenses/OpenOrbis-GPL-3.0.txt`.
 
-El SDK se instala fuera del repositorio de XCloud4, en `~/.local/share/xcloud4/OpenOrbis/PS4Toolchain`.
+The SDK is installed outside this repository at `~/.local/share/xcloud4/OpenOrbis/PS4Toolchain`.
 
-### Declaraciones de Videodec2
+### Videodec2 declarations
 
-`src/video/videodec2_abi.h` adapta las estructuras públicas de la propuesta #213 de OpenOrbis, de Backporter, bajo la licencia GPL-3.0 del repositorio. Fuente fijada: `9b9e82a2ec4e8cd3c34a086ca82339032cf69da0`, archivo `include/orbis/_types/Videodec2.h`.
+`src/video/videodec2_abi.h` adapts public types from OpenOrbis proposal #213 by Backporter under the repository's GPL-3.0 license. Pinned source: `9b9e82a2ec4e8cd3c34a086ca82339032cf69da0`, `include/orbis/_types/Videodec2.h`.
 
-- Propuesta: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/pull/213
-- Fuente correspondiente: https://github.com/Backporter/OpenOrbis-PS4-Toolchain/blob/9b9e82a2ec4e8cd3c34a086ca82339032cf69da0/include/orbis/_types/Videodec2.h
-- Licencia conservada: `docs/licenses/OpenOrbis-GPL-3.0.txt`.
+- [Proposal](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/pull/213).
+- [Corresponding source](https://github.com/Backporter/OpenOrbis-PS4-Toolchain/blob/9b9e82a2ec4e8cd3c34a086ca82339032cf69da0/include/orbis/_types/Videodec2.h).
+- Retained license: `docs/licenses/OpenOrbis-GPL-3.0.txt`.
 
-El SDK v0.5.4 tiene declaraciones incompletas para esta API. Se conserva la estructura de salida de 48 bytes de la propuesta y se resuelven las funciones al abrir la muestra. Las implementaciones de carga, manejo de memoria, lectura de la muestra, conversión NV12 y reproducción PCM son propias de XCloud4. No se ha copiado la implementación de Moonlight PS4.
+SDK v0.5.4 has incomplete declarations for this API. The proposal's 48-byte output structure is retained and functions are resolved when the sample opens. Module loading, memory ownership, sample reading, NV12 conversion and PCM playback are original XCloud4 implementations. Moonlight PS4's implementation has not been copied.
 
-### Muestra local
+### Local sample and AudioOut
 
-`assets/sample.h264` es un patrón sintético generado con FFmpeg 8.0.1 y libx264 en Lubuntu, mediante `scripts/generar-muestra.sh`. No contiene material de un juego, música ni imágenes de terceros. FFmpeg y libx264 solo se utilizan en la PC; sus ejecutables y bibliotecas no se incluyen en el PKG. Los tonos PCM se generan en XCloud4.
+`assets/sample.h264` is a synthetic pattern generated in Lubuntu with FFmpeg 8.0.1 and libx264 using `scripts/generar-muestra.sh`. It contains no game footage, music or third-party imagery. FFmpeg and libx264 run only on the development PC; their executables and libraries are not included in the PKG. XCloud4 generates its PCM tones.
 
-La 0.2.1 adapta la selección del usuario SYSTEM para el puerto MAIN y la espera de consumo con `sceAudioOutOutput(handle, NULL)` del ejemplo público `samples/audio-wav/audio-wav/main.cpp` de OpenOrbis v0.5.4, bajo GPL-3.0. Fuente: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp. Se conserva la licencia en `docs/licenses/OpenOrbis-GPL-3.0.txt`. No se incluye su archivo musical ni su decodificador WAV.
+Version 0.2.1 adapts SYSTEM-user selection for MAIN and buffer-consumption waiting via `sceAudioOutOutput(handle, NULL)` from OpenOrbis v0.5.4's public `samples/audio-wav/audio-wav/main.cpp`, under GPL-3.0. [Corresponding source](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/blob/v0.5.4/samples/audio-wav/audio-wav/main.cpp). The license is retained in `docs/licenses/OpenOrbis-GPL-3.0.txt`. That example's music and WAV decoder are not included.
 
-## Referencias futuras
+## Protocol and API research
 
-GreenVita (MPL-2.0), Better xCloud (MIT) y Moonlight PS4 (licencia del código propio pendiente de aclarar) se consideran referencias de investigación. No se ha incorporado su código. Las versiones revisadas y los archivos de interés están en `docs/REFERENCIAS.md`.
+GreenVita (MPL-2.0), Better xCloud (MIT), and Moonlight PS4 (permission to adapt its own code not yet clarified) are research references. Their implementations have not been incorporated into the confirmed 0.6.2 baseline. Reviewed versions and relevant files are listed in [REFERENCIAS.md](docs/REFERENCIAS.md).
 
-## Bibliotecas del empaquetador en la PC
+The public OAuth reference identifier also used by GreenVita is used temporarily with the owner's authorization in 0.6.2. This is not a claim of ownership of that registration or incorporation of GreenVita's Rust implementation.
 
-El empaquetador LibOrbisPkg incluido en OpenOrbis usa .NET Core 3.0. Para ejecutarlo en Ubuntu 26.04 se extrae el paquete oficial de Ubuntu `libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb` en una carpeta privada, sin instalarlo en el sistema. SHA-256: `7cf39d70a639017d1dd7c8d36daa2258063608688e449fddf40ffdd46f992a78`. Fuente: https://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb
+## PC-only packaging libraries
 
-Estas bibliotecas se usan únicamente durante el empaquetado local. No se incluyen en el PKG ni en el repositorio de XCloud4.
+OpenOrbis's LibOrbisPkg packager uses .NET Core 3.0. To run it on Ubuntu 26.04, the official Ubuntu package `libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb` is extracted into an isolated local directory without installing it system-wide. SHA-256: `7cf39d70a639017d1dd7c8d36daa2258063608688e449fddf40ffdd46f992a78`. [Source package download](https://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl1.1_1.1.1f-1ubuntu2.24_amd64.deb).
 
-El código fuente de XCloud4 se distribuye bajo GPL-3.0-only; consulta `LICENSE`. El alfabeto de píxeles, el icono y las pantallas se crearon para este proyecto.
+These libraries are used only for local packaging. They are not included in the PKG or XCloud4 repository.
 
-## Módulos auxiliares de OpenOrbis
+XCloud4 source is GPL-3.0-only; see [LICENSE](LICENSE). The pixel alphabet, icon and UI were created for this project.
 
-El registro real de la consola confirmó que el cargador exige `sce_module/libSceFios2.prx` y `sce_module/libc.prx` antes de entrar en `main`: la 0.1.0 falló por Fios2 ausente y la 0.1.1 por libc ausente después de agregar Fios2. El PKG 0.1.2 preparado para el propietario incluye ambos módulos del ejemplo de OpenOrbis v0.5.4, que se conservan en una carpeta externa al repositorio. No se incorpora su código fuente ni se modifica su contenido.
+## OpenOrbis auxiliary modules
 
-Los dos módulos son auxiliares abiertos del repositorio de OpenOrbis, no bibliotecas propietarias del SDK de Sony. Su fuente en la etiqueta v0.5.4 está en `src/modules/libSceFios2/libSceFios2/lib.c` y `src/modules/libc/libc/lib.c`. El script `src/modules/build-and-copy.sh` los compila y copia a los ejemplos; conservan la licencia GPL-3.0 del proyecto OpenOrbis, cuya copia se incluye en `docs/licenses/OpenOrbis-GPL-3.0.txt`.
+Actual console logs established that the loader requires `sce_module/libSceFios2.prx` and `sce_module/libc.prx` before entering `main`: 0.1.0 failed because Fios2 was missing; 0.1.1 passed that lookup and failed because libc was missing. Package 0.1.2 and subsequent packages include both modules from the OpenOrbis v0.5.4 example, retained externally without modifying their content.
 
-Fuente correspondiente: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/tree/v0.5.4/src/modules
+These are open auxiliary OpenOrbis modules, not proprietary Sony SDK libraries. Corresponding v0.5.4 source is `src/modules/libSceFios2/libSceFios2/lib.c` and `src/modules/libc/libc/lib.c`. `src/modules/build-and-copy.sh` builds and copies them to examples. They retain OpenOrbis's GPL-3.0 license, included at `docs/licenses/OpenOrbis-GPL-3.0.txt`.
 
-Los binarios generados se mantienen fuera del repositorio de XCloud4. El módulo de sistema obtenido por FTP de la consola no se utiliza ni se distribuye. El funcionamiento de la app requiere confirmarse en la consola.
+[Corresponding source](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain/tree/v0.5.4/src/modules).
+
+Generated module binaries stay outside Git. A native system module obtained over FTP from the console was not used or distributed. Application behavior is established from console results, not merely module inclusion.
+
+## WebRTC dependencies under development
+
+Pinned library candidates and external compilation status are documented in [WEBRTC_PS4.md](docs/WEBRTC_PS4.md). They were not included in the confirmed 0.6.2 package. Any later integration must add the corresponding license texts, source references and modification notices before distribution.
