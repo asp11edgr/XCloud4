@@ -30,6 +30,10 @@ Se prepara la pantalla CUENTA con conexión HTTPS y acceso por código. Usa el r
 
 La 0.3.0 falló al localizar SSL. La corrección **0.3.1** ya está confirmada por fotografía del propietario y Klog: conexión HTTPS con HTTP 200 y cuenta Microsoft autorizada mediante el registro propio de XCloud4, sin error. La sesión permanece en memoria hasta cerrar la aplicación. Credenciales de Xbox, catálogo y sesión de juego aún no están implementados. Consulta `docs/REGISTRO_MICROSOFT.md` y `docs/AUTENTICACION.md`.
 
+## Catálogo Xbox — 0.4.0
+
+Desde CUENTA, después de autorizar Microsoft, R1 abre el catálogo. Se añade el intercambio de credenciales Xbox y la consulta de títulos en la región predeterminada que devuelva el servicio, con una lista local de hasta 128 entradas y nombres de Microsoft Store para las primeras 32 cuando se obtengan. La cruceta recorre los títulos; L1/R1 cambian ocho posiciones; cuadrado actualiza y círculo vuelve a la cuenta. Los permisos se muestran solo cuando los indica Xbox. La 0.4.0 está compilada, empaquetada y copiada con verificación de huella a la PS4; todavía no está confirmada en consola. No inicia juegos ni incorpora WebRTC. Consulta `docs/CATALOGO_XBOX.md`.
+
 ## Etapas
 
 1. Preparar OpenOrbis y las herramientas de compilación; generar una aplicación mínima propia.

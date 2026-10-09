@@ -16,6 +16,8 @@ int main(void)
     X4DemoAudio audio = {.handle = -1};
     X4Auth *auth = x4_auth_create();
     X4AuthSnapshot account = {0};
+    static X4CatalogSnapshot catalog;
+    unsigned catalog_selected = 0;
     int media_active = 0;
     int closing = 0;
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -29,12 +31,13 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.3.1: interfaz, multimedia y acceso Microsoft\n");
+    printf("XCloud4 0.4.0: interfaz, multimedia, cuenta y catalogo Xbox\n");
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);
         int previous_page = screen.page;
         if (!closing) x4_screen_update(&screen, controller.pressed, controller.data.buttons);
-        if (previous_page == 4 && screen.page != 4) x4_auth_cancel(auth);
+        if ((previous_page == 4 || previous_page == 5) && screen.page != previous_page)
+            x4_auth_cancel(auth);
         if (screen.exit_requested) {
             if (x4_auth_busy(auth)) {
                 x4_auth_cancel(auth);
@@ -52,8 +55,34 @@ reopen_interface:;
             if (controller.pressed & ORBIS_PAD_BUTTON_CROSS) x4_auth_start(auth, X4_AUTH_SIGN_IN);
             else if (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) x4_auth_start(auth, X4_AUTH_CHECK_CONNECTION);
             else if (controller.pressed & ORBIS_PAD_BUTTON_TRIANGLE) x4_auth_forget(auth);
+            else if ((controller.pressed & ORBIS_PAD_BUTTON_R1) &&
+                     account.state == X4_AUTH_AUTHORIZED && !x4_auth_busy(auth)) {
+                screen.page = 5;
+                if (catalog.state != X4_CATALOG_READY) {
+                    catalog_selected = 0;
+                    x4_auth_start(auth, X4_AUTH_XBOX_CATALOG);
+                }
+            }
         }
         x4_auth_snapshot(auth, &account);
+        x4_auth_catalog_snapshot(auth, &catalog);
+        if (!closing && screen.page == 5 && previous_page == 5) {
+            if ((controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && !x4_auth_busy(auth)) {
+                catalog_selected = 0;
+                x4_auth_start(auth, X4_AUTH_XBOX_CATALOG);
+            }
+            if (catalog.count) {
+                if (controller.pressed & ORBIS_PAD_BUTTON_UP)
+                    catalog_selected = catalog_selected ? catalog_selected - 1 : catalog.count - 1;
+                if (controller.pressed & ORBIS_PAD_BUTTON_DOWN)
+                    catalog_selected = (catalog_selected + 1) % catalog.count;
+                if (controller.pressed & ORBIS_PAD_BUTTON_L1)
+                    catalog_selected = catalog_selected >= 8 ? catalog_selected - 8 : 0;
+                if (controller.pressed & ORBIS_PAD_BUTTON_R1)
+                    catalog_selected = catalog_selected + 8 < catalog.count ? catalog_selected + 8 : catalog.count - 1;
+                if (catalog_selected >= catalog.count) catalog_selected = catalog.count - 1;
+            } else catalog_selected = 0;
+        }
         if (screen.page != 3 && media_active) {
             x4_audio_stop(&audio);
             x4_video_stop(&video);
@@ -79,6 +108,8 @@ reopen_interface:;
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
         if (screen.page == 4 || closing)
             x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
+        else if (screen.page == 5)
+            x4_catalog_draw(&catalog, catalog_selected, x4_auth_busy(auth), x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         rc = x4_display_present(&display);
         if (rc < 0) {

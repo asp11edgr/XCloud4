@@ -92,6 +92,14 @@ El propietario envió una fotografía de CUENTA con `CUENTA MICROSOFT AUTORIZADA
 
 La fotografía y el registro coinciden: funciona la conexión HTTPS y el acceso Microsoft mediante el registro propio de XCloud4 en PS4 12.00. Los registros contienen estados y tamaños, nunca códigos ni tokens. Se conserva esta entrega con la etiqueta `v0.3.1`. La sesión Microsoft permanece solo en memoria y se pierde al cerrar la aplicación. Este resultado todavía no confirma una sesión Xbox, derechos de juego, catálogo ni streaming. La siguiente etapa es el intercambio de credenciales Xbox y el acceso al catálogo real.
 
+## Preparación del catálogo Xbox 0.4.0
+
+El propietario pidió avanzar con Xbox y preguntó la etapa del proyecto. Se mantiene la etapa 3 de 5: Microsoft confirmado, sesión Xbox y catálogo en preparación; streaming/WebRTC es la etapa siguiente. Claude Code Pro, modelo `claude-opus-5-5`, implementó y revisó por lectura la capa Xbox, las solicitudes JSON y el lector por tramos. Su ejecución final completó 56 turnos sin denegaciones de herramientas; el resultado local confirma el modelo. No se añadieron ni ejecutaron pruebas automatizadas.
+
+Codex integró CUENTA → R1 → CATALOGO, actualización con cuadrado, selección con cruceta y páginas con L1/R1. El mismo trabajador reutiliza el token Microsoft privado para RPS, XSTS, credenciales cloud y `/v2/titles` de la región predeterminada. Mantiene el token Microsoft vigente si falla o se cancela el catálogo. La lista conserva hasta 128 entradas; se consultan nombres Store para las primeras 32. La vista pública y los registros no reciben tokens ni cuerpos. El transporte conserva TLS, plazos y redirecciones desactivadas. Codex retiró interpretaciones de XErr que Claude reconoció no haber verificado, ajustó el contador recibido y el indicador de límite, y añadió cancelación durante el recorrido del catálogo.
+
+La aplicación final compiló y se empaquetó en Lubuntu sin errores ni avisos. `XCloud4-0.4.0.pkg`: 6619136 bytes, SHA-256 `bd7ae0d4ee3a213295695d6f7372f99622a34a5644e70a01f256b45b30ec57b1`. Se copió a `/data/pkg/XCloud4-0.4.0.pkg` y la huella recuperada por FTP coincide. Se inició captura Klog y se prepararon instrucciones para instalar, autorizar Microsoft nuevamente y pulsar R1. Credenciales Xbox, catálogo real y compatibilidad de la descripción propia de dispositivo permanecen pendientes de confirmar en la PS4. No se inicia ningún juego en esta versión.
+
 ## GitHub
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

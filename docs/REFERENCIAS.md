@@ -37,3 +37,14 @@ Se consultaron las declaraciones de Http/Net/Ssl del SDK OpenOrbis v0.5.4 y ejem
 Las declaraciones ayudan a preparar la ABI; su uso real debe confirmarse en PS4 12.00. Los resultados de consola se registran en JORNADA.md.
 
 Para la 0.3.1 se consultó la ruta nativa de bibliotecas `/<sandbox>/common/lib/<nombre>.sprx` y el uso de `sceKernelGetFsSandboxRandomWord`: https://github.com/flatz/ps4_remote_pkg_installer/blob/master/module.c. La función está declarada en `orbis/libkernel.h` del SDK local. Se implementó un cargador propio con límites, comprobación de exportaciones y diagnósticos sin rutas completas; no se copió el código del proyecto de referencia.
+
+## Sesión Xbox y catálogo para 0.4.0
+
+GreenVita, en la misma versión fijada arriba, aporta referencias del protocolo:
+
+- Intercambio RPS, XSTS y offerings cloud: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/auth.rs.
+- Consulta regional `/v2/titles` y cabeceras: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/api.rs.
+- Campos de títulos y permisos indicados por el servicio: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/game_catalog.rs.
+- Nombres públicos localizados de Microsoft Store: https://github.com/Day-OS/green-vita/blob/ae2625d295b4fba005a769b1309fd70dcd6cb63f/src/api_xbox/catalog.rs.
+
+Se usa el registro propio de XCloud4. Se escriben implementaciones C originales; no se adapta código Rust ni la persistencia de credenciales de Vita. Los resultados reales de Xbox se documentarán después de ejecutar el paquete en PS4, sin inferirlos de estas referencias.

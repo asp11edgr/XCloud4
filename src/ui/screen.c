@@ -9,7 +9,7 @@ void x4_screen_update(X4Screen *s, uint32_t pressed, uint32_t held)
 {
     if (pressed & ORBIS_PAD_BUTTON_OPTIONS) s->exit_requested = 1;
     if ((pressed & ORBIS_PAD_BUTTON_CIRCLE) && (s->page != 1 || (held & ORBIS_PAD_BUTTON_L1))) {
-        s->page = 0; return;
+        s->page = s->page == 5 ? 4 : 0; return;
     }
     if (s->page == 0) {
         if (pressed & (ORBIS_PAD_BUTTON_LEFT | ORBIS_PAD_BUTTON_UP)) s->selected = (s->selected + 3) % 4;
@@ -22,7 +22,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.3.1", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.4.0", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -45,7 +45,7 @@ static void home(uint32_t *p, const X4Screen *s)
         x4_text(p, x + 28, 590, 3, descriptions[i], MUTED);
         x4_text(p, x + 28, 699, 3, s->selected == i ? "X  ABRIR" : "", GREEN);
     }
-    x4_text(p, 84, 833, 3, "XBOX CLOUD GAMING AUN NO ESTA CONECTADO.", MUTED);
+    x4_text(p, 84, 833, 3, "ABRE CUENTA PARA CONECTAR Y CONSULTAR EL CATALOGO.", MUTED);
     x4_text(p, 84, 894, 3, "CRUCETA  ELEGIR     X  ABRIR     OPTIONS  SALIR", WHITE);
 }
 static void button(uint32_t *p, int x, int y, const char *label, uint32_t mask, uint32_t buttons)
@@ -93,9 +93,9 @@ static void project_page(uint32_t *p)
     x4_text(p, 84, 356, 3, "OBJETIVO: JUGAR DESDE LA CONSOLA, DIRECTO A XBOX CLOUD GAMING.", MUTED);
     x4_rect(p, 84, 445, 1752, 356, PANEL);
     x4_text(p, 126, 490, 4, "AHORA", GREEN);
-    x4_text(p, 126, 550, 3, "INTERFAZ, CONTROL Y MUESTRA LOCAL DE IMAGEN Y SONIDO.", WHITE);
+    x4_text(p, 126, 550, 3, "CONTROL, IMAGEN Y SONIDO. CUENTA MICROSOFT Y CATALOGO.", WHITE);
     x4_text(p, 126, 625, 4, "DESPUES", WHITE);
-    x4_text(p, 126, 685, 3, "CUENTA MICROSOFT. CATALOGO. CONEXION Y SESION DE JUEGO.", MUTED);
+    x4_text(p, 126, 685, 3, "CONEXION A UN JUEGO. IMAGEN, SONIDO Y CONTROL EN LA NUBE.", MUTED);
     x4_text(p, 84, 894, 3, "CIRCULO  VOLVER     OPTIONS  SALIR", WHITE);
 }
 void x4_screen_draw(const X4Screen *s, const X4Controller *c, uint32_t *p)
@@ -172,7 +172,7 @@ void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
         x4_text(p, 126, 452, 4, title, a->state == X4_AUTH_ERROR ? WHITE : GREEN);
         x4_text(p, 126, 531, 3, a->stage, MUTED);
         if (a->state == X4_AUTH_AUTHORIZED)
-            x4_text(p, 126, 601, 3, "LA CUENTA ESTA EN ESTA SESION DE LA APP.\nEL CATALOGO Y LOS JUEGOS SIGUEN EN PREPARACION.", WHITE);
+            x4_text(p, 126, 601, 3, "PULSA R1 PARA CONSULTAR EL CATALOGO DE XBOX.\nLA CUENTA SE CONSERVA HASTA CERRAR ESTA APP.", WHITE);
         else if (!busy)
             x4_text(p, 126, 601, 3, "X SOLICITA UN CODIGO. CUADRADO REVISA LA CONEXION.\nTU CONTRASENA SE INTRODUCE EN LA PAGINA DE MICROSOFT.", WHITE);
         if (a->error || a->http_status >= 400) {
@@ -182,5 +182,49 @@ void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
         }
     }
     x4_text(p, 84, 853, 2, "X INICIAR   CUADRADO CONEXION   TRIANGULO BORRAR SESION   CIRCULO VOLVER   OPTIONS SALIR", WHITE);
-    x4_text(p, 84, 899, 2, "APLICACION REGISTRADA: XCLOUD4. EL ACCESO A XBOX AUN ESTA EN PREPARACION.", MUTED);
+    x4_text(p, 84, 899, 2, "R1 CATALOGO DE XBOX. LA CONEXION A UN JUEGO SIGUE EN PREPARACION.", MUTED);
+}
+
+void x4_catalog_draw(const X4CatalogSnapshot *c, unsigned selected, int busy, uint32_t *p)
+{
+    x4_text(p, 84, 260, 5, "CATALOGO DE XBOX", WHITE);
+    char line[160];
+    if (c->state != X4_CATALOG_READY) {
+        x4_rect(p, 84, 388, 1752, 452, PANEL);
+        const char *title = c->state == X4_CATALOG_LOADING ? "CONSULTANDO TU CATALOGO..." :
+            c->state == X4_CATALOG_ERROR ? "NO SE PUDO CARGAR EL CATALOGO" :
+            c->state == X4_CATALOG_CANCELLED ? "CONSULTA CANCELADA" : "AUTORIZA TU CUENTA EN CUENTA";
+        x4_text(p, 126, 442, 4, title, busy ? GREEN : WHITE);
+        x4_text(p, 126, 525, 3, c->stage, MUTED);
+        if (c->error || c->http_status >= 400 || c->xerr) {
+            snprintf(line, sizeof(line), "DETALLE 0X%08X   HTTP %d   XERR %u",
+                (unsigned)c->error, c->http_status, (unsigned)c->xerr);
+            x4_text(p, 126, 604, 3, line, WHITE);
+        }
+        x4_text(p, 126, 727, 3, "CUADRADO REINTENTA. CIRCULO VUELVE A TU CUENTA.", MUTED);
+    } else {
+        snprintf(line, sizeof(line), "%u TITULOS RECIBIDOS   %u EN ESTA LISTA%s",
+            c->total, c->count, c->truncated ? "   LIMITE LOCAL" : "");
+        x4_text(p, 84, 326, 3, line, MUTED);
+        unsigned start = selected / 8 * 8;
+        for (unsigned row = 0; row < 8 && start + row < c->count; ++row) {
+            unsigned index = start + row;
+            const X4CatalogTitle *title = &c->titles[index];
+            int y = 389 + (int)row * 60;
+            int active = index == selected;
+            x4_rect(p, 84, y, 1752, 52, active ? GREEN : PANEL);
+            char name[73];
+            snprintf(name, sizeof(name), "%.72s", title->name[0] ? title->name : title->id);
+            x4_text(p, 110, y + 15, 3, name, active ? BG : WHITE);
+            x4_text(p, 1490, y + 18, 2, title->entitled ? "CON ACCESO" : "POR CONFIRMAR", active ? BG : MUTED);
+        }
+        if (!c->count) x4_text(p, 126, 449, 4, "XBOX DEVOLVIO UNA LISTA VACIA", WHITE);
+        if (selected < c->count) {
+            const X4CatalogTitle *title = &c->titles[selected];
+            snprintf(line, sizeof(line), "%u/%u   ID: %.70s", selected + 1, c->count, title->id);
+            x4_text(p, 84, 880, 2, line, MUTED);
+        }
+    }
+    x4_text(p, 84, 929, 2, "CRUCETA ELEGIR   L1/R1 PAGINAS   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
+    x4_text(p, 84, 1004, 2, "EL INICIO DE UN JUEGO TODAVIA ESTA EN PREPARACION.", MUTED);
 }

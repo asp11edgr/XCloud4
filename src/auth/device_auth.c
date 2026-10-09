@@ -2,6 +2,7 @@
 #include "device_auth.h"
 #include "http_client.h"
 #include "json.h"
+#include "xbox_live.h"
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -56,12 +57,14 @@ struct X4Auth {
      * until it releases finished; main reads them only after acquiring it. */
     enum X4AuthAction action;
     X4AuthWork *work;
+    X4XboxWork *xwork; /* catalog runs only */
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
     _Atomic int cancel, finished;
-    /* Guards nothing but copies of shared. */
+    /* Guards nothing but copies of shared and catalog. */
     atomic_flag lock;
     Shared shared;
+    X4CatalogSnapshot catalog;
 };
 
 static uint64_t now(void)
@@ -107,6 +110,42 @@ static void wipe_tokens(X4Auth *a)
     x4_secure_clear(a->access_token, sizeof(a->access_token));
     x4_secure_clear(a->refresh_token, sizeof(a->refresh_token));
     a->token_expiry = 0;
+}
+
+/* Empty catalog view in one state. */
+static void reset_catalog(X4Auth *a, enum X4CatalogState state, int error, const char *stage)
+{
+    lock(a);
+    memset(&a->catalog, 0, sizeof(a->catalog));
+    a->catalog.state = state;
+    a->catalog.error = error;
+    copy_text(a->catalog.stage, sizeof(a->catalog.stage), stage);
+    unlock(a);
+}
+
+static void publish_catalog(X4Auth *a, const X4CatalogSnapshot *next)
+{
+    lock(a);
+    a->catalog = *next;
+    unlock(a);
+}
+
+/* Worker progress: stage, offering and region only. */
+static void catalog_progress(void *context, const char *stage, const char *offering, const char *region)
+{
+    X4Auth *a = context;
+    lock(a);
+    copy_text(a->catalog.stage, sizeof(a->catalog.stage), stage);
+    copy_text(a->catalog.offering, sizeof(a->catalog.offering), offering);
+    copy_text(a->catalog.region, sizeof(a->catalog.region), region);
+    unlock(a);
+}
+
+/* Main thread, only while no worker runs: token and catalog go together. */
+static void discard_session(X4Auth *a)
+{
+    wipe_tokens(a);
+    reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
 }
 
 /* Records a terminal outcome; returns -1 so callers can `return set(...)`. */
@@ -401,9 +440,31 @@ static void check_connection(X4Auth *a, X4AuthWork *w, X4Http *http, Outcome *o)
     set(o, X4_AUTH_CONNECTED, 0, status, "TLS con Microsoft verificado");
 }
 
+/* The Microsoft token is only read here; account state is never changed, so
+ * it stays AUTHORIZED after any catalog outcome while the token is valid. */
+static void catalog_run(X4Auth *a)
+{
+    X4XboxWork *w = a->xwork;
+    if (!a->token_expiry || now() >= a->token_expiry) {
+        reset_catalog(a, X4_CATALOG_ERROR, X4_AUTH_E_SIGNED_OUT, "token Microsoft caducado");
+    } else {
+        const X4CatalogSnapshot *r = x4_xbox_catalog(w, a->access_token, &a->cancel, catalog_progress, a);
+        /* A cancel seen before the final publication wins over any result. */
+        if (atomic_load(&a->cancel)) reset_catalog(a, X4_CATALOG_CANCELLED, 0, "consulta cancelada");
+        else publish_catalog(a, r);
+    }
+    x4_xbox_work_free(w);
+    a->xwork = NULL;
+}
+
 static void *worker(void *opaque)
 {
     X4Auth *a = opaque;
+    if (a->action == X4_AUTH_XBOX_CATALOG) {
+        catalog_run(a);
+        atomic_store_explicit(&a->finished, 1, memory_order_release);
+        return NULL;
+    }
     X4AuthWork *w = a->work;
     Outcome o = {0};
     int rc = 0;
@@ -438,13 +499,15 @@ static void *worker(void *opaque)
 /* Main thread, only while no worker runs. */
 static void expire_tokens(X4Auth *a)
 {
-    /* A cancellation accepted while busy can race the worker's final
-     * finished store. Reconcile it after acquiring that store on main. */
-    if (a->token_expiry && atomic_load(&a->cancel)) {
-        wipe_tokens(a);
+    /* A sign-in cancellation accepted while busy can race the worker's final
+     * finished store. Reconcile it after acquiring that store on main. A
+     * catalog cancellation never touches a still valid token: a late one
+     * leaves the completed catalog as published. */
+    if (a->token_expiry && a->action == X4_AUTH_SIGN_IN && atomic_load(&a->cancel)) {
+        discard_session(a);
         publish(a, X4_AUTH_CANCELLED, 0, 0, "acceso cancelado", NULL, NULL, 0);
     } else if (a->token_expiry && now() >= a->token_expiry) {
-        wipe_tokens(a);
+        discard_session(a);
         publish(a, X4_AUTH_EXPIRED, 0, 0, "token Microsoft caducado", NULL, NULL, 0);
     }
 }
@@ -473,6 +536,7 @@ X4Auth *x4_auth_create(void)
     atomic_init(&a->finished, 1);
     atomic_flag_clear(&a->lock);
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
+    reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
     return a;
 }
 
@@ -481,9 +545,38 @@ int x4_auth_busy(X4Auth *a)
     return a && !atomic_load_explicit(&a->finished, memory_order_acquire);
 }
 
+/* Main thread, after join and expiry checks. Publishes LOADING first. */
+static int start_catalog(X4Auth *a)
+{
+    if (!a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
+    a->xwork = x4_xbox_work_new();
+    if (!a->xwork) {
+        printf("XCloud4: catalogo Xbox sin memoria de trabajo\n");
+        reset_catalog(a, X4_CATALOG_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para el catalogo");
+        return X4_AUTH_E_ALLOCATION;
+    }
+    a->action = X4_AUTH_XBOX_CATALOG;
+    atomic_store(&a->cancel, 0);
+    reset_catalog(a, X4_CATALOG_LOADING, 0, "preparando consulta Xbox");
+    atomic_store_explicit(&a->finished, 0, memory_order_release);
+    int rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    if (rc != 0) {
+        if (rc > 0) rc = -rc;
+        printf("XCloud4: catalogo Xbox crear hilo 0x%08x\n", (unsigned)rc);
+        atomic_store(&a->finished, 1);
+        x4_xbox_work_free(a->xwork);
+        a->xwork = NULL;
+        reset_catalog(a, X4_CATALOG_ERROR, rc, "no se pudo iniciar la consulta");
+        return rc;
+    }
+    a->running = 1;
+    return 0;
+}
+
 int x4_auth_start(X4Auth *a, enum X4AuthAction action)
 {
-    if (!a || (action != X4_AUTH_SIGN_IN && action != X4_AUTH_CHECK_CONNECTION)) return X4_AUTH_E_ARGUMENT;
+    if (!a || (action != X4_AUTH_SIGN_IN && action != X4_AUTH_CHECK_CONNECTION &&
+        action != X4_AUTH_XBOX_CATALOG)) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
@@ -491,8 +584,9 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
     /* The check would replace the AUTHORIZED snapshot, which already proves
      * a working connection. */
     if (action == X4_AUTH_CHECK_CONNECTION && a->token_expiry) return X4_AUTH_E_AUTHORIZED;
-    /* A fresh sign-in deliberately discards the previous token. */
-    if (action == X4_AUTH_SIGN_IN) wipe_tokens(a);
+    if (action == X4_AUTH_XBOX_CATALOG) return start_catalog(a);
+    /* A fresh sign-in deliberately discards the previous token and catalog. */
+    if (action == X4_AUTH_SIGN_IN) discard_session(a);
     a->work = malloc(sizeof(*a->work));
     if (!a->work) {
         printf("XCloud4: acceso Microsoft sin memoria de trabajo\n");
@@ -546,7 +640,7 @@ void x4_auth_snapshot(X4Auth *a, X4AuthSnapshot *out)
         if (copy.code_deadline > t)
             out->seconds_left = (unsigned)((copy.code_deadline - t + X4_AUTH_USEC - 1) / X4_AUTH_USEC);
     }
-    if (busy && atomic_load(&a->cancel)) {
+    if (busy && a->action != X4_AUTH_XBOX_CATALOG && atomic_load(&a->cancel)) {
         /* Hide the code at once; the worker wipes its private copy. */
         memset(out->user_code, 0, sizeof(out->user_code));
         memset(out->verification_uri, 0, sizeof(out->verification_uri));
@@ -555,13 +649,32 @@ void x4_auth_snapshot(X4Auth *a, X4AuthSnapshot *out)
     }
 }
 
+void x4_auth_catalog_snapshot(X4Auth *a, X4CatalogSnapshot *out)
+{
+    if (!out) return;
+    if (!a) {
+        memset(out, 0, sizeof(*out));
+        out->state = X4_CATALOG_ERROR;
+        out->error = X4_AUTH_E_ALLOCATION;
+        copy_text(out->stage, sizeof(out->stage), "sin memoria para el acceso");
+        return;
+    }
+    bool busy = x4_auth_busy(a);
+    if (!busy) expire_tokens(a);
+    lock(a);
+    *out = a->catalog;
+    unlock(a);
+    if (busy && a->action == X4_AUTH_XBOX_CATALOG && atomic_load(&a->cancel))
+        copy_text(out->stage, sizeof(out->stage), "cancelando...");
+}
+
 int x4_auth_forget(X4Auth *a)
 {
     if (!a) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
-    wipe_tokens(a);
+    discard_session(a);
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     return 0;
 }

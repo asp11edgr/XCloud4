@@ -24,6 +24,38 @@
 #define X4_HTTPS_VERIFY_ALL 0xBDu
 
 static const char allowed_prefix[] = "https://login.microsoftonline.com/consumers/";
+
+/* Xbox Live / Store destinations for x4_http_json_request. */
+#define X4_HTTP_JSON_URL_MAX 512
+#define X4_HTTP_STORE_IDS_MAX 8u
+#define X4_HTTP_STORE_ID_MAX 31u
+#define X4_HTTP_REGION_LABELS_MAX 4u
+static const char xbox_user_url[] = "https://user.auth.xboxlive.com/user/authenticate";
+static const char xsts_url[] = "https://xsts.auth.xboxlive.com/xsts/authorize";
+static const char *const login_urls[] = {
+    "https://xgpuweb.gssv-play-prod.xboxlive.com/v2/login/user",
+    "https://xgpuwebf2p.gssv-play-prod.xboxlive.com/v2/login/user",
+};
+static const char https_scheme[] = "https://";
+static const char gssv_suffix[] = ".gssv-play-prod.xboxlive.com";
+static const char titles_path[] = "/v2/titles";
+static const char store_prefix[] = "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=";
+static const char store_suffix[] = "&market=MX&languages=es-MX&fieldsTemplate=Details";
+static const char header_contract[] = "x-xbl-contract-version";
+static const char header_client[] = "x-gssv-client";
+static const char header_device[] = "X-MS-Device-Info";
+static const char header_authorization[] = "Authorization";
+
+enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE };
+
+/* Request inputs copied into one block. It must outlive the native request,
+ * connection and template, so it is freed only after they were deleted. */
+typedef struct {
+    const char *url, *payload, *content_type;
+    size_t payload_size, header_count, size;
+    X4HttpHeader headers[X4_HTTP_HEADERS_MAX];
+    char text[];
+} Owned;
 /* This application owns one sequential networking worker. Net stays global;
  * subsequent operations reuse the successful initialization we performed. */
 static bool net_initialized;
@@ -242,6 +274,154 @@ static int check_form(const char *form, size_t *size)
     return 0;
 }
 
+static bool alphanumeric(unsigned char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+}
+
+/* One to four lowercase DNS labels in front of the fixed GSSV suffix. Only
+ * [a-z0-9-] is accepted, which also rules out userinfo, ports and paths. */
+static bool region_host(const char *host, size_t n)
+{
+    size_t suffix = sizeof(gssv_suffix) - 1;
+    if (n <= suffix || n > 253 || memcmp(host + n - suffix, gssv_suffix, suffix)) return false;
+    size_t labels = 0, length = 0, end = n - suffix;
+    for (size_t i = 0; i <= end; ++i) {
+        unsigned char c = i < end ? (unsigned char)host[i] : '.';
+        if (c == '.') {
+            if (length == 0 || length > 63 || host[i - 1] == '-' || host[i - length] == '-') return false;
+            if (++labels > X4_HTTP_REGION_LABELS_MAX) return false;
+            length = 0;
+        } else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+            ++length;
+        } else return false;
+    }
+    return true;
+}
+
+/* Fixed prefix and suffix around 1..8 comma separated alphanumeric IDs. */
+static bool store_url(const char *url, size_t n)
+{
+    size_t prefix = sizeof(store_prefix) - 1, suffix = sizeof(store_suffix) - 1;
+    if (n <= prefix + suffix || memcmp(url, store_prefix, prefix) || strcmp(url + n - suffix, store_suffix))
+        return false;
+    size_t ids = 0, length = 0, end = n - suffix;
+    for (size_t i = prefix; i <= end; ++i) {
+        unsigned char c = i < end ? (unsigned char)url[i] : ',';
+        if (c == ',') {
+            if (length == 0 || length > X4_HTTP_STORE_ID_MAX || ++ids > X4_HTTP_STORE_IDS_MAX) return false;
+            length = 0;
+        } else if (alphanumeric(c)) {
+            ++length;
+        } else return false;
+    }
+    return true;
+}
+
+static enum Destination classify(const char *url)
+{
+    size_t n = bounded_length(url, X4_HTTP_JSON_URL_MAX + 1);
+    if (n > X4_HTTP_JSON_URL_MAX) return DEST_NONE;
+    if (!strcmp(url, xbox_user_url)) return DEST_XBOX_USER;
+    if (!strcmp(url, xsts_url)) return DEST_XSTS;
+    for (size_t i = 0; i < sizeof(login_urls) / sizeof(login_urls[0]); ++i)
+        if (!strcmp(url, login_urls[i])) return DEST_LOGIN;
+    size_t scheme = sizeof(https_scheme) - 1, path = sizeof(titles_path) - 1;
+    if (n > scheme + path && !memcmp(url, https_scheme, scheme) && !strcmp(url + n - path, titles_path) &&
+        region_host(url + scheme, n - scheme - path))
+        return DEST_REGION;
+    if (store_url(url, n)) return DEST_STORE;
+    return DEST_NONE;
+}
+
+/* RFC 7235 token68: the only credential syntax ever sent. */
+static bool token68(const char *t)
+{
+    size_t i = 0;
+    while (alphanumeric((unsigned char)t[i]) || t[i] == '-' || t[i] == '.' || t[i] == '_' ||
+        t[i] == '~' || t[i] == '+' || t[i] == '/') ++i;
+    if (i == 0) return false;
+    while (t[i] == '=') ++i;
+    return t[i] == 0;
+}
+
+/* Bounded printable values without control bytes, then a per-destination
+ * allowlist; a name may appear once. */
+static int check_headers(enum Destination d, const X4HttpHeader *headers, size_t count)
+{
+    if (count > X4_HTTP_HEADERS_MAX || (count && !headers)) return X4_HTTP_ARGUMENT;
+    for (size_t i = 0; i < count; ++i) {
+        const char *name = headers[i].name, *value = headers[i].value;
+        if (!name || !value) return X4_HTTP_ARGUMENT;
+        size_t n = bounded_length(value, X4_HTTP_HEADER_VALUE_MAX + 1);
+        if (n == 0 || n > X4_HTTP_HEADER_VALUE_MAX || value[0] == ' ' || value[n - 1] == ' ') return X4_HTTP_BOUND;
+        for (size_t k = 0; k < n; ++k) {
+            unsigned char c = (unsigned char)value[k];
+            if (c < 0x20 || c > 0x7e) return X4_HTTP_ARGUMENT;
+        }
+        for (size_t j = 0; j < i; ++j)
+            if (!strcmp(headers[j].name, name)) return X4_HTTP_ARGUMENT;
+        bool allowed = false;
+        if (!strcmp(name, header_contract)) allowed = d == DEST_XBOX_USER || d == DEST_XSTS;
+        else if (!strcmp(name, header_client) || !strcmp(name, header_device))
+            allowed = d == DEST_LOGIN || d == DEST_REGION;
+        else if (!strcmp(name, header_authorization))
+            allowed = d == DEST_REGION && !strncmp(value, "Bearer ", 7) && token68(value + 7);
+        if (!allowed) return X4_HTTP_ARGUMENT;
+    }
+    return 0;
+}
+
+/* Generated JSON is printable ASCII; this rules out CR/LF and NUL. */
+static int check_json(const char *json, size_t *size)
+{
+    size_t n = bounded_length(json, X4_HTTP_JSON_BODY_MAX + 1);
+    if (n == 0 || n > X4_HTTP_JSON_BODY_MAX) return X4_HTTP_BOUND;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = (unsigned char)json[i];
+        if (c < 0x20 || c > 0x7e) return X4_HTTP_ARGUMENT;
+    }
+    *size = n;
+    return 0;
+}
+
+/* Inputs were validated, so every length here is already bounded. */
+static Owned *own(const char *url, const char *payload, size_t payload_size, const char *content_type,
+    const X4HttpHeader *headers, size_t count)
+{
+    size_t url_size = strlen(url) + 1;
+    size_t size = url_size + (payload ? payload_size + 1 : 0);
+    for (size_t i = 0; i < count; ++i) size += strlen(headers[i].name) + strlen(headers[i].value) + 2;
+    Owned *o = malloc(sizeof(*o) + size);
+    if (!o) return NULL;
+    memset(o, 0, sizeof(*o));
+    o->size = size;
+    o->content_type = content_type;
+    o->payload_size = payload_size;
+    o->header_count = count;
+    char *p = o->text;
+    memcpy(p, url, url_size);
+    o->url = p;
+    p += url_size;
+    if (payload) {
+        memcpy(p, payload, payload_size);
+        p[payload_size] = 0;
+        o->payload = p;
+        p += payload_size + 1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        size_t n = strlen(headers[i].name) + 1;
+        memcpy(p, headers[i].name, n);
+        o->headers[i].name = p;
+        p += n;
+        n = strlen(headers[i].value) + 1;
+        memcpy(p, headers[i].value, n);
+        o->headers[i].value = p;
+        p += n;
+    }
+    return o;
+}
+
 static int checkpoint(const _Atomic int *cancel, uint64_t deadline)
 {
     if (cancel && atomic_load(cancel)) return X4_HTTP_CANCELLED;
@@ -278,39 +458,13 @@ quarantine:
     return false;
 }
 
-static int perform(X4Http *h, const char *url, const char *form, char *body, size_t capacity,
-    size_t *length, int *status, const _Atomic int *cancel)
+/* Runs one validated exchange from owned inputs, which it releases. */
+static int transfer(X4Http *h, Owned *o, char *body, size_t capacity, size_t *length, int *status,
+    const _Atomic int *cancel)
 {
-    h->stage = "argumentos HTTPS";
-    if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
-    body[0] = 0;
-    *length = 0;
-    *status = 0;
-    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
-    h->stage = "URL rechazada";
-    int rc = check_url(url);
-    if (rc) return rc;
-    size_t form_size = 0;
-    if (form) {
-        h->stage = "formulario rechazado";
-        rc = check_form(form, &form_size);
-        if (rc) return rc;
-    }
-
-    /* Keep request input alive through deletion, including failed cleanup.
-     * In quarantine these copies remain owned by the process until exit. */
-    char *owned_url = malloc(strlen(url) + 1);
-    char *owned_form = form ? malloc(form_size + 1) : NULL;
-    if (!owned_url || (form && !owned_form)) {
-        free(owned_url); free(owned_form);
-        h->stage = "memoria de solicitud";
-        return X4_HTTP_ALLOCATION;
-    }
-    strcpy(owned_url, url);
-    if (owned_form) memcpy(owned_form, form, form_size + 1);
-    url = owned_url;
-    form = owned_form;
-
+    const char *url = o->url, *form = o->payload;
+    size_t form_size = o->payload_size;
+    int rc;
     uint64_t deadline = sceKernelGetProcessTime() + X4_HTTP_DEADLINE_USEC;
     int32_t tmpl = -1, conn = -1, req = -1, code = 0;
     size_t total = 0;
@@ -339,8 +493,11 @@ static int perform(X4Http *h, const char *url, const char *form, char *body, siz
         form ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET, url, (uint64_t)form_size));
     OPTION("cabeceras", h->fn.add_header(req, "Accept", "application/json", X4_HTTP_HEADER_OVERWRITE));
     OPTION("cabeceras", h->fn.add_header(req, "Accept-Encoding", "identity", X4_HTTP_HEADER_OVERWRITE));
-    if (form) OPTION("cabeceras", h->fn.add_header(req, "Content-Type",
-        "application/x-www-form-urlencoded", X4_HTTP_HEADER_OVERWRITE));
+    if (o->content_type) OPTION("cabeceras", h->fn.add_header(req, "Content-Type",
+        o->content_type, X4_HTTP_HEADER_OVERWRITE));
+    for (size_t i = 0; i < o->header_count; ++i)
+        OPTION("cabeceras", h->fn.add_header(req, o->headers[i].name, o->headers[i].value,
+            X4_HTTP_HEADER_OVERWRITE));
 
     h->stage = "envio HTTPS/TLS";
     CHECKPOINT();
@@ -386,11 +543,67 @@ done:
         h->stage = "respuesta recibida";
         printf("XCloud4: HTTPS estado %d, %zu bytes\n", (int)code, total);
     }
+    /* In quarantine the owned inputs stay allocated until process exit. */
     if (release_request(h, &tmpl, &conn, &req)) {
-        x4_secure_clear(owned_form, form_size);
-        free(owned_form); free(owned_url);
+        size_t owned = sizeof(*o) + o->size;
+        x4_secure_clear(o, owned);
+        free(o);
     } else if (rc == 0) h->stage = "recursos HTTP en cuarentena";
     return rc;
+}
+
+static int perform(X4Http *h, const char *url, const char *form, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel)
+{
+    h->stage = "argumentos HTTPS";
+    if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
+    body[0] = 0;
+    *length = 0;
+    *status = 0;
+    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
+    h->stage = "URL rechazada";
+    int rc = check_url(url);
+    if (rc) return rc;
+    size_t form_size = 0;
+    if (form) {
+        h->stage = "formulario rechazado";
+        rc = check_form(form, &form_size);
+        if (rc) return rc;
+    }
+    Owned *o = own(url, form, form_size, form ? "application/x-www-form-urlencoded" : NULL, NULL, 0);
+    if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    return transfer(h, o, body, capacity, length, status, cancel);
+}
+
+static int perform_json(X4Http *h, const char *url, const X4HttpHeader *headers, size_t count,
+    const char *json, char *body, size_t capacity, size_t *length, int *status, const _Atomic int *cancel)
+{
+    h->stage = "argumentos HTTPS";
+    if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
+    body[0] = 0;
+    *length = 0;
+    *status = 0;
+    if (capacity > X4_HTTP_RESPONSE_MAX + 1) return X4_HTTP_ARGUMENT;
+    if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
+    h->stage = "URL rechazada";
+    enum Destination d = classify(url);
+    if (d == DEST_NONE) return X4_HTTP_URL;
+    bool post = d == DEST_XBOX_USER || d == DEST_XSTS || d == DEST_LOGIN;
+    h->stage = "metodo rechazado";
+    if (post != (json != NULL)) return X4_HTTP_ARGUMENT;
+    size_t json_size = 0;
+    int rc;
+    if (json) {
+        h->stage = "cuerpo JSON rechazado";
+        rc = check_json(json, &json_size);
+        if (rc) return rc;
+    }
+    h->stage = "cabecera rechazada";
+    rc = check_headers(d, headers, count);
+    if (rc) return rc;
+    Owned *o = own(url, json, json_size, json ? "application/json" : NULL, headers, count);
+    if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    return transfer(h, o, body, capacity, length, status, cancel);
 }
 
 int x4_http_request(X4Http *h, const char *url, const char *form, char *body, size_t capacity,
@@ -405,6 +618,21 @@ int x4_http_request(X4Http *h, const char *url, const char *form, char *body, si
     /* Single owner: a concurrent call is refused without touching state. */
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform(h, url, form, body, capacity, length, status, cancel);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_json_request(X4Http *h, const char *url, const X4HttpHeader *headers, size_t header_count,
+    const char *json, char *body, size_t capacity, size_t *length, int *status, const _Atomic int *cancel)
+{
+    if (!h) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_json(h, url, headers, header_count, json, body, capacity, length, status, cancel);
     atomic_store(&h->busy, false);
     return rc;
 }
