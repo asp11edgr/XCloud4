@@ -56,6 +56,10 @@ The package matches byte-for-byte across VM, PC and a retrieved PS4 FTP copy. Th
 
 The console installer directory contains only this XCloud4 installer after the verified upload; prior immutable packages and source snapshots remain preserved locally and in their releases. The [public development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.18) provides the package, matching source and both SHA-256 sidecars.
 
-## Awaiting the owner console result
+## First owner console attempt
 
-Installation, account authorization and opening a title with access remain necessary. The latest observed failure remains [0.7.17](ERROR_REPORT_0.7.17.md). This package corrects a verified ABI defect, but **no successful SCTP connection, received RTP, game video or game audio is claimed yet**. The PS4 interface remains Spanish; repository and release content remain English.
+The owner installed and ran 0.7.18. Auth, provisioning, valid SDP application, ICE completion and DTLS connection succeed. SCTP constructor steps and bind complete successfully; connect returns the accepted native **-1 / EINPROGRESS (36)** result, then start completes. SRTP keys are derived. Before a confirmed SCTP association or game media callback, the worker crashes with **SIGSEGV**; the owner reports **CE-34878-8**.
+
+The matched native ELF resolves the fault to **SctpTransport::doRecv()**, whose source allocates a **65,536-byte automatic receive buffer**. Its frame reserves **66,072 bytes**, and the faulting call writes at **RSP - 8** into an unmapped page. This is strong evidence for a worker-stack-capacity problem, while the actual stack size and a repaired console result remain unconfirmed. No normal terminal media-counter/cleanup summary was produced, so the absence of playback is not presented as a measured final packet count.
+
+See the [version-specific error report](ERROR_REPORT_0.7.18.md) for the frozen attempt hash, symbols, numeric steps and limits. The earlier package preparation evidence remains unchanged. Extensive Antigravity reference comparison is now requested using this latest failure; no further code change or package has been prepared for it. The PS4 interface remains Spanish; repository and release content remain English.
