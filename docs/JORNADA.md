@@ -338,3 +338,21 @@ The owner repeats the same installed version. SDP is **1285 bytes / two candidat
 Both attempts pass `ReadyToConnect`, `/connect` HTTP202 and `Provisioned` before SDP. Their failure occurs in the subsequent negotiation/polling stage. Source inspection confirms `WaitingForResources` is handled as waiting, with initial provisioning bounded to **180 seconds (three minutes)**. Extended queue waiting duration and UI need improvement; no server estimate is established by these captures. That bounded backlog item is [recorded separately](MEJORAS_FUTURAS.md).
 
 The package and immutable source snapshots are unchanged.
+
+## 0.7.11: pending SDP before heartbeat
+
+The original authentication change processes GET/SDP and its logical result before heartbeat servicing. A pending response is cleared before servicing a due heartbeat and retaining the 500-ms wait; a valid applied answer services heartbeat before returning toward ICE. The 30-second heartbeat interval stays, while the next deadline uses the captured dispatch timestamp instead of HTTP completion, avoiding addition of response duration to that deadline.
+
+Protocol research uses GreenVita backend pin `ae2625d295b4fba005a769b1309fd70dcd6cb63f`, which sets the next deadline before spawning its asynchronous keepalive request. No Rust implementation is copied. XCloud4's GET remains synchronous and can delay one pulse; existing cancellation/90-second negotiation deadline checks remain. The initial heartbeat, parser/media settings, queue handling and cleanup are retained.
+
+The intended diagnostic improvement is to capture an available HTTP 200 / 243-byte logical refusal before a heartbeat HTTP 410 ends negotiation. No server lifetime or correction is confirmed. Product 0.7.11 uses package APP_VER 00.81. Claude Opus 5.5 completed the focused read-only review in **3 turns / 2 reads**, without a concrete defect in that scheduling scope, retaining the synchronous-GET limitation.
+
+The full application/package built without warnings/errors: `XCloud4-0.7.11.pkg`, **8912896 bytes**, SHA-256 `13337dc56d3b1a84b8f2e083721c1348860e257d79e494eac20e45c54e558c9b`. VM, PC and PS4 retrieval hashes match. Application revision `27dc26112a4df0176c5c7b782d3a051bb4124b4a` supplies this authentication change separately from the immutable dependency/native-adapter archive: **83560456 bytes**, SHA-256 `fbd5e7dd0213173bf52aab4a2a21489fd026bda66392e2a24004b831daf57778`. All **9367** manifest hashes matched, covering **150840264 source bytes**; the copied PC archive matches the guest hash. Generated artifacts/Git metadata/local credentials/logs are excluded, public upstream fixtures remain, and every earlier snapshot is preserved.
+
+### 0.7.11 console attempt
+
+The console identifies the installed application as 0.7.11. Readiness and Microsoft/Passport authorization succeed, and `/connect` returns HTTP 202. Native DNS lookup returns **0** in **15248 microseconds**, with the nonzero-address boolean **1**. The current offer is **1286 bytes / two candidates**, with three media sections and three unique, matched BUNDLE entries. SDP submission returns **HTTP 202**, followed by **38** pending polls returning **HTTP 204**.
+
+Keepalive is attempted at **29903 ms**, then returns **HTTP 410 / 118 bytes** at **30201 ms**, with root-code class **2 (`SessionNotActive`)** and no errorDetails. The restricted-name helper is not entered. Remote deletion returns **HTTP 200**, with no RTP, video or audio received. The earlier logical SDP refusal remains uncaptured; the scheduling change does not establish corrected negotiation or media. These stages pass readiness/authorization/connect before the observed failure; the initial queue limit remains unchanged.
+
+The 0.7.10 documentation checkpoint was committed/pushed at `a2b5c6fc1961fbcd67da6935f1f41f9e7ecdaf06`; its private draft and package/source/sidecar digests are verified. See [0.7.11 scope and primary reference](RELEASE_NOTES_0.7.11.md).

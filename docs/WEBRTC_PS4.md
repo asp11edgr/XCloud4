@@ -153,6 +153,16 @@ A second attempt on the same installed version records SDP1285 bytes/two candida
 
 Both attempts pass ReadyToConnect, accepted connect202 and Provisioned before SDP; failure occurs during subsequent negotiation/polling. WaitingForResources is handled as waiting under the initial **180-second provisioning limit**. Extended queue duration/UI remain incomplete and are [recorded for improvement](MEJORAS_FUTURAS.md); no actual server wait-time estimate is established here.
 
+### 0.7.11 pending SDP before heartbeat
+
+The original authentication loop reads/processes pending SDP before servicing a due heartbeat. A still-pending result is cleared before heartbeat servicing and the existing 500-ms wait; an applied answer services heartbeat before returning toward ICE. The 30-second interval remains, with next deadline based on the captured dispatch timestamp rather than HTTP completion, avoiding addition of response duration to the scheduled deadline.
+
+Pinned GreenVita backend scheduling supplies the protocol reference; no Rust code is copied. XCloud4's GET remains synchronous and may delay a pulse by one request, with existing cancellation/deadline guards intact. No server lifetime is confirmed; the aim is to capture an available logical SDP refusal before heartbeat HTTP 410. Initial heartbeat, SDP/parser/media settings, queue handling and cleanup remain. Product 0.7.11 uses APP_VER 00.81. Claude Opus 5.5 completed the focused read-only review in **3 turns / 2 reads**, with no concrete defect within that scope.
+
+The full application/package built without warnings/errors: **8912896 bytes**, SHA-256 `13337dc56d3b1a84b8f2e083721c1348860e257d79e494eac20e45c54e558c9b`; VM, PC and PS4 retrieval hashes match. Application revision `27dc26112a4df0176c5c7b782d3a051bb4124b4a` supplies the authentication change separately from the closed dependency/native-adapter archive: **83560456 bytes**, SHA-256 `fbd5e7dd0213173bf52aab4a2a21489fd026bda66392e2a24004b831daf57778`. All **9367** manifest hashes matched and the PC archive hash matches the guest archive. Earlier snapshots remain immutable.
+
+The console confirms the 0.7.11 banner and successful readiness/authorization/connect. Native DNS lookup returns **0** in **15248 microseconds**, with the nonzero-address boolean **1**. The current offer is **1286 bytes / two candidates**, with three media sections and three unique, matched BUNDLE entries. SDP submission returns HTTP 202, followed by **38** pending HTTP 204 polls. Keepalive is attempted at **29903 ms**, then returns **HTTP 410 / 118 bytes** at **30201 ms**, root-code class **2 (`SessionNotActive`)**, without errorDetails. The restricted-name helper is not entered; remote deletion returns HTTP 200, with no RTP/video/audio. The earlier logical SDP refusal remains uncaptured, and no corrected server negotiation or game media is confirmed. See [0.7.11 evidence, exact pin and limits](RELEASE_NOTES_0.7.11.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.
