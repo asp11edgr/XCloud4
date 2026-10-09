@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.16\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.17\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1997,24 +1997,58 @@ done:
     return valid;
 }
 
+typedef struct {
+    unsigned received, duplicates, submitted, new_cached;
+} SignalRemoteIceStats;
+
+enum SignalRemoteOrigin {
+    SIGNAL_REMOTE_ORIGINAL_NON_IPV6 = 1,
+    SIGNAL_REMOTE_TEREDO_FIXED = 2,
+    SIGNAL_REMOTE_TEREDO_DECODED = 3
+};
+
+/* A native-wrapper result only describes submission, not ICE reachability. Fixed
+ * numeric origins and counts disclose no address, MID or candidate text. */
+static void signal_remote_submission(unsigned origin, unsigned duplicate, unsigned called,
+                                     int result, unsigned before, unsigned after, unsigned added)
+{
+    printf("XCloud4: ICE remote submitted origin=%u duplicate=%u wrapper_called=%u wrapper_result=%d cache_before=%u cache_after=%u new=%u\n",
+        origin, duplicate, called, result, before, after, added);
+}
+
+static void signal_remote_stats(const SignalRemoteIceStats *stats, unsigned complete)
+{
+    printf("XCloud4: ICE remote response complete=%u received=%u duplicates=%u submitted=%u new_cached=%u\n",
+        complete, stats->received, stats->duplicates, stats->submitted, stats->new_cached);
+}
+
 /* Both original IPv4 and derived candidates share the same bounded cache;
  * the received MID is preserved, including when a repeated item expands. */
-static bool signal_remote_add(X4XboxWork *w, SessionEnd *end)
+static bool signal_remote_add(X4XboxWork *w, SessionEnd *end, SignalRemoteIceStats *stats, unsigned origin)
 {
     for (unsigned i = 0; i < w->remote_candidates; ++i)
-        if (!strcmp(w->remote_seen[i].candidate, w->candidate) && !strcmp(w->remote_seen[i].mid, w->mid)) return true;
+        if (!strcmp(w->remote_seen[i].candidate, w->candidate) && !strcmp(w->remote_seen[i].mid, w->mid)) {
+            ++stats->duplicates;
+            return true;
+        }
     if (w->remote_candidates == X4_SESSION_CANDIDATES_MAX) {
         end_with(end, X4_SESSION_ERROR, X4_AUTH_E_RESPONSE, 0, "demasiados candidatos ICE remotos"); return false;
     }
+    ++stats->submitted;
     int rc = x4_rtc_add_remote_candidate(w->rtc, w->candidate, w->mid);
-    if (rc < 0) { end_with(end, X4_SESSION_ERROR, rc, 0, "WebRTC rechazo un candidato ICE"); return false; }
+    if (rc < 0) {
+        signal_remote_submission(origin, 0, 1, rc, w->remote_candidates, w->remote_candidates, 0);
+        end_with(end, X4_SESSION_ERROR, rc, 0, "WebRTC rechazo un candidato ICE"); return false;
+    }
     unsigned i = w->remote_candidates++;
     copy_text(w->remote_seen[i].candidate, sizeof(w->remote_seen[i].candidate), w->candidate);
     copy_text(w->remote_seen[i].mid, sizeof(w->remote_seen[i].mid), w->mid);
+    ++stats->new_cached;
+    signal_remote_submission(origin, 0, 1, rc, i, w->remote_candidates, 1);
     return true;
 }
 
-static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
+static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end, SignalRemoteIceStats *stats)
 {
     X4JsonSpan object = item, value;
     uint8_t ipv4[4] = {0};
@@ -2039,7 +2073,7 @@ static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
         uint32_t index;
         if (x4_json_uint32(value, &index) || index > 64) goto malformed;
     }
-    if (!ipv6) { valid = signal_remote_add(w, end); goto done; }
+    if (!ipv6) { valid = signal_remote_add(w, end, stats, SIGNAL_REMOTE_ORIGINAL_NON_IPV6); goto done; }
     if (!signal_candidate_teredo(w->candidate, ipv4, &port, &teredo_reason)) {
         printf("XCloud4: ICE remoto IPv6 clase=1 razon=%u derivados=0 nuevos=0\n", teredo_reason);
         goto done;
@@ -2052,7 +2086,8 @@ static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
             "candidate:%u 1 UDP 1 %u.%u.%u.%u %u typ host", 10u + i,
             (unsigned)ipv4[0], (unsigned)ipv4[1], (unsigned)ipv4[2], (unsigned)ipv4[3], udp_port);
         if (length < 0 || (size_t)length >= sizeof(w->candidate)) goto malformed;
-        if (!signal_remote_add(w, end)) { valid = false; goto done; }
+        unsigned origin = i ? SIGNAL_REMOTE_TEREDO_DECODED : SIGNAL_REMOTE_TEREDO_FIXED;
+        if (!signal_remote_add(w, end, stats, origin)) { valid = false; goto done; }
     }
     /* Numeric counts only: no address, port, MID or full candidate logging. */
     printf("XCloud4: ICE remoto IPv6 clase=2 derivados=%u nuevos=%u\n", derived, w->remote_candidates - before);
@@ -2071,6 +2106,7 @@ done:
 
 static bool signal_remote_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
 {
+    SignalRemoteIceStats stats = {0};
     size_t length = 0;
     int status = 0;
     if (!signal_call(w, "/ice", X4_SESSION_HTTP_GET, NULL, deadline, end, &length, &status)) return false;
@@ -2094,9 +2130,11 @@ static bool signal_remote_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
         int found = x4_json_item(candidates, &cursor, &item);
         if (found < 0) goto malformed;
         if (!found) break;
+        ++stats.received;
         if (++count > X4_SESSION_CANDIDATES_MAX) goto malformed;
-        if (!signal_remote_item(w, item, end)) return false;
+        if (!signal_remote_item(w, item, end, &stats)) { signal_remote_stats(&stats, 0); return false; }
     }
+    signal_remote_stats(&stats, 1);
     x4_secure_clear(w->exchange, sizeof(w->exchange));
     x4_secure_clear(w->candidate_object, sizeof(w->candidate_object));
     x4_secure_clear(w->candidate, sizeof(w->candidate));
@@ -2104,6 +2142,7 @@ static bool signal_remote_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     return true;
 malformed:
     end_with(end, X4_SESSION_ERROR, X4_AUTH_E_RESPONSE, status, "respuesta ICE no valida");
+    signal_remote_stats(&stats, 0);
     return false;
 }
 

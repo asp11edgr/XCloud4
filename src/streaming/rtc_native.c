@@ -76,6 +76,23 @@ void x4_native_rtc_diagnostic(int event,int value)
     case 71: label="DNS lookup result"; break;
     case 72: label="DNS lookup elapsed usec"; break;
     case 73: label="DNS address nonzero"; break;
+    case 74: label="juice clock failed result"; break;
+    case 75: label="juice clock failed errno"; break;
+    case 76: label="juice ICE failure reason"; break;
+    case 77: label="juice ICE failure detail"; break;
+    case 78: label="DTLS initialization exception class"; break;
+    case 79: label="DTLS initialization exception code"; break;
+    case 80: label="DTLS transport state"; break;
+    case 81: label="DTLS receive exception class"; break;
+    case 82: label="DTLS receive exception code"; break;
+    case 83: label="SRTP inbound create failure"; break;
+    case 84: label="SRTP outbound create failure"; break;
+    case 85: label="SRTP key derivation stage"; break;
+    case 86: label="DTLS construction stage"; break;
+    case 87: label="SCTP transport state"; break;
+    case 88: label="juice failed candidate pair count"; break;
+    case 89: label="juice failed remote candidate count"; break;
+    case 90: label="juice failed STUN entry count"; break;
     default: label="unknown event"; break;
     }
     printf("XCloud4: RTC native %s value=%d (0x%08x)\n",label,value,(unsigned)value);

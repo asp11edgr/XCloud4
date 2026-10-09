@@ -12,7 +12,11 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Development checkpoint: 0.7.16
+## Prepared development checkpoint: 0.7.17
+
+Version **0.7.17** corrects a concrete local timing incompatibility: libjuice selected `CLOCK_BOOTTIME=7`, rejected by the native clock adapter, and returned timestamp zero. The PS4 target now selects `CLOCK_MONOTONIC=1`, translated to native clock 4. The linked ELF confirms the new selection. Bounded numeric diagnostics separate ICE, DTLS, SRTP and SCTP phases and summarize remote candidate submissions. Focused actual Claude Opus 5.5 reviews, native packaging, exact matching source inventory and VM/PC/PS4 package hashes are verified. **Its console connection result is pending; it does not establish live game media or prove the cause of the preceding failure.** See [0.7.17 scope and evidence](docs/RELEASE_NOTES_0.7.17.md).
+
+## Latest tested development checkpoint: 0.7.16
 
 **Latest console result:** the application stays open after connection failure, a valid Xbox SDP answer is applied, and session cleanup succeeds. The RTC connection still fails with **0xFFFFF824**, with no game video/audio received. Read the [current error report](docs/ERROR_REPORT_0.7.16.md) and download the [0.7.16 development prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.16). This is a development build, with live game media and game input still unresolved.
 
@@ -114,7 +118,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.16 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.16.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The current 0.7.17 development source produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.17.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

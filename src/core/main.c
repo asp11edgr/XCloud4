@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.16: espera nativa C++ y diagnostico de rutas Teredo\n");
+    printf("XCloud4 0.7.17: reloj monotono de ICE y diagnostico de fases de conexion\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

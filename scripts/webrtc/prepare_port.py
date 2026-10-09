@@ -467,4 +467,116 @@ for filename in ('udp.c', 'tcp.c'):
     if text.count(replacement) != 1:
         raise SystemExit('Incomplete native socket nonblocking patch: ' + filename)
     write_changed(source, text)
+# The SDK declares Linux CLOCK_BOOTTIME=7, which the native clock adapter
+# cannot serve. This pinned libjuice path therefore returned timestamp zero.
+# Use the real monotonic clock for this target; retain every other target's
+# original clock selection. Report a clock failure only once per process.
+source = base / 'libdatachannel/deps/libjuice/src/timestamp.c'
+checked_patch(source, [
+    ('#include "timestamp.h"',
+     '#include "timestamp.h"\n#ifdef X4_OPENORBIS\n#include <errno.h>\n#include <stdatomic.h>\n'
+     'extern void x4_native_rtc_diagnostic(int, int);\n#endif'),
+    ('#ifdef CLOCK_BOOTTIME\n\tconst clockid_t clock_id = CLOCK_BOOTTIME;',
+     '#if defined(X4_OPENORBIS)\n\t// XCloud4: native monotonic time, not Linux CLOCK_BOOTTIME.\n'
+     '\tconst clockid_t clock_id = CLOCK_MONOTONIC;\n#elif defined(CLOCK_BOOTTIME)\n'
+     '\tconst clockid_t clock_id = CLOCK_BOOTTIME;'),
+    ('\tif (clock_gettime(clock_id, &ts))\n\t\treturn 0;',
+     '\tconst int clock_result = clock_gettime(clock_id, &ts);\n\tif (clock_result) {\n'
+     '#ifdef X4_OPENORBIS\n\t\tconst int clock_errno = errno;\n'
+     '\t\tstatic atomic_flag reported = ATOMIC_FLAG_INIT;\n'
+     '\t\tif (!atomic_flag_test_and_set(&reported)) {\n'
+     '\t\t\tx4_native_rtc_diagnostic(74, clock_result);\n'
+     '\t\t\tx4_native_rtc_diagnostic(75, clock_errno);\n\t\t}\n'
+     '\t\terrno = clock_errno;\n#endif\n\t\treturn 0;\n\t}'),
+], '// XCloud4: native monotonic time, not Linux CLOCK_BOOTTIME.')
+
+# Sparse numeric failure sites distinguish native socket errors from an ICE
+# connectivity timeout. They never emit packets, candidates or credentials.
+source = base / 'libdatachannel/deps/libjuice/src/conn_poll.c'
+checked_patch(source, [
+    ('\t\tJLOG_WARN("UDP socket error");\n\t\tagent_conn_fail(agent);',
+     '\t\tJLOG_WARN("UDP socket error");\n\t\tX4_JUICE_EVENT(76, 1);\n'
+     '\t\tX4_JUICE_EVENT(77, (int)pfd->revents);\n\t\tagent_conn_fail(agent);'),
+    ('\t\t} else {\n\t\t\tagent_conn_fail(agent);\n\t\t\tconn_impl->state = CONN_STATE_FINISHED;',
+     '\t\t} else {\n\t\t\tX4_JUICE_EVENT(76, 2);\n\t\t\tX4_JUICE_EVENT(77, -ret);\n'
+     '\t\t\tagent_conn_fail(agent);\n\t\t\tconn_impl->state = CONN_STATE_FINISHED;'),
+], 'X4_JUICE_EVENT(76, 1);')
+
+source = base / 'libdatachannel/deps/libjuice/src/agent.c'
+checked_patch(source, [
+    ('\t\tJLOG_WARN("Lost connectivity");\n\t\tagent_change_state(agent, JUICE_STATE_FAILED);',
+     '\t\tJLOG_WARN("Lost connectivity");\n\t\tX4_JUICE_EVENT(76, 3);\n'
+     '\t\tagent_change_state(agent, JUICE_STATE_FAILED);'),
+    ('\t\t\tJLOG_INFO("Connectivity timer expired");\n\t\t\tagent_change_state(agent, JUICE_STATE_FAILED);',
+     '\t\t\tJLOG_INFO("Connectivity timer expired");\n\t\t\tX4_JUICE_EVENT(76, 4);\n'
+     '\t\t\tagent_change_state(agent, JUICE_STATE_FAILED);'),
+    ('\t\tagent->state = state;\n\t\tif (agent->config.cb_state_changed)',
+     '\t\tagent->state = state;\n\t\tif (state == JUICE_STATE_FAILED) {\n'
+     '\t\t\tX4_JUICE_EVENT(88, agent->candidate_pairs_count);\n'
+     '\t\t\tX4_JUICE_EVENT(89, agent->remote.candidates_count);\n'
+     '\t\t\tX4_JUICE_EVENT(90, agent->entries_count);\n\t\t}\n'
+     '\t\tif (agent->config.cb_state_changed)'),
+], 'X4_JUICE_EVENT(76, 4);')
+
+# Preserve all transport states, exceptions and cleanup. The existing native
+# MbedTLS check already reports numeric error codes; add the missing phase.
+source = base / 'libdatachannel/src/impl/peerconnection.cpp'
+checked_patch(source, [
+    ('\t\tPLOG_VERBOSE << "Starting DTLS transport";',
+     '\t\tPLOG_VERBOSE << "Starting DTLS transport";\n\t\tX4_ICE_EXCEPTION_EVENT(86, 0);'),
+    ('\t\treturn emplaceTransport(this, &mDtlsTransport, std::move(transport));',
+     '\t\tX4_ICE_EXCEPTION_EVENT(86, 1);\n'
+     '\t\treturn emplaceTransport(this, &mDtlsTransport, std::move(transport));'),
+    ('\t} catch (const std::exception &e) {\n\t\tPLOG_ERROR << e.what();\n'
+     '\t\tchangeState(State::Failed);\n\t\tthrow std::runtime_error("DTLS transport initialization failed");',
+     '\t} catch (const std::exception &e) {\n'
+     '\t\tif (auto nativeSystem = dynamic_cast<const std::system_error *>(&e)) {\n'
+     '\t\t\tX4_ICE_EXCEPTION_EVENT(78, 2);\n'
+     '\t\t\tX4_ICE_EXCEPTION_EVENT(79, nativeSystem->code().value());\n'
+     '\t\t} else X4_ICE_EXCEPTION_EVENT(78, dynamic_cast<const std::runtime_error *>(&e) ? 3 : 4);\n'
+     '\t\tPLOG_ERROR << e.what();\n\t\tchangeState(State::Failed);\n'
+     '\t\tthrow std::runtime_error("DTLS transport initialization failed");'),
+] + [
+    ('case ' + transport + 'Transport::State::' + state + ':',
+     'case ' + transport + 'Transport::State::' + state + ':\n'
+     '\t\t\t\t\t\tX4_ICE_EXCEPTION_EVENT(' + str(event) + ', static_cast<int>(transportState));')
+    for transport, event in (('Dtls', 80), ('Sctp', 87))
+    for state in ('Connected', 'Failed', 'Disconnected')
+], 'X4_ICE_EXCEPTION_EVENT(78, 2);')
+
+source = base / 'libdatachannel/src/impl/dtlstransport.cpp'
+dtls_recv_tail = ('\t} catch (const std::exception &e) {\n\t\tPLOG_ERROR << "DTLS recv: " << e.what();\n\t}\n\n'
+                 '\tif (state() == State::Connected) {\n\t\tPLOG_INFO << "DTLS closed";\n'
+                 '\t\tchangeState(State::Disconnected);\n\t\trecv(nullptr);\n\t} else {\n'
+                 '\t\tPLOG_ERROR << "DTLS handshake failed";\n\t\tchangeState(State::Failed);\n\t}\n}\n\n'
+                 'int DtlsTransport::CertificateCallback(void *ctx, mbedtls_x509_crt *crt, int /*depth*/,')
+checked_patch(source, [
+    ('#include <exception>',
+     '#include <exception>\n#include <system_error>\n#ifdef X4_OPENORBIS\n'
+     'extern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_DTLS_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_DTLS_EVENT(id,value) ((void)0)\n#endif'),
+    (dtls_recv_tail, dtls_recv_tail.replace(
+     '\t} catch (const std::exception &e) {\n',
+     '\t} catch (const std::exception &e) {\n'
+     '\t\tif (auto nativeSystem = dynamic_cast<const std::system_error *>(&e)) {\n'
+     '\t\t\tX4_DTLS_EVENT(81, 2);\n\t\t\tX4_DTLS_EVENT(82, nativeSystem->code().value());\n'
+     '\t\t} else X4_DTLS_EVENT(81, dynamic_cast<const std::runtime_error *>(&e) ? 3 : 4);\n', 1)),
+], 'X4_DTLS_EVENT(81, 2);')
+
+source = base / 'libdatachannel/src/impl/dtlssrtptransport.cpp'
+checked_patch(source, [
+    ('namespace rtc::impl {',
+     '#ifdef X4_OPENORBIS\nextern "C" void x4_native_rtc_diagnostic(int, int);\n'
+     '#define X4_SRTP_EVENT(id,value) ::x4_native_rtc_diagnostic(id,value)\n'
+     '#else\n#define X4_SRTP_EVENT(id,value) ((void)0)\n#endif\n\nnamespace rtc::impl {'),
+    ('\tif (srtp_err_status_t err = srtp_create(&mSrtpIn, nullptr)) {',
+     '\tif (srtp_err_status_t err = srtp_create(&mSrtpIn, nullptr)) {\n\t\tX4_SRTP_EVENT(83, static_cast<int>(err));'),
+    ('\tif (srtp_err_status_t err = srtp_create(&mSrtpOut, nullptr)) {',
+     '\tif (srtp_err_status_t err = srtp_create(&mSrtpOut, nullptr)) {\n\t\tX4_SRTP_EVENT(84, static_cast<int>(err));'),
+    ('void DtlsSrtpTransport::postHandshake() {\n\tif (mInitDone)\n\t\treturn;',
+     'void DtlsSrtpTransport::postHandshake() {\n\tif (mInitDone)\n\t\treturn;\n\tX4_SRTP_EVENT(85, 0);'),
+    ('\tmInitDone = true;', '\tmInitDone = true;\n\tX4_SRTP_EVENT(85, 1);'),
+], 'X4_SRTP_EVENT(85, 1);')
+
 print('OpenOrbis dependency overlay prepared:', overlay)

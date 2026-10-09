@@ -294,6 +294,14 @@ static void state_callback(int pc, rtcState state, void *pointer)
     printf("XCloud4: RTC estado=%d\n", (int)state);
     leave(pointer);
 }
+static void ice_state_callback(int pc, rtcIceState state, void *pointer)
+{
+    (void)pc;
+    X4Rtc *rtc = enter(pointer);
+    if (!rtc) return;
+    printf("XCloud4: RTC ICE estado=%d\n", (int)state);
+    leave(pointer);
+}
 static void gathering_callback(int pc, rtcGatheringState state, void *pointer)
 {
     (void)pc;
@@ -456,6 +464,7 @@ X4Rtc *x4_rtc_open(int *error)
     CHECK(rtcSetLocalDescriptionCallback(rtc->pc,description_callback));
     CHECK(rtcSetLocalCandidateCallback(rtc->pc,candidate_callback));
     CHECK(rtcSetStateChangeCallback(rtc->pc,state_callback));
+    CHECK(rtcSetIceStateChangeCallback(rtc->pc,ice_state_callback));
     CHECK(rtcSetGatheringStateChangeCallback(rtc->pc,gathering_callback));
     /* Keep media routing keyed by track handle when the offer order changes. */
     rtcTrackInit audio={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_OPUS,.payloadType=111,.mid="0",
@@ -575,7 +584,7 @@ void x4_rtc_close(X4Rtc *rtc)
     for(unsigned i=0;i<4;++i)if(rtc->channels[i]>=0) {rtcSetMessageCallback(rtc->channels[i],NULL);rtcSetOpenCallback(rtc->channels[i],NULL);rtcDeleteDataChannel(rtc->channels[i]);}
     if(rtc->video>=0) {rtcSetMessageCallback(rtc->video,NULL);rtcDeleteTrack(rtc->video);}
     if(rtc->audio>=0) {rtcSetMessageCallback(rtc->audio,NULL);rtcDeleteTrack(rtc->audio);}
-    if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
+    if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);
