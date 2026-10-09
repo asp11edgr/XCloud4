@@ -71,6 +71,11 @@ void x4_native_rtc_diagnostic(int event,int value)
     case 66: label="socket SO_NBIO get errno"; break;
     case 67: label="socket SO_NBIO mode"; break;
     case 68: label="socket SO_NBIO option size"; break;
+    case 69: label="DNS resolver create result"; break;
+    case 70: label="DNS lookup timeout usec"; break;
+    case 71: label="DNS lookup result"; break;
+    case 72: label="DNS lookup elapsed usec"; break;
+    case 73: label="DNS address nonzero"; break;
     default: label="unknown event"; break;
     }
     printf("XCloud4: RTC native %s value=%d (0x%08x)\n",label,value,(unsigned)value);

@@ -6,9 +6,11 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
+#include <limits.h>
 #include <net/if.h>
 #include <netdb.h>
 #include <orbis/NetCtl.h>
+#include <orbis/libkernel.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <sys/socket.h>
@@ -95,8 +97,25 @@ int x4_native_getaddrinfo(const char *node, const char *service,
         if (dns_pool < 0 || !resolver_create || !resolver_ntoa) return EAI_FAIL;
         while (atomic_flag_test_and_set_explicit(&dns_lock, memory_order_acquire)) {}
         int resolver = resolver_create("x4-rtc-resolver", dns_pool, 0);
-        int rc = resolver < 0 ? -1 : resolver_ntoa(resolver, node, &address, 2, 1, 0);
-        if (resolver >= 0) resolver_destroy(resolver);
+        x4_native_rtc_diagnostic(69,resolver < 0 ? resolver : 0);
+        int rc = -1;
+        if (resolver >= 0) {
+            /* PS4 resolver timeouts are in microseconds. */
+            enum { DNS_TIMEOUT_USEC = 2 * 1000 * 1000 };
+            x4_native_rtc_diagnostic(70,DNS_TIMEOUT_USEC);
+            int saved_errno = errno;
+            uint64_t started = sceKernelGetProcessTime();
+            errno = saved_errno;
+            rc = resolver_ntoa(resolver,node,&address,DNS_TIMEOUT_USEC,1,0);
+            saved_errno = errno;
+            uint64_t finished = sceKernelGetProcessTime();
+            uint64_t elapsed = finished >= started ? finished - started : 0;
+            x4_native_rtc_diagnostic(71,rc);
+            x4_native_rtc_diagnostic(72,elapsed > INT_MAX ? INT_MAX : (int)elapsed);
+            x4_native_rtc_diagnostic(73,address.s_addr != 0);
+            errno = saved_errno;
+            resolver_destroy(resolver);
+        }
         atomic_flag_clear_explicit(&dns_lock, memory_order_release);
         if (rc < 0) return EAI_AGAIN;
     }
