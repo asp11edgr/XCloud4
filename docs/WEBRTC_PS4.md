@@ -99,6 +99,14 @@ The actual console set/query results are errno **0**, enabled mode **256 (`0x100
 
 Matching 0.7.5 source is preserved separately: **83543722 bytes**, SHA-256 `8efc459212d3bc99304442e3f98f1c970af3907fb225600933493001eb9d841b`; all **9367** manifest source hashes matched and the PC copy matches. Previous snapshots remain unchanged. See [0.7.5 notes and source pins](RELEASE_NOTES_0.7.5.md).
 
+### 0.7.6 structural SDP and HTTP diagnostics
+
+Original bounded diagnostics describe media/codec/feedback/BUNDLE/setup/trickle/candidate structure through enums and numbers, without logging raw SDP or private values. HTTP diagnostics retain fixed allowlist categories and numeric timing/status/object summaries before clearing response data. Negotiation behavior and the 30-second keepalive interval are unchanged. Claude Opus 5.5 reviewed SDP/protocol configuration in seven turns and the scanner separately in two turns. The scanner review found a diagnostic-only setup/trickle labeling limitation above eight media sections; the actual three-section offer is unaffected.
+
+The console capture again accepts SDP submission with HTTP 202 and receives HTTP 204 through **33** polls. Keepalive returns **HTTP 410**, allowlist category **2 (`SessionNotActive`)**, **118 bytes**, after **30317 ms**; remote deletion succeeds with HTTP 200. No remote SDP, completed ICE, RTP or game media is received. The callback header is reconstructed from interleaved fragments: **1093 bytes**, three sections, zero candidates, three unique/matched BUNDLE entries. Individual sections show video/audio/application order, H.264 102/profile42E01F, Opus111 and SCTP5000. These are structural evidence, not a successful exchange.
+
+Source inspection identifies a retained initial callback offer despite completed gathering. Obtaining the current local description after gathering is the next repair target; the missing answer's precise cause and repair result remain unconfirmed. The full package built without warnings/errors, and PC/VM/PS4 hashes match. Matching source is **83544715 bytes**, SHA-256 `14f8578e49d8bef7497b68b8803d6ed71c0fc5d720f72687d7ba05b515246f2d`; all **9367** source hashes and the copied archive matched. See [0.7.6 package, runtime and review evidence](RELEASE_NOTES_0.7.6.md).
+
 1. Pin dependencies and configure static OpenOrbis builds with examples/tests disabled.
 2. Review sockets, threads, timing, DNS and cryptographic entropy ABI. Resolve missing declarations/exports while retaining bounds and cancellation.
 3. Generate a real SDP offer and DTLS fingerprint on PS4 and exchange them with Xbox using the researched session protocol.

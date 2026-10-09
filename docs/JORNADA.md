@@ -244,3 +244,19 @@ Set/query errno values are **0**, returned mode is **256 (`0x100`)**, size is **
 Repeated answer requests return **HTTP 204** without remote SDP until keepalive returns **HTTP 410**. The application reports that Xbox did not maintain the session; deletion succeeds with **HTTP 200**. The owner reports a new error view. Final counters show no completed ICE, video or audio, and no RTP is received. Successful local gathering and accepted SDP submission do not establish remote negotiation or media. The precise cause of the missing answer/session expiry remains under investigation.
 
 The exact immutable source archive is **83543722 bytes**, SHA-256 `8efc459212d3bc99304442e3f98f1c970af3907fb225600933493001eb9d841b`. All **9367** recorded source hashes matched, and the PC copy matches the guest archive. It includes the final SO_NBIO adapter and matching libjuice changes; all earlier snapshots remain preserved. See [0.7.5 release evidence](RELEASE_NOTES_0.7.5.md).
+
+## 0.7.6: structural SDP and HTTP diagnostics
+
+This checkpoint adds an original bounded scanner for SDP shape and fixed allowlist HTTP error/timing summaries before clearing response data. Raw SDP, ICE values, credentials and arbitrary remote text are omitted. Negotiation and the 30000-ms keepalive interval remain unchanged. Claude Opus 5.5 completed a read-only protocol/SDP review in **7 turns / 6 reads**, without establishing a cause or correction. Its separate scanner review completed in **2 turns** and found setup/trickle labeling can leak into the session-level diagnostic category above eight media sections. The actual offer has three, so this diagnostic limitation does not affect its negotiation; the immutable checkpoint preserves it for a later repair.
+
+The full application/package build succeeded without warnings/errors: `XCloud4-0.7.6.pkg`, **8912896 bytes**, SHA-256 `bfc2facb54c9c974851e2e33954deea44a952b7586511d0ac8db9155cde01e6d`. VM/PC/PS4 retrieval hashes match. The previous installer was retired after verification, leaving only 0.7.6 in the console installer directory.
+
+### Actual 0.7.6 console result
+
+Native nonblocking setup and gathering succeed. The callback header, reconstructed from fragments interleaved by concurrent logging, records **1093 bytes**, three media sections, zero candidates and three unique/matched BUNDLE entries. Individual media summaries show video index0/audio1/application2, each port9, H.264102 with four feedback entries and profile42E01F, Opus111 and SCTP5000 with actpass/trickle. This is a structural report, not a confirmed compatible offer.
+
+Xbox accepts SDP submission with **HTTP 202**, then **33** pending answer polls return **HTTP 204**. Keepalive returns **HTTP 410**, **118 bytes**, with a valid JSON object and allowlist code **2 (`SessionNotActive`)**, no nested errorDetails/error. It occurs **30317 ms** after submission; the last keepalive attempt is logged at **29920 ms**, with the interval unchanged at **30000 ms**. Remote deletion returns **HTTP 200**. The owner reports the same error, and no remote SDP, completed ICE, RTP, video or audio is received.
+
+Inspection identifies that submission retains the initial callback offer even after gathering; the callback summary contains zero candidates. The next checkpoint will fetch the actual current local description after gathering. This is a source finding, with no demonstrated server correction yet.
+
+The matching source archive closed before that next edit: **83544715 bytes**, SHA-256 `14f8578e49d8bef7497b68b8803d6ed71c0fc5d720f72687d7ba05b515246f2d`. All **9367** source hashes matched, with identical guest/PC archive hashes. Pinned vendor revisions remain unchanged, and the exact scanner/native adapters/configuration/licenses are retained. Every earlier snapshot is preserved. See [0.7.6 release evidence](RELEASE_NOTES_0.7.6.md).
