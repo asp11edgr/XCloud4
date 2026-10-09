@@ -1,6 +1,6 @@
 # XCloud4 0.7.7 — refresh the local offer after gathering
 
-This checkpoint obtains the actual current local SDP after gathering instead of using the initial callback snapshot. The full application/package compiled successfully without warnings/errors. **The owner's console result is pending; a successful Xbox negotiation or game video/audio result is not yet established.**
+This checkpoint obtains the actual current local SDP after gathering instead of using the initial callback snapshot. The full application/package compiled successfully without warnings/errors. **The console confirms a current offer containing one real candidate, but Xbox still returns HTTP 204 without a remote SDP answer. The owner reports the same error; no successful game video/audio result is established.**
 
 ## Evidence motivating the change
 
@@ -23,6 +23,14 @@ H.264 profile, media ordering and HTTP signaling behavior remain unchanged. Matc
 - SHA-256: `5a050c7ae06080c0a051e9dad7ca4550e0ed85feec0c3abec4aceb31c50307b3`.
 
 A static peer review of the current-offer getter completed successfully. Claude Opus 5.5 completed its focused read-only review successfully in **2 turns / 1 read**, with no proven defect found within that scope. It inspected current C API data, bounds, type/NUL checks, locking and privacy. VM/PC/PS4 retrieval hashes match; after verification and retiring 0.7.6, the console installer directory contains only 0.7.7. Review/build/integrity evidence does not establish a returned Xbox SDP answer or native game media.
+
+## Actual console evidence
+
+Gathering reports completion (enum **2**). The current description is **1201 bytes**, contains **one candidate**, and has three unique/matched BUNDLE entries. All three media ports are **61345**. Video uses H.264 **102**, profile **42E01F**, with four feedback entries; audio uses Opus **111**, and the application section uses SCTP **5000**.
+
+This confirms the description is refreshed after gathering and includes actual provider state. Xbox accepts SDP submission with **HTTP 202**, but **33** answer polls return **HTTP 204** without a remote SDP answer. Keepalive returns **HTTP 410**, **118 bytes**, allowlist code **2 (`SessionNotActive`)**, **30492 ms** after submission. Remote deletion returns **HTTP 200**, with no received RTP or game media. The owner reports the same error. The refreshed offer repairs the source-state issue but does not resolve the missing Xbox answer.
+
+The owner also closed the application through OPTIONS; resources closed and return to the PS4 menu completed without `CE-34878-0`.
 
 The exact corresponding-source archive closed from the frozen 0.7.7 mirror:
 
