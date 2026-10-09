@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.12\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.13\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1402,6 +1402,89 @@ static void signal_public_error_code(X4JsonSpan details)
     x4_secure_clear(name, sizeof(name));
 }
 
+static bool signal_message_word(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        (c >= '0' && c <= '9') || c == '_';
+}
+
+static bool signal_message_space(unsigned char c)
+{
+    return c == ' ' || c == '\r' || c == '\n' || c == '\t';
+}
+
+static unsigned char signal_message_lower(unsigned char c)
+{
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
+}
+
+/* Fixed ASCII words/phrases only. Word boundaries exclude identifiers such as
+ * service/device; phrase spaces admit one or more spaces, CR, LF or TAB. */
+static bool signal_message_contains(const char *text, size_t length, const char *literal)
+{
+    for (size_t i = 0; i < length; ++i) {
+        if (i && signal_message_word((unsigned char)text[i - 1])) continue;
+        size_t j = i, k = 0;
+        while (literal[k] && j < length) {
+            if (literal[k] == ' ') {
+                if (!signal_message_space((unsigned char)text[j])) break;
+                do { ++j; } while (j < length && signal_message_space((unsigned char)text[j]));
+                ++k;
+            } else {
+                if (signal_message_lower((unsigned char)text[j]) != (unsigned char)literal[k]) break;
+                ++j;
+                ++k;
+            }
+        }
+        if (!literal[k] && (j == length || !signal_message_word((unsigned char)text[j]))) return true;
+    }
+    return false;
+}
+
+/* This records lexical presence, not a cause of failure. Only the direct
+ * errorDetails.message is inspected; its decoded text is never printed. */
+static void signal_error_message_keywords(X4JsonSpan details)
+{
+    static const struct { const char *literal; uint32_t bit; } keywords[] = {
+        {"timeout", 1u << 0}, {"timed out", 1u << 0}, {"timedout", 1u << 0},
+        {"sdp", 1u << 1}, {"offer", 1u << 2}, {"answer", 1u << 3},
+        {"codec", 1u << 4},
+        {"h264", 1u << 5}, {"h.264", 1u << 5}, {"profile", 1u << 5},
+        {"ice", 1u << 6}, {"candidate", 1u << 6}, {"dtls", 1u << 7},
+        {"parse", 1u << 8}, {"parsing", 1u << 8}, {"invalid", 1u << 8},
+        {"unsupported", 1u << 9}, {"not supported", 1u << 9},
+        {"command", 1u << 10}, {"target", 1u << 11},
+        {"null", 1u << 12}, {"reference", 1u << 12}, {"exception", 1u << 13},
+        {"expired", 1u << 14}, {"expire", 1u << 14},
+        {"unauthorized", 1u << 15}, {"forbidden", 1u << 15}, {"authorization", 1u << 15},
+        {"performsdpexchangev1command", 1u << 16},
+        {"performiceexchangev1command", 1u << 17}
+    };
+    char text[1025] = {0};
+    X4JsonSpan message = {0};
+    size_t raw_length = 0, decoded = 0;
+    uint32_t mask = 0;
+    bool valid = false;
+    if (x4_json_type(details) == X4_JSON_T_OBJECT &&
+        x4_json_member(details, "message", &message) == 1 &&
+        x4_json_type(message) == X4_JSON_T_STRING) {
+        raw_length = message.length;
+        /* At most six JSON bytes encode one accepted ASCII byte. */
+        if (raw_length <= 6u * (sizeof(text) - 1u) + 2u &&
+            signal_decode(message, text, sizeof(text), true)) {
+            while (decoded < sizeof(text) && text[decoded]) ++decoded;
+            valid = decoded >= 1 && decoded < sizeof(text);
+            if (valid) {
+                for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); ++i)
+                    if (signal_message_contains(text, decoded, keywords[i].literal)) mask |= keywords[i].bit;
+            }
+        }
+    }
+    printf("XCloud4: signal error message keywords valid=%d raw_span_length=%zu decoded_bytes=%zu mask=0x%08x\n",
+        valid, raw_length, decoded, (unsigned)mask);
+    x4_secure_clear(text, sizeof(text));
+}
+
 static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, const char *suffix)
 {
     X4JsonSpan root={0}, details={0}, error={0};
@@ -1427,7 +1510,10 @@ static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, co
         signal_error_shape(0, root);
         if (details_type) signal_error_shape(1, details);
         if (error_type) signal_error_shape(2, error);
-        if (details_type == X4_JSON_T_OBJECT) signal_public_error_code(details);
+        if (details_type == X4_JSON_T_OBJECT) {
+            signal_public_error_code(details);
+            signal_error_message_keywords(details);
+        }
         X4JsonSpan nested;
         if (details_type == X4_JSON_T_OBJECT && x4_json_member(details, "details", &nested) == 1 &&
             x4_json_type(nested) == X4_JSON_T_OBJECT) signal_error_shape(3, nested);
