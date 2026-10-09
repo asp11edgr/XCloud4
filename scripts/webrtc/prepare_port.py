@@ -59,19 +59,25 @@ if 'X4_OPENORBIS' not in text:
         '#endif\n')
 write_changed(random, text)
 
-# Restore the exact BSD FIONBIO name missing from the SDK. Its existing
-# _IOW encoding is native BSD, unlike LINUX_FIONBIO (0x5421). Socket
-# nonblocking uses this one operation. F_SETFL also requests FIOASYNC;
-# F_SETFL returned EACCES on the actual PS4, but its rejected sub-operation
-# has not been identified.
+# PS4 kernel socket descriptors reject both F_SETFL and BSD FIONBIO with
+# EACCES on the real console. Sony's PlayStation WebKit port and OpenOrbis
+# homebrew use setsockopt(SOL_SOCKET, SO_NBIO) on the same POSIX descriptor.
+# The application implements and verifies that native operation.
 source = base / 'libdatachannel/deps/libjuice/src/socket.h'
 text = source.read_text()
-fio_header = ('#include <sys/ioctl.h>\n#ifdef X4_OPENORBIS\n'
+legacy_fio_header = ('#include <sys/ioctl.h>\n#ifdef X4_OPENORBIS\n'
     '#ifndef FIONBIO\n#define FIONBIO _IOW(\'f\', 126, int)\n#endif\n#endif')
-if fio_header not in text:
-    if text.count('#include <sys/ioctl.h>') != 1:
-        raise SystemExit('Unexpected pinned libjuice socket ioctl include')
-    text = text.replace('#include <sys/ioctl.h>', fio_header, 1)
+socket_native_header = ('#include <sys/ioctl.h>\n#ifdef X4_OPENORBIS\n'
+    'extern int x4_native_socket_nonblock(int);\n#endif')
+if socket_native_header not in text:
+    if legacy_fio_header in text:
+        text = text.replace(legacy_fio_header,socket_native_header,1)
+    else:
+        if text.count('#include <sys/ioctl.h>') != 1:
+            raise SystemExit('Unexpected pinned libjuice socket ioctl include')
+        text = text.replace('#include <sys/ioctl.h>', socket_native_header, 1)
+if text.count(socket_native_header) != 1:
+    raise SystemExit('Incomplete native socket API declaration')
 write_changed(source, text)
 
 # Normalize the original upstream form for the checked migration below.
@@ -401,9 +407,9 @@ checked_patch(source, [
      '\tint ret = thread_init(&registry_impl->thread, conn_thread_entry, registry);\n\tX4_JUICE_EVENT(58, ret);'),
 ], 'X4_JUICE_EVENT(58, ret);')
 
-# F_SETFL also requests async-mode ioctls on BSD sockets. Request only
-# FIONBIO with the actual four-byte int argument required by upstream.
-# A rejected ioctl remains a real error; a blocking socket is never used.
+# Keep the original ioctl operation on other platforms. The native adapter
+# requests PS4 SO_NBIO with a four-byte int and confirms the mode through
+# getsockopt. A rejected operation remains an error; never use blocking UDP.
 for filename in ('udp.c', 'tcp.c'):
     source = base / 'libdatachannel/deps/libjuice/src' / filename
     text = source.read_text()
@@ -411,7 +417,13 @@ for filename in ('udp.c', 'tcp.c'):
         if text.count('#include "log.h"') != 1:
             raise SystemExit('Unexpected pinned socket diagnostic include: ' + filename)
         text = text.replace('#include "log.h"', juice_diagnostic_header, 1)
-    replacement = ('\tconst int nonblock_result = ioctlsocket(sock, FIONBIO, &nbio);\n'
+    nbio_declaration = '#ifndef X4_OPENORBIS\n\tctl_t nbio = 1;\n#endif'
+    if nbio_declaration not in text:
+        if text.count('\tctl_t nbio = 1;') != 1:
+            raise SystemExit('Unexpected pinned socket mode argument: ' + filename)
+        text = text.replace('\tctl_t nbio = 1;',nbio_declaration,1)
+    replacement = ('#ifdef X4_OPENORBIS\n\tconst int nonblock_result = x4_native_socket_nonblock(sock);\n'
+        '#else\n\tconst int nonblock_result = ioctlsocket(sock, FIONBIO, &nbio);\n#endif\n'
         '\tX4_JUICE_EVENT(64, nonblock_result == 0 ? 0 : sockerrno);\n'
         '\tif (nonblock_result) {')
     if replacement not in text:
@@ -421,6 +433,9 @@ for filename in ('udp.c', 'tcp.c'):
             '\tif (existing_flags < 0) X4_JUICE_EVENT(51, sockerrno);\n'
             '\tif (fcntl(sock, F_SETFL, existing_flags | O_NONBLOCK) < 0) {\n'
             '\t\tX4_JUICE_EVENT(52, sockerrno);',
+            '\tconst int nonblock_result = ioctlsocket(sock, FIONBIO, &nbio);\n'
+            '\tX4_JUICE_EVENT(64, nonblock_result == 0 ? 0 : sockerrno);\n'
+            '\tif (nonblock_result) {',
         )
         matches = [original for original in original_forms if original in text]
         if len(matches) != 1 or text.count(matches[0]) != 1:

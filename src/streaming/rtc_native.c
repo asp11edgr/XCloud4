@@ -66,7 +66,11 @@ void x4_native_rtc_diagnostic(int event,int value)
     case 61: label="juice poll write pipe flags errno"; break;
     case 62: label="native interface query result"; break;
     case 63: label="native interface result count"; break;
-    case 64: label="socket FIONBIO errno"; break;
+    case 64: label="socket nonblock errno"; break;
+    case 65: label="socket SO_NBIO set errno"; break;
+    case 66: label="socket SO_NBIO get errno"; break;
+    case 67: label="socket SO_NBIO mode"; break;
+    case 68: label="socket SO_NBIO option size"; break;
     default: label="unknown event"; break;
     }
     printf("XCloud4: RTC native %s value=%d (0x%08x)\n",label,value,(unsigned)value);

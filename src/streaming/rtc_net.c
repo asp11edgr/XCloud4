@@ -11,6 +11,7 @@
 #include <orbis/NetCtl.h>
 #include <stdatomic.h>
 #include <stddef.h>
+#include <sys/socket.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -144,6 +145,29 @@ typedef struct {
     struct sockaddr_in address;
     char name[16];
 } NativeInterface;
+
+/* Sony's PlayStation WebKit port uses POSIX setsockopt for this operation.
+ * PS4 SO_NBIO is 0x1200; the existing POSIX descriptor is preserved. Both
+ * fcntl(F_SETFL) and ioctl(FIONBIO) returned EACCES on the real PS4. */
+int x4_native_socket_nonblock(int descriptor)
+{
+    enum { X4_PS4_SO_NBIO = 0x1200 };
+    _Static_assert(SOL_SOCKET == 0xffff && sizeof(int) == 4 && sizeof(socklen_t) == 4,
+                   "PS4 socket option ABI requires SOL_SOCKET 0xffff and four-byte integers");
+    int enabled = 1;
+    int result = setsockopt(descriptor,SOL_SOCKET,X4_PS4_SO_NBIO,&enabled,sizeof(enabled));
+    x4_native_rtc_diagnostic(65,result < 0 ? errno : 0);
+    if (result < 0) return -1;
+    int actual = 0;
+    socklen_t actual_size = sizeof(actual);
+    result = getsockopt(descriptor,SOL_SOCKET,X4_PS4_SO_NBIO,&actual,&actual_size);
+    x4_native_rtc_diagnostic(66,result < 0 ? errno : 0);
+    if (result < 0) return -1;
+    x4_native_rtc_diagnostic(67,actual);
+    x4_native_rtc_diagnostic(68,(int)actual_size);
+    if (actual_size != sizeof(actual) || !actual) { errno = EIO; return -1; }
+    return 0;
+}
 
 int x4_native_getifaddrs(struct ifaddrs **out)
 {
