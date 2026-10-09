@@ -62,6 +62,188 @@ static void fail(X4Rtc *rtc, int error)
     atomic_store(&rtc->state, X4_RTC_FAILED);
 }
 
+/* Structural diagnostics only. Never print input strings: the SDP contains
+ * addresses, credentials, certificate fingerprints and private identifiers. */
+typedef struct { const char *p; size_t n; } SdpSpan;
+typedef struct {
+    unsigned kind, rtp, pt_count, pt_overflow, pts[16];
+    unsigned mid_type, mid, direction, setup, trickle, feedback;
+    unsigned fb_nack, fb_pli, fb_fir, fb_remb, profile_found, profile;
+    int port, h264_pt, opus_pt, sctp_port;
+    SdpSpan mid_span;
+} SdpShape;
+
+static bool sdp_equal(SdpSpan s, const char *literal)
+{
+    size_t n = strlen(literal);
+    return s.n == n && !memcmp(s.p, literal, n);
+}
+static bool sdp_prefix(SdpSpan s, const char *literal)
+{
+    size_t n = strlen(literal);
+    return s.n >= n && !memcmp(s.p, literal, n);
+}
+static SdpSpan sdp_after(SdpSpan s, size_t n)
+{
+    return n <= s.n ? (SdpSpan){s.p + n, s.n - n} : (SdpSpan){s.p, 0};
+}
+static SdpSpan sdp_token(SdpSpan *rest)
+{
+    size_t first = 0, end;
+    while (first < rest->n && (rest->p[first] == ' ' || rest->p[first] == '\t')) ++first;
+    end = first;
+    while (end < rest->n && rest->p[end] != ' ' && rest->p[end] != '\t') ++end;
+    SdpSpan token = {rest->p + first, end - first};
+    *rest = sdp_after(*rest, end);
+    return token;
+}
+static bool sdp_number(SdpSpan token, unsigned maximum, unsigned *number)
+{
+    if (!token.n) return false;
+    unsigned value = 0;
+    for (size_t i = 0; i < token.n; ++i) {
+        unsigned digit = (unsigned char)token.p[i] - (unsigned)'0';
+        if (digit > 9 || digit > maximum || value > (maximum - digit) / 10) return false;
+        value = value * 10 + digit;
+    }
+    *number = value;
+    return true;
+}
+static unsigned sdp_setup(SdpSpan value)
+{
+    return sdp_equal(value, "actpass") ? 1 : sdp_equal(value, "active") ? 2 :
+        sdp_equal(value, "passive") ? 3 : sdp_equal(value, "holdconn") ? 4 : 5;
+}
+static bool sdp_trickle(SdpSpan rest)
+{
+    while (rest.n) if (sdp_equal(sdp_token(&rest), "trickle")) return true;
+    return false;
+}
+static void sdp_profile(SdpShape *m, SdpSpan line)
+{
+    static const char key[] = "profile-level-id=";
+    for (size_t i = 0; i + sizeof(key) - 1 + 6 <= line.n; ++i) {
+        if (i && line.p[i - 1] != ';' && line.p[i - 1] != ' ' && line.p[i - 1] != '\t') continue;
+        if (memcmp(line.p + i, key, sizeof(key) - 1)) continue;
+        size_t start = i + sizeof(key) - 1;
+        unsigned value = 0;
+        bool valid = true;
+        for (size_t j = 0; j < 6; ++j) {
+            unsigned char c = (unsigned char)line.p[start + j];
+            unsigned digit = c >= '0' && c <= '9' ? c - '0' :
+                c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 16;
+            if (digit > 15) { valid = false; break; }
+            value = value * 16 + digit;
+        }
+        size_t end = start + 6;
+        if (end < line.n && line.p[end] != ';' && line.p[end] != ' ' && line.p[end] != '\t') valid = false;
+        if (valid) { m->profile_found = 1; m->profile = value; }
+    }
+}
+static void sdp_shape_log(const char *sdp, size_t length)
+{
+    SdpShape media[8] = {0};
+    SdpSpan bundle[8] = {{0}};
+    unsigned count = 0, stored = 0, candidates = 0, bundle_count = 0;
+    unsigned session_setup = 0, session_trickle = 0, bundle_unique = 1, bundle_matched = 0;
+    SdpShape *m = NULL;
+    for (size_t offset = 0; offset < length;) {
+        size_t end = offset;
+        while (end < length && sdp[end] != '\n') ++end;
+        size_t line_end = end;
+        if (line_end > offset && sdp[line_end - 1] == '\r') --line_end;
+        SdpSpan line = {sdp + offset, line_end - offset};
+        offset = end < length ? end + 1 : end;
+        if (sdp_prefix(line, "m=")) {
+            ++count;
+            m = stored < 8 ? &media[stored++] : NULL;
+            if (!m) continue;
+            *m = (SdpShape){.port = -1, .h264_pt = -1, .opus_pt = -1, .sctp_port = -1,
+                .setup = session_setup, .trickle = session_trickle};
+            SdpSpan rest = sdp_after(line, 2), type = sdp_token(&rest);
+            m->kind = sdp_equal(type, "video") ? 1 : sdp_equal(type, "audio") ? 2 :
+                sdp_equal(type, "application") ? 3 : 4;
+            unsigned number;
+            if (sdp_number(sdp_token(&rest), 65535, &number)) m->port = (int)number;
+            SdpSpan protocol = sdp_token(&rest);
+            m->rtp = sdp_equal(protocol, "UDP/TLS/RTP/SAVPF") || sdp_equal(protocol, "RTP/SAVPF");
+            if (m->rtp) while (rest.n) {
+                SdpSpan pt = sdp_token(&rest);
+                if (!pt.n) break;
+                if (!sdp_number(pt, 127, &number)) { m->pt_overflow = 1; continue; }
+                if (m->pt_count < 16) m->pts[m->pt_count++] = number;
+                else m->pt_overflow = 1;
+            }
+            continue;
+        }
+        if (sdp_prefix(line, "a=candidate:")) { ++candidates; continue; }
+        if (sdp_prefix(line, "a=group:BUNDLE")) {
+            SdpSpan rest = sdp_after(line, 14);
+            while (rest.n) {
+                SdpSpan token = sdp_token(&rest);
+                if (!token.n) break;
+                for (unsigned i = 0; i < bundle_count && i < 8; ++i)
+                    if (bundle[i].n == token.n && !memcmp(bundle[i].p, token.p, token.n)) bundle_unique = 0;
+                if (bundle_count < 8) bundle[bundle_count] = token;
+                ++bundle_count;
+            }
+            continue;
+        }
+        if (sdp_prefix(line, "a=setup:")) {
+            unsigned setup = sdp_setup(sdp_after(line, 8));
+            if (m) m->setup = setup; else session_setup = setup;
+        } else if (sdp_prefix(line, "a=ice-options:")) {
+            unsigned trickle = sdp_trickle(sdp_after(line, 14));
+            if (m) m->trickle = trickle; else session_trickle = trickle;
+        } else if (m) {
+            unsigned number;
+            if (sdp_prefix(line, "a=mid:")) {
+                m->mid_span = sdp_after(line, 6);
+                m->mid_type = sdp_number(m->mid_span, 65535, &m->mid) ? 1 : 2;
+            } else if (sdp_equal(line, "a=recvonly")) m->direction = 1;
+            else if (sdp_equal(line, "a=sendonly")) m->direction = 2;
+            else if (sdp_equal(line, "a=sendrecv")) m->direction = 3;
+            else if (sdp_equal(line, "a=inactive")) m->direction = 4;
+            else if (sdp_prefix(line, "a=rtpmap:")) {
+                SdpSpan rest = sdp_after(line, 9), pt = sdp_token(&rest), codec = sdp_token(&rest);
+                if (sdp_number(pt, 127, &number)) {
+                    if (sdp_equal(codec, "H264/90000")) m->h264_pt = (int)number;
+                    if (sdp_equal(codec, "opus/48000/2")) m->opus_pt = (int)number;
+                }
+            } else if (sdp_prefix(line, "a=rtcp-fb:")) {
+                ++m->feedback;
+                SdpSpan rest = sdp_after(line, 10);
+                (void)sdp_token(&rest);
+                while (rest.n && (rest.p[0] == ' ' || rest.p[0] == '\t')) rest = sdp_after(rest, 1);
+                m->fb_nack |= sdp_equal(rest, "nack"); m->fb_pli |= sdp_equal(rest, "nack pli");
+                m->fb_fir |= sdp_equal(rest, "ccm fir"); m->fb_remb |= sdp_equal(rest, "goog-remb");
+            } else if (sdp_prefix(line, "a=fmtp:")) sdp_profile(m, line);
+            else if (sdp_prefix(line, "a=sctp-port:") && sdp_number(sdp_after(line, 12), 65535, &number))
+                m->sctp_port = (int)number;
+        }
+    }
+    if (bundle_count > 8) bundle_unique = 2; /* Unknown when the diagnostic bound is exceeded. */
+    for (unsigned i = 0; i < bundle_count && i < 8; ++i)
+        for (unsigned j = 0; j < stored; ++j)
+            if (media[j].mid_span.n == bundle[i].n && !memcmp(media[j].mid_span.p, bundle[i].p, bundle[i].n)) {
+                ++bundle_matched; break;
+            }
+    printf("XCloud4: SDP shape bytes=%zu media=%u stored=%u candidates=%u bundle=%u unique=%u matched=%u setup=%u trickle=%u\n",
+        length, count, stored, candidates, bundle_count, bundle_unique, bundle_matched, session_setup, session_trickle);
+    for (unsigned i = 0; i < stored; ++i) {
+        m = &media[i];
+        printf("XCloud4: SDP media index=%u kind=%u port=%d midtype=%u midnum=%u direction=%u rtp=%u pts=%u overflow=%u setup=%u trickle=%u sctp=%d\n",
+            i, m->kind, m->port, m->mid_type, m->mid, m->direction, m->rtp, m->pt_count, m->pt_overflow,
+            m->setup, m->trickle, m->sctp_port);
+        for (unsigned j = 0; j < m->pt_count; ++j)
+            printf("XCloud4: SDP payload media=%u index=%u pt=%u\n", i, j, m->pts[j]);
+        printf("XCloud4: SDP codec media=%u h264=%d opus=%d feedback=%u nack=%u pli=%u fir=%u remb=%u profile_present=%u profile=%06X known31=%u known32=%u\n",
+            i, m->h264_pt, m->opus_pt, m->feedback, m->fb_nack, m->fb_pli, m->fb_fir, m->fb_remb,
+            m->profile_found, m->profile, m->profile_found && m->profile == 0x42e01f,
+            m->profile_found && m->profile == 0x42e020);
+    }
+}
+
 static void description_callback(int pc, const char *sdp, const char *type, void *pointer)
 {
     (void)pc;
@@ -70,6 +252,7 @@ static void description_callback(int pc, const char *sdp, const char *type, void
     size_t length = sdp ? strnlen(sdp, SDP_CAP) : SDP_CAP;
     if (length == SDP_CAP || !type || strcmp(type, "offer")) fail(rtc, -40);
     else {
+        sdp_shape_log(sdp, length);
         lock(&rtc->data_gate);
         memcpy(rtc->sdp, sdp, length + 1);
         unlock(&rtc->data_gate);

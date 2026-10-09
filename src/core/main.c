@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.5: socket WebRTC no bloqueante y recepcion de H264/Opus\n");
+    printf("XCloud4 0.7.6: diagnostico de oferta WebRTC y respuesta de Xbox\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

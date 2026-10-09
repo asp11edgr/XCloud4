@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.5\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.6\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -94,6 +94,8 @@ struct X4XboxWork {
     void *media_user;
     _Atomic int *keyframe_requested;
     uint64_t next_keepalive;
+    uint64_t sdp_sent_at;
+    unsigned sdp_polls;
     unsigned local_candidates, remote_candidates;
     bool provisioned;
     /* Signaling may contain ICE credentials and local IP addresses. All
@@ -1288,6 +1290,51 @@ static bool signal_provisioned(X4XboxWork *w, uint64_t deadline, SessionEnd *end
     }
 }
 
+/* Only fixed classifications are logged, never a remote string. Code 0 is
+ * absent, 1 unknown, and 2..14 follow the literal allowlist below. */
+static int signal_error_code(X4JsonSpan object)
+{
+    X4JsonSpan value;
+    int member = x4_json_member(object, "code", &value);
+    if (member < 1) return member;
+    static const char *const allowed[] = {
+        "SessionNotActive", "SessionNotFound", "SessionExpired", "InvalidSdp",
+        "InvalidOffer", "InvalidRequest", "BadRequest", "Unauthorized",
+        "NotAuthorized", "Forbidden", "Timeout", "InternalServerError", "ServiceUnavailable"
+    };
+    char code[64] = {0};
+    int result = 1;
+    if (!x4_json_token(value, code, sizeof(code))) {
+        for (unsigned i=0;i<sizeof(allowed)/sizeof(allowed[0]);++i)
+            if (!strcmp(code, allowed[i])) { result=(int)i+2; break; }
+    }
+    x4_secure_clear(code, sizeof(code));
+    return result;
+}
+
+static void signal_error_diagnostic(X4XboxWork *w, size_t length, int status, const char *suffix)
+{
+    X4JsonSpan root={0}, details={0}, error={0};
+    bool valid = !x4_json_parse(w->response, length, &root) && x4_json_type(root)==X4_JSON_T_OBJECT;
+    int top_code=-1, details_type=0, details_code=-1, error_type=0, error_code=-1;
+    if (valid) {
+        top_code=signal_error_code(root);
+        if (x4_json_member(root,"errorDetails",&details)==1) {
+            details_type=x4_json_type(details);
+            if (details_type==X4_JSON_T_OBJECT) details_code=signal_error_code(details);
+        }
+        if (x4_json_member(root,"error",&error)==1) {
+            error_type=x4_json_type(error);
+            if (error_type==X4_JSON_T_OBJECT) error_code=signal_error_code(error);
+        }
+    }
+    int route=!strcmp(suffix,"/sdp")?1:!strcmp(suffix,"/ice")?2:3;
+    uint64_t now=session_now();
+    unsigned long long elapsed=w->sdp_sent_at && now>=w->sdp_sent_at ? (now-w->sdp_sent_at)/1000ull:0;
+    printf("XCloud4: signal HTTP failure route=%d http=%d bytes=%zu object=%d code=%d details_type=%d details_code=%d error_type=%d error_code=%d sdp_polls=%u elapsed_ms=%llu\n",
+        route,status,length,valid,top_code,details_type,details_code,error_type,error_code,w->sdp_polls,elapsed);
+}
+
 /* Applies the same deadline after blocking native HTTP as before it. */
 static bool signal_call(X4XboxWork *w, const char *suffix, enum X4HttpSessionMethod method,
     const char *json, uint64_t deadline, SessionEnd *end, size_t *length, int *status)
@@ -1316,6 +1363,7 @@ static bool signal_call(X4XboxWork *w, const char *suffix, enum X4HttpSessionMet
     }
     w->session.http_status = *status;
     if (*status < 200 || *status > 299) {
+        signal_error_diagnostic(w,*length,*status,suffix);
         const char *stage = !strcmp(suffix, "/sdp") ? "Xbox rechazo la negociacion SDP" :
             !strcmp(suffix, "/ice") ? "Xbox rechazo el intercambio ICE" : "Xbox no mantuvo la sesion";
         end_with(end, X4_SESSION_ERROR, *status == 401 || *status == 403 ? X4_AUTH_E_XBOX : X4_AUTH_E_STATUS,
@@ -1328,6 +1376,10 @@ static bool signal_call(X4XboxWork *w, const char *suffix, enum X4HttpSessionMet
 static bool signal_keepalive(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
 {
     if (session_now() < w->next_keepalive) return true;
+    uint64_t now=session_now();
+    unsigned long long elapsed=w->sdp_sent_at && now>=w->sdp_sent_at ? (now-w->sdp_sent_at)/1000ull:0;
+    printf("XCloud4: signal keepalive sdp_polls=%u elapsed_ms=%llu interval_ms=%llu\n",
+        w->sdp_polls,elapsed,X4_SESSION_KEEPALIVE_USEC/1000ull);
     size_t length = 0;
     int status = 0;
     if (!signal_call(w, "/keepalive", X4_SESSION_HTTP_POST, "", deadline, end, &length, &status)) return false;
@@ -1393,11 +1445,14 @@ static bool signal_sdp(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     }
     x4_secure_clear(w->sdp, sizeof(w->sdp));
     if (!signal_ack(w, "/sdp", deadline, end)) return false;
+    w->sdp_sent_at=session_now();
+    w->sdp_polls=0;
     session_state(w, X4_SESSION_NEGOTIATING, "esperando respuesta SDP de Xbox", seconds_until(deadline, session_now()));
     for (;;) {
         if (!signal_keepalive(w, deadline, end)) return false;
         size_t length = 0;
         int status = 0;
+        ++w->sdp_polls;
         if (!signal_call(w, "/sdp", X4_SESSION_HTTP_GET, NULL, deadline, end, &length, &status)) return false;
         X4JsonSpan exchange, sdp;
         int result = signal_exchange(w, length, status, &exchange);
