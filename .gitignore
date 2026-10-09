@@ -23,3 +23,4 @@ runtime/
 *.d
 *.bundle
 .claude/settings.local.json
+/work/

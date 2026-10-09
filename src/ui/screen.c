@@ -24,7 +24,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.6.0", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.6.1", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -251,7 +251,7 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
     default: break;
     }
     if (closing) title = "CERRANDO LA SESION Y LA APLICACION...";
-    x4_text(p, 126, 448, 4, title, s->ready_seen && !s->cleanup_failed ? GREEN : WHITE);
+    x4_text(p, 126, 448, 4, title, s->ready_seen && !s->cleanup_failed && s->state != X4_SESSION_ERROR ? GREEN : WHITE);
     x4_text(p, 126, 523, 3, s->stage, MUTED);
     if (s->state == X4_SESSION_AUTHORIZED) {
         snprintf(line, sizeof(line), "CIERRE EN %u SEGUNDOS. RECEPCION DEL JUEGO PENDIENTE.", s->seconds_left);

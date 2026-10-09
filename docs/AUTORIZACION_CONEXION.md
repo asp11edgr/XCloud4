@@ -16,6 +16,20 @@ La implementación se basa en los intercambios de [autorización de GreenVita](h
 
 La 0.6.0 compiló y se empaquetó sin errores ni avisos. El PKG tiene 6619136 bytes y SHA-256 `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474`. Se copió a `/data/pkg/XCloud4-0.6.0.pkg`; la copia recuperada por FTP tiene la misma huella. La confirmación real en consola está pendiente. La base confirmada se conserva como `v0.5.0`.
 
+## Resultado observado en la 0.6.0
+
+La fotografía del propietario muestra 1000XRESIST, `MICROSOFT RECHAZO LA AUTORIZACION DE CONEXION`, HTTP 400 y detalle `0xfffff828` (rechazo OAuth local, no código específico de Microsoft). Klog confirma preparación lista, renovación Microsoft HTTP 200, Passport HTTP 400 con 211 bytes y `/connect` sin enviar. DELETE termina HTTP 200; el cierre quedó confirmado, sin error de limpieza.
+
+La respuesta Passport se borró antes de clasificar su campo OAuth `error`. Por tanto no se estableció si el rechazo corresponde al permiso solicitado, al registro de aplicación o al token. No se confirmó autorización de conexión ni se etiqueta la 0.6.0 como hito funcional. La 0.6.1 prepara una clasificación segura del motivo para continuar el diagnóstico; conserva el mismo registro, endpoint y permiso hasta tener evidencia.
+
+## Diagnóstico 0.6.1
+
+Claude Opus 5.5 añadió clasificación de nueve códigos OAuth conocidos antes de borrar la respuesta. La interfaz muestra una frase fija y el código permitido; cualquier otro valor se convierte en `unknown`. Los registros solo incluyen ese código fijo y, si existe, el primer entero válido de `error_codes`. No se registra `error_description`, el cuerpo, tokens ni datos de la cuenta. Passport `invalid_grant` no borra la cuenta: no equivale por sí solo a que caduque la renovación Microsoft que acaba de funcionar.
+
+Se corrigió también el color del encabezado de error para que no aparezca como éxito por haber preparado antes la sesión. No se añadieron reintentos ni se cambió el permiso solicitado. Esta entrega identifica la causa; no afirma corregir el rechazo.
+
+Compilada y empaquetada sin errores ni avisos. `XCloud4-0.6.1.pkg`: 6619136 bytes, SHA-256 `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e`. Copiada a `/data/pkg` y verificada contra el archivo recuperado por FTP. Resultado del diagnóstico en PS4 pendiente.
+
 ## Credenciales y cancelación
 
 El acceso y la renovación de Microsoft permanecen privados y solo en memoria. La renovación acepta los candidatos únicamente después de validar toda la respuesta; conserva el token de renovación anterior si Microsoft no devuelve otro. Un `invalid_grant` exacto en esa renovación elimina la cuenta y catálogo locales. Un rechazo de Passport se informa como error de autorización.

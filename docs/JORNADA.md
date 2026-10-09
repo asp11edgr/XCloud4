@@ -132,6 +132,14 @@ Lubuntu dejó de responder a SSH y al servicio de ejecución de VirtualBox; el r
 
 La 0.6.0 compiló y se empaquetó sin errores ni avisos. `XCloud4-0.6.0.pkg`: 6619136 bytes, SHA-256 `3b83acf2c2e4f878b447ee70542edf247dec0822516c6d95135450c107404474`. Se transfirió a `/data/pkg/XCloud4-0.6.0.pkg` y la copia recuperada por FTP coincide. Se inició captura Klog y se pidió instalar y comprobar autorización con un título CON ACCESO. No se añadieron ni ejecutaron pruebas automatizadas. Confirmación real de Passport, `/connect` y cierre posterior pendiente; se conserva `v0.5.0` como último hito confirmado. La búsqueda de títulos sigue aplazada.
 
+## Rechazo Passport en 0.6.0 y diagnóstico 0.6.1
+
+El propietario envió una foto de 1000XRESIST con sesión lista y rechazo de autorización Microsoft, detalle `0xfffff828`, HTTP 400. Klog confirma Microsoft y catálogo correctos, creación HTTP 202, estado listo HTTP 200, renovación de Microsoft HTTP 200 y Passport HTTP 400 (211 bytes). `/connect` no se envió. La sesión se eliminó mediante DELETE HTTP 200, sin error de limpieza. El código de error específico de Microsoft no se conservó en 0.6.0, por lo que no se concluye una causa ni un problema de cuenta o red.
+
+Claude Code Pro con `claude-opus-5-5` realizó la revisión e implementó clasificación segura de errores en `device_auth.c`, con 15 turnos y resultado de éxito. Codex revisó el cambio, ajustó versión y color del encabezado, documentó la diferencia entre diagnóstico y corrección y compiló la 0.6.1. No se incorporó un identificador ajeno, reintentos ni un cambio de permiso sin evidencia. No se añadieron ni ejecutaron pruebas automatizadas.
+
+La 0.6.1 compiló y se empaquetó sin errores ni avisos. PKG de 6619136 bytes, SHA-256 `bcae7dc054a35fe5d1fe92e8c1eb9b4a2c064f6e1a14193a23203833978bee3e`; transferido a `/data/pkg/XCloud4-0.6.1.pkg` y recuperado con la misma huella. Se inició captura Klog y se pidió al propietario instalar y repetir para identificar el motivo concreto. Resultado de ese diagnóstico y corrección del rechazo pendientes. La base confirmada sigue siendo `v0.5.0`.
+
 ## GitHub al terminar la jornada
 
 El usuario pidió subir el avance al terminar la jornada y eligió un repositorio privado. La cuenta conectada consultada es `asapedgr`. Mantener código y documentación en Git local hasta ese momento; el SDK y las credenciales quedan fuera del repositorio. Los paquetes se guardan aparte de las fuentes.

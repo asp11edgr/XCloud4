@@ -575,6 +575,52 @@ static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_
     return 0;
 }
 
+/* Passport (login.live.com) refusals: only these exact OAuth codes are named;
+ * each stage is a fixed literal. invalid_grant here does not prove the
+ * Microsoft session expired: the renewal just before it succeeded. */
+static const struct { const char *code, *stage; } passport_errors[] = {
+    {"invalid_grant", "Passport: renovacion no aceptada (invalid_grant)"},
+    {"invalid_scope", "Passport: permiso rechazado (invalid_scope)"},
+    {"invalid_client", "Passport: aplicacion no aceptada (invalid_client)"},
+    {"unauthorized_client", "Passport: aplicacion no autorizada (unauthorized_client)"},
+    {"invalid_request", "Passport: solicitud no valida (invalid_request)"},
+    {"access_denied", "Passport: acceso denegado (access_denied)"},
+    {"unsupported_grant_type", "Passport: concesion no admitida (unsupported_grant_type)"},
+    {"temporarily_unavailable", "Passport: servicio no disponible (temporarily_unavailable)"},
+    {"server_error", "Passport: error del servidor (server_error)"},
+};
+
+/* Classifies a non-200 Passport body before the caller wipes it. Returns the
+ * allowlisted code literal or "unknown" and sets *stage to a fixed literal.
+ * *subcode is the first error_codes element when it is a strict uint32;
+ * nothing else from the body is read, kept or logged. */
+static const char *passport_refusal(const char *body, size_t length, const char **stage, uint32_t *subcode,
+    bool *has_subcode)
+{
+    char code[32] = {0};
+    const char *name = "unknown";
+    *stage = "Passport: rechazo sin codigo conocido (unknown)";
+    *subcode = 0;
+    *has_subcode = false;
+    if (error_code(body, length, code, sizeof(code))) {
+        for (size_t i = 0; i < sizeof(passport_errors) / sizeof(passport_errors[0]); ++i)
+            if (!strcmp(code, passport_errors[i].code)) {
+                name = passport_errors[i].code;
+                *stage = passport_errors[i].stage;
+                break;
+            }
+    }
+    x4_secure_clear(code, sizeof(code));
+    X4JsonSpan root, codes, first;
+    size_t cursor = 0;
+    if (x4_json_parse(body, length, &root) == 0 && x4_json_type(root) == X4_JSON_T_OBJECT &&
+        x4_json_member(root, "error_codes", &codes) == 1 && x4_json_item(codes, &cursor, &first) == 1 &&
+        x4_json_uint32(first, subcode) == 0)
+        *has_subcode = true;
+    else *subcode = 0;
+    return name;
+}
+
 /* Console-transfer token from the (possibly rotated) refresh token, written
  * to out only. Any refresh token in this answer is service specific and
  * ignored: it never replaces the Microsoft one. */
@@ -605,8 +651,14 @@ static int passport_token(X4Auth *a, X4PassportWork *p, X4Http *http, char *out,
         return rc;
     }
     if (status != 200) {
+        uint32_t subcode = 0;
+        bool has_subcode = false;
+        const char *name = passport_refusal(p->response, length, stage, &subcode, &has_subcode);
         x4_secure_clear(p->response, sizeof(p->response));
-        printf("XCloud4: autorizacion de conexion rechazada, estado HTTP %d\n", status);
+        if (has_subcode)
+            printf("XCloud4: autorizacion de conexion rechazada, estado HTTP %d codigo %s subcodigo %u\n",
+                status, name, (unsigned)subcode);
+        else printf("XCloud4: autorizacion de conexion rechazada, estado HTTP %d codigo %s\n", status, name);
         return status == 400 ? X4_AUTH_E_REJECTED : X4_AUTH_E_STATUS;
     }
     X4JsonField f = {.name = "access_token", .kind = X4_JSON_STRING, .text = out,
