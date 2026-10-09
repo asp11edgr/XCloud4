@@ -219,6 +219,29 @@ if 'x4_native_rtc_diagnostic' not in text:
         '\t\tx4_native_rtc_diagnostic(2, system->code().value());\n'
         '\telse x4_native_rtc_diagnostic(dynamic_cast<const std::runtime_error *>(&e) ? 3 : 4, 0);\n'
         '#endif\n', 1)
+# Preserve explicit source identities and every non-receiver track. An unset
+# recvonly source must not become a bare ssrc attribute through the C API.
+ssrc_marker = '// XCloud4: omit undeclared sender SSRC for recvonly tracks.'
+original_ssrc = (
+    '\n\t\tdescription->addSSRC(init->ssrc,\n'
+    '\t\t                     init->name ? std::make_optional(string(init->name)) : nullopt,\n'
+    '\t\t                     init->msid ? std::make_optional(string(init->msid)) : nullopt,\n'
+    '\t\t                     init->trackId ? std::make_optional(string(init->trackId)) : nullopt);\n')
+guarded_ssrc = (
+    '\n\t\t' + ssrc_marker + '\n'
+    '\t\tif (direction != Description::Direction::RecvOnly || init->ssrc != 0 ||\n'
+    '\t\t    init->name || init->msid || init->trackId) {\n'
+    '\t\t\tdescription->addSSRC(init->ssrc,\n'
+    '\t\t\t                     init->name ? std::make_optional(string(init->name)) : nullopt,\n'
+    '\t\t\t                     init->msid ? std::make_optional(string(init->msid)) : nullopt,\n'
+    '\t\t\t                     init->trackId ? std::make_optional(string(init->trackId)) : nullopt);\n'
+    '\t\t}\n')
+if ssrc_marker not in text:
+    if text.count(original_ssrc) != 1:
+        raise SystemExit('Unexpected pinned rtcAddTrackEx SSRC implementation')
+    text = text.replace(original_ssrc, guarded_ssrc, 1)
+if text.count(ssrc_marker) != 1 or text.count(guarded_ssrc) != 1 or original_ssrc in text:
+    raise SystemExit('Incomplete rtcAddTrackEx recvonly SSRC guard')
 write_changed(source, text)
 
 source = base / 'libdatachannel/src/impl/tls.cpp'

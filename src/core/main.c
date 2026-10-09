@@ -40,7 +40,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.14: estructura de la respuesta SDP de Xbox\n");
+    printf("XCloud4 0.7.15: SSRC de recepcion, audio/video y rutas Teredo\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         x4_controller_read(&controller, frame);

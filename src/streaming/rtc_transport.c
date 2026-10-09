@@ -145,6 +145,7 @@ static void sdp_shape_log(const char *sdp, size_t length)
     SdpShape media[8] = {0};
     SdpSpan bundle[8] = {{0}};
     unsigned count = 0, stored = 0, candidates = 0, bundle_count = 0;
+    unsigned ssrc_lines = 0, bare_ssrc = 0;
     unsigned session_setup = 0, session_trickle = 0, bundle_unique = 1, bundle_matched = 0;
     SdpShape *m = NULL;
     for (size_t offset = 0; offset < length;) {
@@ -177,6 +178,13 @@ static void sdp_shape_log(const char *sdp, size_t length)
             continue;
         }
         if (sdp_prefix(line, "a=candidate:")) { ++candidates; continue; }
+        if (sdp_prefix(line, "a=ssrc:")) {
+            ++ssrc_lines;
+            SdpSpan rest = sdp_after(line, 7);
+            (void)sdp_token(&rest); /* The source ID stays private. */
+            if (!sdp_token(&rest).n) ++bare_ssrc;
+            continue;
+        }
         if (sdp_prefix(line, "a=group:BUNDLE")) {
             SdpSpan rest = sdp_after(line, 14);
             while (rest.n) {
@@ -228,8 +236,9 @@ static void sdp_shape_log(const char *sdp, size_t length)
             if (media[j].mid_span.n == bundle[i].n && !memcmp(media[j].mid_span.p, bundle[i].p, bundle[i].n)) {
                 ++bundle_matched; break;
             }
-    printf("XCloud4: SDP shape bytes=%zu media=%u stored=%u candidates=%u bundle=%u unique=%u matched=%u setup=%u trickle=%u\n",
-        length, count, stored, candidates, bundle_count, bundle_unique, bundle_matched, session_setup, session_trickle);
+    printf("XCloud4: SDP shape bytes=%zu media=%u stored=%u candidates=%u bundle=%u unique=%u matched=%u setup=%u trickle=%u ssrc=%u bare_ssrc=%u first_kind=%u second_kind=%u\n",
+        length, count, stored, candidates, bundle_count, bundle_unique, bundle_matched, session_setup, session_trickle,
+        ssrc_lines, bare_ssrc, stored ? media[0].kind : 0, stored > 1 ? media[1].kind : 0);
     for (unsigned i = 0; i < stored; ++i) {
         m = &media[i];
         printf("XCloud4: SDP media index=%u kind=%u port=%d midtype=%u midnum=%u direction=%u rtp=%u pts=%u overflow=%u setup=%u trickle=%u sctp=%d\n",
@@ -448,13 +457,14 @@ X4Rtc *x4_rtc_open(int *error)
     CHECK(rtcSetLocalCandidateCallback(rtc->pc,candidate_callback));
     CHECK(rtcSetStateChangeCallback(rtc->pc,state_callback));
     CHECK(rtcSetGatheringStateChangeCallback(rtc->pc,gathering_callback));
-    rtcTrackInit video={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_H264,.payloadType=102,.mid="0",
-        .profile="level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e01f;max-fs=3600;max-mbps=108000"};
-    rtcTrackInit audio={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_OPUS,.payloadType=111,.mid="1",
+    /* Keep media routing keyed by track handle when the offer order changes. */
+    rtcTrackInit audio={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_OPUS,.payloadType=111,.mid="0",
         .profile="minptime=10;useinbandfec=1;stereo=1"};
-    CHECK(rtc->video=rtcAddTrackEx(rtc->pc,&video));
+    rtcTrackInit video={.direction=RTC_DIRECTION_RECVONLY,.codec=RTC_CODEC_H264,.payloadType=102,.mid="1",
+        .profile="level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e01f;max-fs=3600;max-mbps=108000"};
     CHECK(rtc->audio=rtcAddTrackEx(rtc->pc,&audio));
-    int tracks[]={rtc->video,rtc->audio};
+    CHECK(rtc->video=rtcAddTrackEx(rtc->pc,&video));
+    int tracks[]={rtc->audio,rtc->video};
     for(unsigned i=0;i<2;++i) {
         printf("XCloud4: RTC configure track index=%u\n",i);
         rtcSetUserPointer(tracks[i],rtc->slot);

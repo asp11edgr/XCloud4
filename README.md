@@ -8,13 +8,13 @@ The owner confirmed that connection authorization completes without an error. Th
 
 Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth client identifier also used by GreenVita. The original XCloud4 registration is preserved. All authentication steps use the same selected client; refresh tokens are never reused across clients. The own registration worked for account access and the catalog but returned `invalid_scope` for Passport. See [connection authorization](docs/AUTORIZACION_CONEXION.md) and [the Passport investigation](docs/INVESTIGACION_PASSPORT.md).
 
-**Actual game video, game audio and game input are not present in this confirmed version.** Development reached WebRTC negotiation and native media integration, and is now paused at the owner's request. Successful connection authorization alone does not establish a media connection.
+**Actual game video, game audio and game input are not present in this confirmed version.** Development has reached WebRTC negotiation and native media integration. Successful connection authorization alone does not establish a media connection.
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The requested GitHub repository is **private**.
 
-## Development paused at 0.7.14
+## Development checkpoint: 0.7.15
 
-The owner requested a pause after recording the current error. Work is paused as of **October 9, 2026, 09:00 UTC (03:00 local)**. No further research, implementation, package changes or builds are in progress.
+The owner resumed development after the 0.7.14 pause and authorized three changes together: omit undefined receiving-track SSRC declarations, create audio MID 0 before video MID 1 as PSBox does, and expand valid Teredo candidates into IPv4 UDP routes. The full 0.7.15 package, focused Claude review and matching source integrity are confirmed. **Two console attempts now apply a valid Xbox SDP answer**, then RTC fails with no media and cleanup succeeds. An uncaught `condition_variable timed_wait failed` exception subsequently closes the application with CE-34878-0. See [0.7.15 scope and evidence](docs/RELEASE_NOTES_0.7.15.md). The preserved 0.7.14 refusal remains historical evidence; combining the new changes limits attribution.
 
 The native WebRTC/media application compiled, linked, converted to SELF and packaged in 0.7.0. On its first console attempt, Xbox preparation and connection authorization succeeded, but local RTC opening returned **-2 before SDP, ICE or media reception**. Remote cleanup returned HTTP 200.
 
@@ -71,6 +71,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.7.12, diagnostic | Logical SDP refusal is identified as ConnectionExchangeFailed after successful keepalive; terminal GET not entered, cleanup succeeds, no media. |
 | 0.7.13, two attempts | A 2458-byte response fails validation; a later refusal identifies ConnectionExchangeFailed and the SDP command name, not its cause. Cleanup succeeds, no media. |
 | 0.7.14, paused | ConnectionExchangeFailed repeats with the SDP command mask; nested helper not entered, cleanup succeeds, ICE/RTC/media zero. |
+| 0.7.15, partial | Two valid Xbox SDP answers applied; RTC fails and cleanup succeeds with zero media, followed by an uncaught timed-wait exception/application crash. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
@@ -89,7 +90,7 @@ Detailed evidence and package hashes are in the [development log](docs/JORNADA.m
 1. Prepare OpenOrbis and produce a minimal native application — confirmed.
 2. Establish local video, audio and DualShock 4 input — local media and UI confirmed.
 3. Implement Microsoft account authorization and the Xbox catalog — confirmed.
-4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; paused during negotiation before actual streaming.
+4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; negotiation work resumed before actual streaming.
 5. Improve reconnection, errors and performance — future work.
 
 The proposed first beta target is **720p at 30 FPS**. Its feasibility depends on actual decoder and transport behavior on the console. Title search remains a [future request](docs/MEJORAS_FUTURAS.md), not part of the current stage.
@@ -109,7 +110,7 @@ export X4_RUNTIME_MODULES="$HOME/.local/share/xcloud4/runtime/sdk-v0.5.4"
 make package
 ```
 
-The 0.7.14 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.14.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
+The 0.7.15 development checkpoint produces `build/xcloud4.elf`, `build/eboot.bin` and `dist/XCloud4-0.7.15.pkg`. The preserved `v0.6.2` source produces its corresponding 0.6.2 package without the new WebRTC dependencies. Dependency builds and SDK binaries remain outside Git.
 
 `X4_RUNTIME_MODULES` must point to an external directory containing `libSceFios2.prx` and `libc.prx` in SELF format. These are open auxiliary OpenOrbis modules, available in its distribution with corresponding source under `src/modules`. Their compiled binaries stay outside Git. Packaging stops if either is missing or supplied as an unconverted ELF. See [third-party notices](THIRD_PARTY_NOTICES.md).
 

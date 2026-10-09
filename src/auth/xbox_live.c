@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.14\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.15\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -1806,10 +1806,11 @@ static bool signal_local_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
     return signal_ack(w, "/ice", deadline, end);
 }
 
-/* Trim/a= normalization matches the reference protocol. The native peer
- * currently binds IPv4, so IPv6-literal candidates cannot be used. */
-static bool signal_candidate_normalize(char *candidate)
+/* Trim/a= normalization matches the reference protocol. IPv4 candidates
+ * retain their original fields; IPv6 literals need the strict Teredo path. */
+static bool signal_candidate_normalize(char *candidate, bool *ipv6)
 {
+    *ipv6 = false;
     char *p = candidate;
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
     size_t n = strlen(p);
@@ -1825,33 +1826,145 @@ static bool signal_candidate_normalize(char *candidate)
         ++field;
     }
     if (field != 4 || !*word) return false;
-    for (const char *address = word; *address && *address != ' '; ++address) if (*address == ':') return false;
+    for (const char *address = word; *address && *address != ' '; ++address) if (*address == ':') *ipv6 = true;
     for (const unsigned char *c = (const unsigned char *)p; *c; ++c) if (*c < 0x20 || *c > 0x7e) return false;
     memmove(candidate, p, strlen(p) + 1);
     return true;
 }
 
-static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
+typedef struct { const char *data; size_t length; } SignalCandidateWord;
+
+static bool signal_candidate_word(const char **cursor, SignalCandidateWord *word)
 {
-    X4JsonSpan object = item, value;
-    if (x4_json_type(item) == X4_JSON_T_STRING) {
-        if (!signal_decode(item, w->candidate_object, sizeof(w->candidate_object), true) ||
-            x4_json_parse(w->candidate_object, strlen(w->candidate_object), &object)) goto malformed;
+    const char *p = *cursor;
+    while (*p == ' ') ++p;
+    word->data = p;
+    while (*p && *p != ' ') ++p;
+    word->length = (size_t)(p - word->data);
+    *cursor = p;
+    return word->length != 0;
+}
+
+static bool signal_candidate_literal(SignalCandidateWord word, const char *literal)
+{
+    size_t length = strlen(literal);
+    return word.length == length && !memcmp(word.data, literal, length);
+}
+
+static bool signal_candidate_number(SignalCandidateWord word, uint32_t maximum, uint32_t *value)
+{
+    uint32_t number = 0;
+    if (!word.length) return false;
+    for (size_t i = 0; i < word.length; ++i) {
+        unsigned char c = (unsigned char)word.data[i];
+        if (c < '0' || c > '9') return false;
+        uint32_t digit = (uint32_t)(c - '0');
+        if (digit > maximum || number > (maximum - digit) / 10) return false;
+        number = number * 10 + digit;
     }
-    if (x4_json_type(object) != X4_JSON_T_OBJECT || x4_json_member(object, "candidate", &value) != 1 ||
-        !signal_decode(value, w->candidate, sizeof(w->candidate), false)) goto malformed;
-    if (!signal_candidate_normalize(w->candidate)) return true;
-    int member = x4_json_member(object, "sdpMid", &value);
-    if (member < 0) goto malformed;
-    if (!member || x4_json_type(value) == X4_JSON_T_NULL) copy_text(w->mid, sizeof(w->mid), "0");
-    else if (!signal_decode(value, w->mid, sizeof(w->mid), false)) goto malformed;
-    if (!w->mid[0]) copy_text(w->mid, sizeof(w->mid), "0");
-    member = x4_json_member(object, "sdpMLineIndex", &value);
-    if (member < 0) goto malformed;
-    if (member && x4_json_type(value) != X4_JSON_T_NULL) {
-        uint32_t index;
-        if (x4_json_uint32(value, &index) || index > 64) goto malformed;
+    *value = number;
+    return true;
+}
+
+/* Parse only hexadecimal IPv6 groups, with at most one :: compression.
+ * No DNS, zone IDs, IPv4-tail syntax or native inet_pton ABI is involved. */
+static bool signal_candidate_ipv6(SignalCandidateWord address, uint8_t bytes[16])
+{
+    uint16_t groups[8] = {0};
+    size_t count = 0, p = 0;
+    int compressed = -1;
+    bool valid = false;
+    memset(bytes, 0, 16);
+    if (!address.length || address.length > 39) goto done;
+    if (address.data[p] == ':') {
+        if (address.length < 2 || address.data[1] != ':') goto done;
+        compressed = 0;
+        p = 2;
     }
+    while (p < address.length) {
+        uint16_t group = 0;
+        unsigned digits = 0;
+        if (count == 8) goto done;
+        while (p < address.length && address.data[p] != ':') {
+            int digit = signal_hex((unsigned char)address.data[p++]);
+            if (digit < 0 || ++digits > 4) goto done;
+            group = (uint16_t)((group << 4) | (unsigned)digit);
+        }
+        if (!digits) goto done;
+        groups[count++] = group;
+        if (p == address.length) break;
+        if (++p == address.length) goto done; /* Single trailing colon. */
+        if (address.data[p] == ':') {
+            if (compressed >= 0) goto done;
+            compressed = (int)count;
+            ++p;
+        }
+    }
+    if (compressed < 0 ? count != 8 : count >= 8) goto done;
+    for (size_t i = 0; i < count; ++i) {
+        size_t target = i;
+        if (compressed >= 0 && i >= (size_t)compressed) target += 8 - count;
+        bytes[target * 2] = (uint8_t)(groups[i] >> 8);
+        bytes[target * 2 + 1] = (uint8_t)groups[i];
+    }
+    valid = true;
+done:
+    x4_secure_clear(groups, sizeof(groups));
+    if (!valid) x4_secure_clear(bytes, 16);
+    return valid;
+}
+
+/* Original bounded implementation of the Teredo address layout used by
+ * PSBox ef22c57: 2001:0000::/32, inverted port bytes10..11 and IPv4 bytes12..15.
+ * Only valid UDP component1 candidates are expanded for the IPv4-only peer. */
+static bool signal_candidate_teredo(const char *candidate, uint8_t ipv4[4], uint16_t *port)
+{
+    SignalCandidateWord fields[8], name, value;
+    uint8_t bytes[16] = {0};
+    uint32_t component, priority, outer_port;
+    bool valid = false;
+    const char *cursor = candidate;
+    memset(ipv4, 0, 4);
+    *port = 0;
+    for (unsigned i = 0; i < 8; ++i) if (!signal_candidate_word(&cursor, &fields[i])) goto done;
+    if (fields[0].length <= 10 || fields[0].length > 42 ||
+        memcmp(fields[0].data, "candidate:", 10)) goto done;
+    for (size_t i = 10; i < fields[0].length; ++i) {
+        unsigned char c = (unsigned char)fields[0].data[i];
+        if (!alphanumeric(c) && c != '+' && c != '/') goto done;
+    }
+    if (!signal_candidate_number(fields[1], 256, &component) || component != 1 ||
+        fields[2].length != 3 || signal_message_lower((unsigned char)fields[2].data[0]) != 'u' ||
+        signal_message_lower((unsigned char)fields[2].data[1]) != 'd' ||
+        signal_message_lower((unsigned char)fields[2].data[2]) != 'p' ||
+        !signal_candidate_number(fields[3], UINT32_MAX, &priority) || !priority ||
+        !signal_candidate_number(fields[5], UINT16_MAX, &outer_port) || !outer_port ||
+        !signal_candidate_literal(fields[6], "typ") ||
+        !(signal_candidate_literal(fields[7], "host") || signal_candidate_literal(fields[7], "srflx") ||
+          signal_candidate_literal(fields[7], "prflx") || signal_candidate_literal(fields[7], "relay"))) goto done;
+    /* ICE extensions are name/value pairs, not extra unpaired fields. */
+    while (signal_candidate_word(&cursor, &name)) if (!signal_candidate_word(&cursor, &value)) goto done;
+    if (!signal_candidate_ipv6(fields[4], bytes) ||
+        bytes[0] != 0x20 || bytes[1] != 0x01 || bytes[2] || bytes[3]) goto done;
+    *port = (uint16_t)(((uint16_t)bytes[10] << 8 | bytes[11]) ^ UINT16_MAX);
+    if (!*port) goto done;
+    for (unsigned i = 0; i < 4; ++i) ipv4[i] = (uint8_t)(bytes[12 + i] ^ 0xff);
+    /* Never turn unusable, loopback, multicast or reserved IPv4 into routes. */
+    if (!ipv4[0] || ipv4[0] == 127 || ipv4[0] >= 224) goto done;
+    valid = true;
+done:
+    x4_secure_clear(bytes, sizeof(bytes));
+    x4_secure_clear(fields, sizeof(fields));
+    x4_secure_clear(&name, sizeof(name));
+    x4_secure_clear(&value, sizeof(value));
+    if (!valid) { x4_secure_clear(ipv4, 4); *port = 0; }
+    return valid;
+}
+
+/* Both original IPv4 and derived candidates share the same bounded cache;
+ * the received MID is preserved, including when a repeated item expands. */
+static bool signal_remote_add(X4XboxWork *w, SessionEnd *end)
+{
     for (unsigned i = 0; i < w->remote_candidates; ++i)
         if (!strcmp(w->remote_seen[i].candidate, w->candidate) && !strcmp(w->remote_seen[i].mid, w->mid)) return true;
     if (w->remote_candidates == X4_SESSION_CANDIDATES_MAX) {
@@ -1863,9 +1976,60 @@ static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
     copy_text(w->remote_seen[i].candidate, sizeof(w->remote_seen[i].candidate), w->candidate);
     copy_text(w->remote_seen[i].mid, sizeof(w->remote_seen[i].mid), w->mid);
     return true;
+}
+
+static bool signal_remote_item(X4XboxWork *w, X4JsonSpan item, SessionEnd *end)
+{
+    X4JsonSpan object = item, value;
+    uint8_t ipv4[4] = {0};
+    uint16_t port = 0;
+    bool ipv6 = false, valid = true;
+    if (x4_json_type(item) == X4_JSON_T_STRING) {
+        if (!signal_decode(item, w->candidate_object, sizeof(w->candidate_object), true) ||
+            x4_json_parse(w->candidate_object, strlen(w->candidate_object), &object)) goto malformed;
+    }
+    if (x4_json_type(object) != X4_JSON_T_OBJECT || x4_json_member(object, "candidate", &value) != 1 ||
+        !signal_decode(value, w->candidate, sizeof(w->candidate), false)) goto malformed;
+    if (!signal_candidate_normalize(w->candidate, &ipv6)) goto done;
+    int member = x4_json_member(object, "sdpMid", &value);
+    if (member < 0) goto malformed;
+    if (!member || x4_json_type(value) == X4_JSON_T_NULL) copy_text(w->mid, sizeof(w->mid), "0");
+    else if (!signal_decode(value, w->mid, sizeof(w->mid), false)) goto malformed;
+    if (!w->mid[0]) copy_text(w->mid, sizeof(w->mid), "0");
+    member = x4_json_member(object, "sdpMLineIndex", &value);
+    if (member < 0) goto malformed;
+    if (member && x4_json_type(value) != X4_JSON_T_NULL) {
+        uint32_t index;
+        if (x4_json_uint32(value, &index) || index > 64) goto malformed;
+    }
+    if (!ipv6) { valid = signal_remote_add(w, end); goto done; }
+    if (!signal_candidate_teredo(w->candidate, ipv4, &port)) {
+        printf("XCloud4: ICE remoto IPv6 clase=1 derivados=0 nuevos=0\n");
+        goto done;
+    }
+    unsigned before = w->remote_candidates;
+    unsigned derived = port == 9002 ? 1u : 2u;
+    for (unsigned i = 0; i < derived; ++i) {
+        unsigned udp_port = i ? port : 9002u;
+        int length = snprintf(w->candidate, sizeof(w->candidate),
+            "candidate:%u 1 UDP 1 %u.%u.%u.%u %u typ host", 10u + i,
+            (unsigned)ipv4[0], (unsigned)ipv4[1], (unsigned)ipv4[2], (unsigned)ipv4[3], udp_port);
+        if (length < 0 || (size_t)length >= sizeof(w->candidate)) goto malformed;
+        if (!signal_remote_add(w, end)) { valid = false; goto done; }
+    }
+    /* Numeric counts only: no address, port, MID or full candidate logging. */
+    printf("XCloud4: ICE remoto IPv6 clase=2 derivados=%u nuevos=%u\n", derived, w->remote_candidates - before);
+    goto done;
 malformed:
     end_with(end, X4_SESSION_ERROR, X4_AUTH_E_RESPONSE, 0, "candidato ICE remoto no valido");
-    return false;
+    valid = false;
+done:
+    x4_secure_clear(ipv4, sizeof(ipv4));
+    x4_secure_clear(&port, sizeof(port));
+    x4_secure_clear(w->candidate, sizeof(w->candidate));
+    x4_secure_clear(w->candidate_object, sizeof(w->candidate_object));
+    x4_secure_clear(w->mid, sizeof(w->mid));
+    return valid;
 }
 
 static bool signal_remote_ice(X4XboxWork *w, uint64_t deadline, SessionEnd *end)
