@@ -12,11 +12,13 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Prepared receiver NACK experiment: 0.7.33
+## Console-exercised receiver NACK experiment: 0.7.33
 
 The [bounded OFF/ON experiment](docs/RECEIVER_NACK_EXPERIMENT_0.7.33.md) adds one original-video receiver request generator through the existing protected RTCP path, gated by NACK feedback in the actual remote Answer. It reserves at most **64 single attempts per fresh session**, with ranges of at most 64 positions and 16 watched ranges. Selected bitmap, protection, local send, authenticated return, reorder and AU utility remain separate observations; a successful local send does not prove server delivery. NEW/MPSC256, four readers, stream request, reorder and recovery remain unchanged.
 
-Portable state, production wire/handler, reader and monitor/ingress/bridge checks pass within their stated scopes. Both native OFF/ON applications compile and pass selected linked inspection; see [release evidence](docs/RELEASE_NOTES_0.7.33.md). **Console OFF/ON results and diagnostic overhead remain unmeasured.** The proposed trial uses fresh one-session launches and 10–15 manually stable minutes per mode. Depth 32 can trigger recovery before the configured 25 ms timeout, so later packet repair may be too late without establishing absent server support. No pause correction is claimed; 0.7.32 assets and original evidence stay preserved.
+The [closed-session console comparison](docs/CONSOLE_REPORT_0.7.33.md) retains **15.050 stable minutes / 3 pauses >100 ms (0.1993/min) in OFF** and **15.033 / 9 (0.5987/min) in ON**, both at measured **1280 × 720**. ON requested six ranges / 55 positions; all selected positions later appeared authenticated, **after their matched local holes had already been abandoned**, and none contributed to an AU. All six local SRTCP protections and send booleans succeeded, without proving server receipt or unique retransmission causality. ON encountered more upstream gaps than OFF; this ordered pair establishes no fluency improvement or causal worsening. Critical NACK evidence is complete; general detail remains bounded and two cross-stage late rows were omitted.
+
+A separately selectable **45 ms pending-NACK grace policy**, governing both early depth and time abandonment with a hard unchanged-capacity fallback, is proposed from the faster observed returns; it is **not implemented or verified**, and 128 entries may fill sooner. Portable and native preparation evidence remains in [the release notes](docs/RELEASE_NOTES_0.7.33.md). Diagnostic overhead is not established as zero; 0.7.32 assets and original evidence stay preserved. Raw console exports remain private.
 
 ## Console-exercised reception diagnostics: 0.7.32
 

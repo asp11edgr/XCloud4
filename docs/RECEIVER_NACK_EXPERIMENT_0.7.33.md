@@ -1,5 +1,7 @@
 # XCloud4 0.7.33 — bounded receiver NACK experiment
 
+**Subsequent console evidence (2026-10-10):** both fresh OFF/ON passes are complete. The [console report](CONSOLE_REPORT_0.7.33.md) records authenticated returns after local hole abandonment and no useful AU repair under this policy. The preparation-time status and contract below are preserved; they do not claim the later test had already been measured.
+
 ## Status and preserved evidence
 
 This experiment adds one bounded original-video receiver NACK generator to test whether later authenticated packets can contribute to usable access units before the existing reorder/recovery decision. **No 0.7.33 console result or fluency correction is established yet.** Portable state, production-handler/wire and reader checks pass in the scopes below. Both native OFF/ON applications compile and pass selected linked inspection. Console behavior, diagnostic overhead and useful repair remain unmeasured.
