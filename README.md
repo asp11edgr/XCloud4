@@ -12,6 +12,14 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Prepared residual-pause diagnostics: 0.7.31
+
+Product **0.7.31**, PS4 **APP_VER 01.01**, preserves the **NEW/MPSC 0.7.30** queue and the existing four-reader/reorder/recovery/media settings. An optional independent **100 ms** sampler, cumulative stage counters, bounded history and a secondary reader help locate residual stalls. Hold **L1 + R1 + TRIANGLE** after loading to mark stable gameplay; this combination is reserved locally and its gamepad frame is neutralized. Repeat it to mark a transition, then stable gameplay again.
+
+The requested host checks, native build, selected linked inspection, source correspondence, actual **Claude Opus 5.5** selected-source review and two exact PS4 installer readbacks passed. The final C writer and Python reader agreed on **40 synthetic binary fixtures / 292 semantic checks**. These establish preparation evidence, **not PS4 scheduling, instrumentation overhead or a pause correction**. The owner-operated **10–15 minute** gameplay capture remains pending. Requested **960 × 540 / maxFPS 30 / 5000 kbps** is unchanged; delivered dimensions must be observed again.
+
+See [the progress contract and long-run procedure](docs/PROGRESS_DIAGNOSTICS_0.7.31.md) and [artifact/review evidence and limits](docs/RELEASE_NOTES_0.7.31.md). Original 0.7.30 traces and release assets remain preserved; raw progress records and SSRC/source identities stay private.
+
 ## Observed video ingress comparison: 0.7.30
 
 Product **0.7.30**, PS4 **APP_VER 01.00**, completes the observed **BASE A1 → NEW B → BASE A2** run order. The MPSC candidate removes the consumer's queue gate; capacity, reorder, recovery, audio, four copy readers and codec settings remain unchanged. Preparation-time source reviews, native/static correspondence and explicitly requested host/sanitizer checks are preserved in the [experiment](docs/VIDEO_INGRESS_0.7.30.md) and [release notes](docs/RELEASE_NOTES_0.7.30.md).

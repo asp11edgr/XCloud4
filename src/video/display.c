@@ -43,6 +43,8 @@ static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh
 {
     uint16_t flags = fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT;
     uint64_t submitted = (uint64_t)d->frame;
+    x4_trace_monitor_state(trace, X4_MON_ACTOR_DISPLAY, X4_MON_PHASE_FLIP_SUBMIT, 0);
+    x4_trace_record(trace, X4_TRACE_FLIP_CALL_BEGIN, flags, generation, submitted);
     int rc = sceVideoOutSubmitFlip(d->handle, d->index, ORBIS_VIDEO_OUT_FLIP_VSYNC, d->frame);
     if (rc < 0) {
         x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_SUBMIT),
@@ -62,6 +64,7 @@ static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh
         return rc;
     }
     x4_trace_record(trace, X4_TRACE_GNM_DONE, flags, generation, (uint32_t)rc);
+    x4_trace_monitor_state(trace, X4_MON_ACTOR_DISPLAY, X4_MON_PHASE_FLIP_WAIT, 0);
     /* Bound the wait and never rewrite a buffer still being scanned out. */
     for (unsigned attempt = 0; attempt < 2000; ++attempt) {
         x4_trace_poll(trace);
@@ -76,6 +79,7 @@ static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh
             /* This observation updates NEW cadence even if the event ring
              * cannot admit a record. Repeat/UI matches never reset it. */
             x4_trace_present_complete(trace, generation, fresh, status.num, submitted);
+            x4_trace_monitor_state(trace, X4_MON_ACTOR_DISPLAY, X4_MON_PHASE_MAIN_IDLE, 0);
             d->index ^= 1; ++d->frame; return 0;
         }
         sceKernelUsleep(1000);

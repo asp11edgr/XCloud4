@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_trace.h"
-#include <orbis/libkernel.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -29,6 +28,7 @@ typedef struct {
 } Cadence;
 
 struct X4Trace {
+    X4Monitor *monitor;
     atomic_flag gate;
     atomic_uint_fast64_t attempted[STAGES], admitted[STAGES], dropped[STAGES];
     atomic_uint_fast64_t event_attempted[EVENTS], event_admitted[EVENTS], event_dropped[EVENTS];
@@ -55,7 +55,7 @@ struct X4Trace {
 _Static_assert(sizeof(X4Trace) <= 8 * 1024 * 1024, "bounded trace allocation");
 _Static_assert(ATOMIC_LLONG_LOCK_FREE == 2, "trace needs lock-free 64-bit atomics");
 
-uint64_t x4_trace_now_us(void) { return sceKernelGetProcessTime(); }
+uint64_t x4_trace_now_us(void) { return x4_monitor_now_us(); }
 static unsigned stage_of(uint16_t event) { return (event >> 8) & (STAGES - 1); }
 static unsigned event_index(uint16_t event)
 {
@@ -269,6 +269,25 @@ static void record_at(X4Trace *t, uint64_t time, uint16_t event,
                       uint16_t flags, uint64_t a, uint64_t b)
 {
     if (!t) return;
+    /* This cumulative hook and its ring have no dependency on the legacy
+     * admission gate, capture windows, main poll or video-owner progress. */
+    x4_monitor_record(t->monitor, time, event, flags, a, b);
+    switch (event) {
+    case X4_TRACE_DECODE_BEGIN: x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_DECODE, time); break;
+    case X4_TRACE_COPY_BEGIN: x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_COPY, time); break;
+    case X4_TRACE_CONVERT_BEGIN: x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_CONVERT, time); break;
+    case X4_TRACE_DECODE_END: case X4_TRACE_COPY_END: case X4_TRACE_CONVERT_END:
+        x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_UNKNOWN, time); break;
+    case 0x224: x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_COPY_WAIT, time); break;
+    case 0x225: x4_monitor_state(t->monitor, X4_MON_ACTOR_WORKER, X4_MON_PHASE_UNKNOWN, time); break;
+    case 0x222: case 0x223: {
+        unsigned index = flags >> 8;
+        if (index < 3) x4_monitor_state(t->monitor, X4_MON_ACTOR_HELPER0 + index,
+            event == 0x222 ? X4_MON_PHASE_COPY : X4_MON_PHASE_WAIT_DATA, time);
+        break;
+    }
+    default: break;
+    }
     unsigned stage = stage_of(event);
     count_attempt(t, event, b);
     if (atomic_flag_test_and_set_explicit(&t->gate, memory_order_acquire)) {
@@ -302,6 +321,7 @@ X4Trace *x4_trace_create(uint64_t ordinal, unsigned configured_readers)
     atomic_init(&t->gap_id, 0); atomic_init(&t->gap_start, 0); atomic_init(&t->gap_end, 0);
     atomic_init(&t->active, false);
     t->local_session = ordinal; t->configured_readers = configured_readers; t->current_window = -1;
+    t->monitor = x4_monitor_create(ordinal, configured_readers);
     x4_trace_record(t, X4_TRACE_SESSION_START, 0, ordinal, configured_readers);
     return t;
 }
@@ -321,6 +341,7 @@ void x4_trace_poll(X4Trace *t)
 void x4_trace_set_active(X4Trace *t, bool active)
 {
     if (!t || t->main_active == active) return;
+    x4_monitor_active(t->monitor, active, x4_trace_now_us());
     t->main_active = active; t->main_last_us = 0; t->main_generation = 0;
     publish_cadence(t);
     x4_trace_record(t, X4_TRACE_ACTIVE_CHANGE, 0, active, t->main_serial);
@@ -330,6 +351,7 @@ void x4_trace_present_complete(X4Trace *t, uint64_t generation, bool fresh,
 {
     if (!t) return;
     uint64_t now = x4_trace_now_us();
+    x4_monitor_present(t->monitor, generation, fresh, now);
     bool real_new = fresh && generation && t->main_active;
     if (real_new && t->main_last_us && (generation <= t->main_generation || now < t->main_last_us)) {
         atomic_fetch_add_explicit(&t->identity_errors, 1, memory_order_relaxed); real_new = false;
@@ -353,7 +375,7 @@ void x4_trace_present_complete(X4Trace *t, uint64_t generation, bool fresh,
 
 void x4_trace_end_session(X4Trace *t)
 {
-    if (!t || t->quiesced) return;
+    if (!t || t->quiesced || !x4_monitor_stopped(t->monitor)) return;
     /* Caller proved quiescence. No lock/spin or new native lifetime here. */
     uint64_t now = x4_trace_now_us();
     process_cadence_locked(t, now);
@@ -365,6 +387,7 @@ void x4_trace_end_session(X4Trace *t)
     if (atomic_load_explicit(&t->unstable, memory_order_relaxed)) t->coverage |= X4_TRACE_C_SNAPSHOT_UNSTABLE;
     if (atomic_load_explicit(&t->identity_errors, memory_order_relaxed)) t->coverage |= X4_TRACE_C_IDENTITY;
     t->quiesced = true;
+    x4_monitor_end(t->monitor);
 }
 static bool write_items(FILE *file, const void *p, size_t size, size_t count)
 {
@@ -426,5 +449,23 @@ bool x4_trace_free(X4Trace *t)
 {
     if (!t) return true;
     if (!t->quiesced) return false;
+    if (!x4_monitor_free(t->monitor)) return false;
     free(t); return true;
 }
+
+bool x4_trace_monitor_bind_queue(X4Trace *t, const X4VideoIngress *q)
+{ return t && x4_monitor_bind_queue(t->monitor, q); }
+bool x4_trace_monitor_config(X4Trace *t, const X4MonitorConfig *c)
+{ return t && x4_monitor_config(t->monitor, c); }
+int x4_trace_monitor_start(X4Trace *t) { return x4_monitor_start(t ? t->monitor : NULL); }
+int x4_trace_monitor_stop(X4Trace *t) { return x4_monitor_stop(t ? t->monitor : NULL); }
+int x4_trace_monitor_dump(X4Trace *t, const char *path)
+{ return x4_monitor_dump(t ? t->monitor : NULL, path); }
+void x4_trace_monitor_rx(X4Trace *t, unsigned k, bool v, uint32_t s, uint16_t q, size_t b, uint64_t time)
+{ x4_monitor_rx(t ? t->monitor : NULL, k, v, s, q, b, time); }
+void x4_trace_monitor_queue(X4Trace *t, uint32_t d, uint64_t o, bool v)
+{ x4_monitor_queue(t ? t->monitor : NULL, d, o, v); }
+void x4_trace_monitor_state(X4Trace *t, unsigned a, unsigned p, uint64_t b)
+{ x4_monitor_state(t ? t->monitor : NULL, a, p, b); }
+void x4_trace_monitor_epoch(X4Trace *t, unsigned a, unsigned e)
+{ x4_monitor_epoch(t ? t->monitor : NULL, a, e); }

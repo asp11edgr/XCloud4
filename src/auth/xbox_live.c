@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.30\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.31\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization
@@ -92,6 +92,7 @@ struct X4XboxWork {
     X4Rtc *rtc;
     X4SessionMediaCallback media_callback;
     void *media_user;
+    X4Trace *media_trace;
     X4GamepadSource gamepad_source;
     void *gamepad_user;
     _Atomic int *keyframe_requested;
@@ -2188,6 +2189,7 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
     w->rtc = x4_rtc_open(&rc);
     if (!w->rtc) { end_with(end, X4_SESSION_ERROR, rc ? rc : X4_AUTH_E_SESSION, 0, "no se pudo iniciar WebRTC nativo"); return; }
     x4_rtc_set_media_callback(w->rtc, w->media_callback, w->media_user);
+    x4_rtc_set_diagnostic_trace(w->rtc, w->media_trace);
     rc = x4_rtc_set_gamepad_source(w->rtc, w->gamepad_source, w->gamepad_user);
     if (rc) printf("XCloud4: iniciar envio de control fallo 0x%08x\n", (unsigned)rc);
     if (!signal_sdp(w, deadline, end)) goto done;
@@ -2312,7 +2314,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
     X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
     X4SessionMediaCallback media_callback, void *media_user,
-    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user)
+    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user, X4Trace *trace)
 {
     memset(&w->result, 0, sizeof(w->result));
     memset(&w->session, 0, sizeof(w->session));
@@ -2326,6 +2328,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->passport_context = passport_context;
     w->media_callback = media_callback;
     w->media_user = media_user;
+    w->media_trace = trace;
     w->gamepad_source = gamepad_source;
     w->gamepad_user = gamepad_user;
     w->keyframe_requested = keyframe_requested;

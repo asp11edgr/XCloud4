@@ -88,6 +88,7 @@ struct X4Auth {
     uint64_t gamepad_updated;
     X4SessionMediaCallback media_callback;
     void *media_user;
+    X4Trace *media_trace; /* Same joined lifetime as media_user; diagnostic only. */
     _Atomic int keyframe_requested;
 };
 
@@ -794,7 +795,7 @@ static void session_run(X4Auth *a)
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
             &a->cancel, session_progress, a, passport_provider, a, a->media_callback, a->media_user,
-            &a->keyframe_requested, gamepad_source, a);
+            &a->keyframe_requested, gamepad_source, a, a->media_trace);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);
@@ -1140,7 +1141,7 @@ void x4_auth_session_snapshot(X4Auth *a, X4SessionSnapshot *out)
     }
 }
 
-int x4_auth_set_media_callback(X4Auth *a, X4SessionMediaCallback callback, void *user)
+int x4_auth_set_media_callback(X4Auth *a, X4SessionMediaCallback callback, void *user, X4Trace *trace)
 {
     if (!a) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
@@ -1151,6 +1152,7 @@ int x4_auth_set_media_callback(X4Auth *a, X4SessionMediaCallback callback, void 
     if (rc) return rc;
     a->media_callback = callback;
     a->media_user = callback ? user : NULL;
+    a->media_trace = callback ? trace : NULL;
     return 0;
 }
 

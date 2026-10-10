@@ -51,8 +51,9 @@ typedef int (*X4XboxPassport)(void *context, X4Http *http, char *out, size_t cap
  * session path, cancelled or not. Opens and closes its own HTTPS context and
  * wipes every credential before returning the final view kept in the
  * workspace. passport is required. */
+typedef struct X4Trace X4Trace;
 const X4SessionSnapshot *x4_xbox_session(X4XboxWork *work, const char *microsoft_token,
     const X4CatalogTitle *title, const char *offering, const _Atomic int *cancel,
     X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
     X4SessionMediaCallback media_callback, void *media_user,
-    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user);
+    _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user, X4Trace *trace);

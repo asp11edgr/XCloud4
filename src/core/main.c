@@ -9,10 +9,15 @@
 #include "../auth/auth_profile.h"
 #include "../media/live_media.h"
 #include "lifecycle.h"
+#include "build_identity.h"
 
 static void trace_inactive(X4LiveMedia *live)
 {
-    if (live) x4_trace_set_active(x4_live_media_trace(live), false);
+    if (live) {
+        X4Trace *trace = x4_live_media_trace(live);
+        x4_trace_monitor_epoch(trace, X4_MON_ACTOR_SESSION, X4_MON_EPOCH_TRANSITION);
+        x4_trace_set_active(trace, false);
+    }
 }
 static bool trace_session_active(enum X4SessionState state)
 {
@@ -43,6 +48,8 @@ int main(void)
     int live_error = 0, live_muted = 0;
     int live_retained = 0;
     bool live_presented = false;
+    bool diagnostic_stable = false;
+    uint64_t diagnostic_mark = 0;
     int overlay_key[11] = {0};
     uint64_t overlay_at = 0;
     uint64_t input_previous = 0, input_report_at = 0;
@@ -61,13 +68,16 @@ reopen_interface:;
     }
     x4_controller_init(&controller);
 #ifdef X4_INGRESS_BASELINE
-    printf("XCloud4 0.7.30 BASE: cola de video de referencia instrumentada\n");
+    printf("XCloud4 0.7.31 BASE: solo para referencia, no es la prueba autorizada\n");
 #else
-    printf("XCloud4 0.7.30: ingreso de video sin bloqueo del consumidor\n");
+    printf("XCloud4 %s: progreso independiente, base MPSC\n", X4_PRODUCT_VERSION);
 #endif
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
+    printf("XCloud4: diagnostic build=%s\n", X4_BUILD_ID);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();
+        x4_trace_monitor_state(live ? x4_live_media_trace(live) : NULL,
+            X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_POLL, input_at);
         x4_controller_read(&controller, frame);
         /* Local pad sampling cadence, not Xbox RTT or end-to-end latency. */
         if (screen.page == 6 && x4_auth_busy(auth)) {
@@ -104,12 +114,14 @@ reopen_interface:;
         bool local_action = game_input && chord && (controller.data.buttons &
             (ORBIS_PAD_BUTTON_OPTIONS | ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_SQUARE));
         bool guide_action = game_input && chord && (controller.data.buttons & ORBIS_PAD_BUTTON_TOUCH_PAD);
+        bool diagnostic_action = game_input && chord &&
+            (controller.data.buttons & ORBIS_PAD_BUTTON_TRIANGLE);
         X4GamepadFrame gamepad = {0};
         if (game_input) x4_controller_gamepad(&controller, &gamepad);
-        if (local_action || guide_action) {
+        if (local_action || guide_action || diagnostic_action) {
             memset(&gamepad, 0, sizeof(gamepad));
             gamepad.connected = controller.data.connected;
-            if (guide_action && !local_action) gamepad.buttons = X4_GAMEPAD_NEXUS;
+            if (guide_action && !local_action && !diagnostic_action) gamepad.buttons = X4_GAMEPAD_NEXUS;
         }
         x4_auth_set_gamepad(auth, &gamepad);
         if (!closing) {
@@ -154,6 +166,8 @@ reopen_interface:;
                 }
             }
         }
+        x4_trace_monitor_state(live ? x4_live_media_trace(live) : NULL,
+            X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_STATUS, 0);
         x4_auth_snapshot(auth, &account);
         bool catalog_copied = x4_auth_catalog_snapshot_cached(auth, &catalog, &catalog_cursor) != 0;
         if (catalog_copied) {
@@ -233,13 +247,15 @@ reopen_interface:;
                     live_error = 0;
                     if (live) {
                         trace_inactive(live);
-                        live_error = x4_auth_set_media_callback(auth, NULL, NULL);
+                        live_error = x4_auth_set_media_callback(auth, NULL, NULL, NULL);
                         if (!live_error) live_error = x4_live_media_close(live);
                         if (!live_error) live = NULL;
                     }
                     if (!live_error) {
                         live_retained = 0;
                         live = x4_live_media_create(&live_error);
+                        diagnostic_stable = false;
+                        diagnostic_mark = 0;
                         if (live) {
                             live_error = x4_live_media_set_payload_type(live, X4_LIVE_KIND_VIDEO, 102);
                             if (!live_error) live_error = x4_live_media_set_payload_type(live, X4_LIVE_KIND_AUDIO, 111);
@@ -249,7 +265,7 @@ reopen_interface:;
                     memset(&live_status, 0, sizeof(live_status));
                     live_muted = 0;
                     rc = live_error;
-                    if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live);
+                    if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live, x4_live_media_trace(live));
                     if (!rc) { game_controls = 0; rc = x4_auth_start_session(auth, catalog_selected); }
                     if (rc && !live_error) live_error = rc;
                     x4_auth_session_snapshot(auth, &session);
@@ -275,7 +291,7 @@ reopen_interface:;
             } else {
                 /* The worker closes RTC before publishing completion. */
                 trace_inactive(live);
-                int stop_rc = x4_auth_set_media_callback(auth, NULL, NULL);
+                int stop_rc = x4_auth_set_media_callback(auth, NULL, NULL, NULL);
                 if (!stop_rc) stop_rc = x4_live_media_close(live);
                 if (!stop_rc) live = NULL;
                 else { live_error = stop_rc; live_retained = 1; printf("XCloud4: medios retienen recursos, cierre 0x%08x\n", (unsigned)stop_rc); }
@@ -309,6 +325,15 @@ reopen_interface:;
             !live_error && !live_status.video_error && session.state != X4_SESSION_STOPPING &&
             live_status.video_ready;
         X4Trace *live_trace = live ? x4_live_media_trace(live) : NULL;
+        if (live_visible && diagnostic_action && (controller.pressed & ORBIS_PAD_BUTTON_TRIANGLE) &&
+            !local_action && !guide_action) {
+            diagnostic_stable = !diagnostic_stable;
+            unsigned epoch = diagnostic_stable ? X4_MON_EPOCH_STABLE : X4_MON_EPOCH_TRANSITION;
+            x4_trace_monitor_epoch(live_trace, X4_MON_ACTOR_SESSION, epoch);
+            x4_trace_record(live_trace, X4_TRACE_SESSION_PHASE, 0, epoch, ++diagnostic_mark);
+            printf("XCloud4: diagnostic phase=%s mark=%llu\n",
+                diagnostic_stable ? "stable" : "transition", (unsigned long long)diagnostic_mark);
+        }
         bool trace_active = live_visible && !live_retained && trace_session_active(session.state);
         x4_trace_set_active(live_trace, trace_active);
         /* Runs before the idle continue too: a repeated/status-only refresh
@@ -322,9 +347,11 @@ reopen_interface:;
         if (live_visible && live_presented && !overlay_changed && draw_at - overlay_at < 500000 &&
             !x4_live_media_has_new_picture(live)) {
             ++idle_present_skips;
+            x4_trace_monitor_state(live_trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_IDLE, 0);
             sceKernelUsleep(2000);
             continue;
         }
+        x4_trace_monitor_state(live_trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_DRAW, 0);
         bool drew_live = live_visible && x4_live_media_draw(live, x4_display_pixels(&display));
         uint64_t drawn_generation = 0, drawn_output = 0;
         bool drawn_fresh = false;
@@ -380,7 +407,7 @@ reopen_interface:;
     x4_auth_cancel(auth);
     while (x4_auth_busy(auth)) sceKernelUsleep(100000);
     if (live) {
-        int live_rc = x4_auth_set_media_callback(auth, NULL, NULL);
+        int live_rc = x4_auth_set_media_callback(auth, NULL, NULL, NULL);
         if (!live_rc) live_rc = x4_live_media_close(live);
         if (!live_rc) live = NULL;
         else live_error = live_rc;

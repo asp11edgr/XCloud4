@@ -72,7 +72,8 @@ X4Auth *x4_auth_create(void);
  * sign-ins. A completed worker is joined before replacing the registration;
  * a join error preserves the old registration. The receiver context must
  * outlive every session worker. */
-int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, void *user);
+typedef struct X4Trace X4Trace;
+int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, void *user, X4Trace *trace);
 /* Thread-safe request flag. The session owner consumes it and requests PLI;
  * this never accesses the transport from the main/decoder thread. */
 void x4_auth_request_keyframe(X4Auth *auth);

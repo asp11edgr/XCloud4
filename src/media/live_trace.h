@@ -3,6 +3,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include "live_monitor.h"
 
 typedef struct X4Trace X4Trace;
 
@@ -37,7 +38,13 @@ enum {
 
     X4_TRACE_SESSION_START = 0x500, X4_TRACE_ACTIVE_CHANGE,
     X4_TRACE_GAP_BEGIN, X4_TRACE_GAP_CLOSED, X4_TRACE_WINDOW_OPEN,
-    X4_TRACE_WINDOW_FROZEN, X4_TRACE_SESSION_END
+    X4_TRACE_WINDOW_FROZEN, X4_TRACE_SESSION_END,
+
+    /* Complete validated input, independent of marker/decoder output IDs. */
+    X4_TRACE_AU_VALID = 0x600, X4_TRACE_REORDER_STATE,
+    X4_TRACE_REORDER_WINDOW_JUMP, X4_TRACE_RGB_CONSUME,
+    X4_TRACE_FLIP_CALL_BEGIN, X4_TRACE_PLI_ATTEMPT,
+    X4_TRACE_PLI_RESULT, X4_TRACE_SESSION_PHASE
 };
 
 enum {
@@ -102,3 +109,17 @@ void x4_trace_end_session(X4Trace *trace);
 int x4_trace_dump_file(X4Trace *trace, const char *numeric_local_path);
 /* Returns false and retains storage if end_session was not called. */
 bool x4_trace_free(X4Trace *trace);
+
+/* Optional independent monitor. Bind/configure before explicit start.
+ * stop/join MUST succeed before queue/context storage is freed. Negative
+ * stop retains the monitor and the entire trace lifetime. */
+bool x4_trace_monitor_bind_queue(X4Trace *, const X4VideoIngress *);
+bool x4_trace_monitor_config(X4Trace *, const X4MonitorConfig *);
+int x4_trace_monitor_start(X4Trace *);
+int x4_trace_monitor_stop(X4Trace *);
+int x4_trace_monitor_dump(X4Trace *, const char *legacy_base_path);
+void x4_trace_monitor_rx(X4Trace *, unsigned kind, bool valid, uint32_t ssrc,
+    uint16_t sequence, size_t bytes, uint64_t time_us);
+void x4_trace_monitor_queue(X4Trace *, uint32_t depth, uint64_t oldest_us, bool valid);
+void x4_trace_monitor_state(X4Trace *, unsigned actor, unsigned phase, uint64_t begin_us);
+void x4_trace_monitor_epoch(X4Trace *, unsigned actor, unsigned epoch);

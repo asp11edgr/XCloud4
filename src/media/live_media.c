@@ -10,7 +10,8 @@
 #include <stdio.h>
 static unsigned be16(const uint8_t *p) { return ((unsigned)p[0] << 8) | p[1]; }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p + 2); }
-/* Fixed trace schema. No RTP timestamp, SSRC, payload, address or pointer.
+/* Legacy trace schema excludes SSRC. The private progress sidecar records
+ * numeric SSRC/sequence only; neither format contains payloads or credentials.
  * MEDIA events 0x100..0x13f are reserved in live_trace.h. */
 enum {
     MT_RTP = X4_TRACE_RX_VALID, MT_RX_REJECT = X4_TRACE_RX_REJECT,
@@ -182,6 +183,7 @@ struct X4LiveMedia {
     uint64_t trace_au_next, trace_au, trace_track_epoch, last_draw_output;
     uint32_t damage_bits, first_damage;
     unsigned trace_budget_reason;
+    unsigned diagnostic_worker_phase; /* Worker-owned phase restored after mailbox publication. */
     uint64_t reset_counts[RESET_COUNT], discard_counts[RESET_COUNT], damage_counts[13];
     X4VideoIngress ingress; /* Video only; the original ring stays in audio. */
     atomic_uint callback_active, callback_peak;
@@ -351,6 +353,9 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
         if (params > X4_LIVE_AU_MAX - m->au_size) { reset_au(m, true, RESET_PARAMS, 0); return; }
         memmove(m->au + params, m->au, m->au_size); memcpy(m->au, m->sps, m->sps_size); memcpy(m->au + m->sps_size, m->pps, m->pps_size); m->au_size += params;
     }
+    x4_trace_record(m->trace, X4_TRACE_AU_VALID,
+        (m->idr ? X4_TRACE_F_IDR : 0u) | (m->waiting_keyframe ? 1u : 0u),
+        m->trace_au, m->au_size);
     ++m->au_submitted;
     m->video.trace_au = m->trace_au;
     x4_trace_record(m->trace, MT_SUBMIT_BEGIN, m->waiting_keyframe ? 1u : 0u, m->trace_au, m->au_size);
@@ -399,6 +404,19 @@ X4LiveMedia *x4_live_media_create(int *error)
     m->trace_session = x4_trace_now_us();
     m->trace = x4_trace_create(m->trace_session, X4_LIVE_COPY_READERS);
     m->video.trace = m->trace;
+    /* Optional sampler owns no playback buffers. Bind before all producers;
+     * queue storage is retained until its successful stop/join at close. */
+    x4_trace_monitor_bind_queue(m->trace, &m->ingress);
+    X4MonitorConfig config = {.width = 960, .height = 540, .max_fps = 30,
+        .bitrate_kbps = 5000, .readers = X4_LIVE_COPY_READERS,
+        .budget_us = WORKER_BUDGET_US, .decode_limit = WORKER_DECODE_LIMIT,
+        .queue_capacity = 256, .reorder_capacity = 128, .reorder_depth = 32,
+        .reorder_wait_us = 25000, .h264_profile = 0x42e01f,
+        .max_fs = 3600, .max_mbps = 108000};
+    x4_trace_monitor_config(m->trace, &config);
+    x4_trace_monitor_epoch(m->trace, X4_MON_ACTOR_SESSION, X4_MON_EPOCH_LOADING);
+    int monitor_rc = x4_trace_monitor_start(m->trace);
+    printf("XCloud4: progress sampler start rc=%d period_us=100000\n", monitor_rc);
     printf("XCloud4: numeric trace enabled=%u configured_readers=%u\n", m->trace ? 1u : 0u,
         X4_LIVE_COPY_READERS);
     if (error) *error = 0; return m;
@@ -438,7 +456,14 @@ static void callback_max(atomic_uint_fast64_t *counter, uint64_t value)
 void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t size)
 {
     X4LiveMedia *m = context; if (!m || !atomic_load_explicit(&m->started, memory_order_acquire) || atomic_load(&m->stop)) return;
-    if (kind == X4_LIVE_KIND_AUDIO) { x4_live_audio_receive(m->audio, p, size); return; }
+    if (kind == X4_LIVE_KIND_AUDIO) {
+        X4LiveRtp audio_r;
+        uint64_t arrival = x4_trace_now_us();
+        bool valid = x4_live_rtp_parse(p, size, &audio_r) >= 0;
+        x4_trace_monitor_rx(m->trace, X4_MON_RX_AUDIO, valid,
+            valid ? audio_r.ssrc : 0, valid ? audio_r.sequence : 0, size, arrival);
+        x4_live_audio_receive(m->audio, p, size); return;
+    }
     if (kind != X4_LIVE_KIND_VIDEO) return;
     uint64_t callback_begin = sceKernelGetProcessTime();
     unsigned active = atomic_fetch_add_explicit(&m->callback_active, 1, memory_order_relaxed) + 1;
@@ -450,6 +475,8 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
     X4LiveRtp r;
     unsigned parse_reason = 0;
     int parsed = rtp_parse_reason(p, size, &r, &parse_reason);
+    x4_trace_monitor_rx(m->trace, X4_MON_RX_VIDEO, parsed >= 0,
+        parsed >= 0 ? r.ssrc : 0, parsed >= 0 ? r.sequence : 0, size, callback_begin);
     X4IngressResult result = { .reason = X4_INGRESS_INVALID };
     bool pushed = parsed >= 0 && x4_video_ingress_push(&m->ingress, p, size, callback_begin, &result);
     if (parsed < 0) atomic_fetch_add_explicit(&m->rx_invalid, 1, memory_order_relaxed);
@@ -511,6 +538,8 @@ static void drain_reordered(X4LiveMedia *m, uint64_t begin, uint64_t decode_begi
         unsigned reason = 0;
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
         const uint8_t *p = reorder_next_reason(&m->reorder, allow_expire ? sceKernelGetProcessTime() : 0, &size, &lost, &reason);
+        x4_trace_record(m->trace, X4_TRACE_REORDER_STATE, 0,
+            ((uint64_t)m->reorder.expected << 32) | m->reorder.buffered, m->reorder.started);
         if (!p) break;
         if (lost) {
             x4_trace_record(m->trace, MT_REORDER_GAP, (uint16_t)(reason | (allow_expire ? 4u : 0u)),
@@ -592,9 +621,11 @@ static void publish_worker_view(X4LiveMedia *m)
 {
     X4LiveMediaSnapshot s;
     prepare_worker_view(m, &s);
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_MAILBOX, 0);
     mailbox_lock(m);
     commit_worker_view(m, &s);
     mailbox_unlock(m);
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, m->diagnostic_worker_phase, 0);
 }
 static int reserve_rgb(X4LiveMedia *m)
 {
@@ -611,6 +642,7 @@ static void finish_rgb(X4LiveMedia *m, int slot, bool converted)
     X4LiveMediaSnapshot s;
     prepare_worker_view(m, &s);
     uint64_t superseded = 0, generation = 0, output_id = 0;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_MAILBOX, 0);
     mailbox_lock(m);
     if (converted && !m->video.error && m->video.width && m->video.height) {
         /* A ready slot being drawn or already drawn is not discarded. */
@@ -631,6 +663,7 @@ static void finish_rgb(X4LiveMedia *m, int slot, bool converted)
     mailbox_unlock(m);
     if (superseded) x4_trace_record(m->trace, MT_SUPERSEDE, 0, superseded, generation);
     if (generation) x4_trace_record(m->trace, MT_PUBLISH, 0, generation, output_id);
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_ASSEMBLE, 0);
 }
 static void reset_worker_maxima(X4LiveMedia *m)
 {
@@ -765,8 +798,12 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
 }
 static void video_batch(X4LiveMedia *m)
 {
+    m->diagnostic_worker_phase = X4_MON_PHASE_WAIT_SURFACE;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_WAIT_SURFACE, 0);
     int slot = reserve_rgb(m);
     if (slot < 0) return;
+    m->diagnostic_worker_phase = X4_MON_PHASE_ASSEMBLE;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_ASSEMBLE, 0);
     if (x4_live_video_set_target(&m->video, m->rgb[slot].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) < 0) {
         m->video.error = X4_LIVE_ERR_DECODER; finish_rgb(m, slot, false); return;
     }
@@ -820,6 +857,11 @@ static void video_batch(X4LiveMedia *m)
         }
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
         int rc = x4_live_reorder_insert(&m->reorder, packet, size, r.sequence, sceKernelGetProcessTime());
+        if (rc == X4_LIVE_REORDER_JUMP)
+            x4_trace_record(m->trace, X4_TRACE_REORDER_WINDOW_JUMP, 0,
+                ((uint64_t)expected << 32) | r.sequence, buffered);
+        x4_trace_record(m->trace, X4_TRACE_REORDER_STATE, 0,
+            ((uint64_t)m->reorder.expected << 32) | m->reorder.buffered, m->reorder.started);
         x4_trace_record(m->trace, MT_REORDER_INSERT, (uint16_t)rc,
             ((uint64_t)expected << 32) | r.sequence, buffered);
         if (rc == X4_LIVE_REORDER_LATE) atomic_fetch_add(&m->dropped, 1);
@@ -844,6 +886,8 @@ finish:
 static void *video_worker(void *context)
 {
     X4LiveMedia *m = context;
+    m->diagnostic_worker_phase = X4_MON_PHASE_STARTUP;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STARTUP, 0);
     x4_trace_record(m->trace, MT_WORKER_START, 0, X4_LIVE_COPY_READERS, WORKER_BUDGET_US);
     x4_trace_record(m->trace, MT_WAIT_BEGIN, 0x8000u, 0, 0);
     int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT);
@@ -857,7 +901,11 @@ static void *video_worker(void *context)
         reset_worker_maxima(m);
         if (atomic_load_explicit(&m->started, memory_order_acquire) && !m->video.error &&
             (x4_video_ingress_depth(&m->ingress) || m->reorder.buffered)) video_batch(m);
-        else { ++m->worker_idle_yields; sceKernelUsleep(1000); }
+        else {
+            m->diagnostic_worker_phase = X4_MON_PHASE_WAIT_DATA;
+            x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_WAIT_DATA, 0);
+            ++m->worker_idle_yields; sceKernelUsleep(1000);
+        }
         publish_worker_view(m);
         /* A missing sequence with no new ingress needs its timeout checked,
          * without a busy spin while waiting for the next packet. */
@@ -865,6 +913,8 @@ static void *video_worker(void *context)
             ++m->worker_idle_yields; sceKernelUsleep(1000);
         }
     }
+    m->diagnostic_worker_phase = X4_MON_PHASE_STOPPING;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STOPPING, 0);
     m->worker_close_result = x4_live_video_stop(&m->video);
     for (unsigned i = 0; i < RESET_COUNT; ++i) {
         x4_trace_record(m->trace, MT_RESET_TOTAL, 0, i, m->reset_counts[i]);
@@ -883,9 +933,11 @@ void x4_live_media_tick(X4LiveMedia *m)
 bool x4_live_media_has_new_picture(X4LiveMedia *m)
 {
     if (!m) return false;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAILBOX, 0);
     mailbox_lock(m);
     bool fresh = m->published_slot >= 0 && m->rgb[m->published_slot].generation > m->last_presented_frame;
     mailbox_unlock(m);
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_STATUS, 0);
     return fresh;
 }
 X4Trace *x4_live_media_trace(X4LiveMedia *m) { return m ? m->trace : NULL; }
@@ -906,6 +958,7 @@ bool x4_live_media_drawn(X4LiveMedia *m, uint64_t *generation, uint64_t *output,
 int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
 {
     if (!m || !p) return 0;
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAILBOX, 0);
     mailbox_lock(m);
     int slot = m->published_slot;
     if (slot < 0 || m->reader_slot >= 0) { mailbox_unlock(m); return 0; }
@@ -916,6 +969,9 @@ int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
     uint64_t native_output = m->rgb[slot].native_output;
     bool fresh = generation > m->last_presented_frame;
     mailbox_unlock(m);
+    x4_trace_monitor_state(m->trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_DRAW, 0);
+    x4_trace_record(m->trace, X4_TRACE_RGB_CONSUME, fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT,
+        generation, native_output);
     x4_trace_record(m->trace, X4_TRACE_DRAW_BEGIN, fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT,
         generation, native_output);
     /* Reader ownership survives publication of another slot. The gate is
@@ -1036,6 +1092,8 @@ int x4_live_media_close(X4LiveMedia *m)
     if (m->worker_close_result < 0) return m->worker_close_result;
     if (rc < 0) return rc;
     if (atomic_load_explicit(&m->callback_active, memory_order_relaxed)) return X4_LIVE_ERR_STATE;
+    int monitor_stop = x4_trace_monitor_stop(m->trace);
+    if (monitor_stop < 0) return monitor_stop;
     X4LiveMediaSnapshot final_ingress, zero = {0};
     x4_live_media_snapshot(m, &final_ingress);
     report_ingress(&final_ingress, &zero, true);
@@ -1056,9 +1114,11 @@ int x4_live_media_close(X4LiveMedia *m)
 #else
     const unsigned ingress_variant = 1;
 #endif
-    snprintf(path, sizeof(path), "/data/xcloud4-trace-0730-%u-%llu.bin", ingress_variant,
+    snprintf(path, sizeof(path), "/data/xcloud4-trace-0731-%u-%llu.bin", ingress_variant,
         (unsigned long long)m->trace_session);
     int dump = x4_trace_dump_file(m->trace, path);
+    int progress_dump = x4_trace_monitor_dump(m->trace, path);
+    printf("XCloud4: progress trace dump rc=%d\n", progress_dump);
     printf("XCloud4: numeric trace dump rc=%d\n", dump);
     bool trace_released = x4_trace_free(m->trace);
     if (!trace_released) printf("XCloud4: numeric trace retained=1\n");

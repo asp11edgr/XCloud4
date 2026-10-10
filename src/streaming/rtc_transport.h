@@ -8,6 +8,7 @@
 extern "C" {
 #endif
 typedef struct X4Rtc X4Rtc;
+typedef struct X4Trace X4Trace;
 enum { X4_RTC_VIDEO = 0, X4_RTC_AUDIO = 1 };
 typedef enum {
     X4_RTC_NEW = 0, X4_RTC_CONNECTING, X4_RTC_CONNECTED,
@@ -30,6 +31,8 @@ typedef struct {
 typedef void (*X4RtcMediaCallback)(void *user, int kind, const uint8_t *rtp, size_t size);
 X4Rtc *x4_rtc_open(int *error);
 void x4_rtc_set_media_callback(X4Rtc *, X4RtcMediaCallback, void *user);
+/* Session owner only, before dispatch starts. Trace outlives joined RTC. */
+void x4_rtc_set_diagnostic_trace(X4Rtc *, X4Trace *);
 /* Owner thread only, once after open. Starts a bounded independent sender;
  * a native thread-creation error is returned without failing media/RTC.
  * Source/context must outlive a successful close. */

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "rtc_transport.h"
 #include "rtc_native.h"
+#include "../media/live_trace.h"
 #include "../auth/json.h"
 #include <rtc/rtc.h>
 #include <orbis/libkernel.h>
@@ -36,6 +37,8 @@ struct X4Rtc {
     unsigned candidate_read, candidate_write;
     X4RtcMediaCallback media;
     void *media_user;
+    X4Trace *diagnostic_trace;
+    uint64_t diagnostic_pli_ordinal; /* Session owner is the sole writer. */
     bool handshake_ack, startup_sent;
     uint64_t started_at;
     X4GamepadSource input_source;
@@ -612,6 +615,10 @@ void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user
     if(!rtc)return;
     lock(&rtc->data_gate);rtc->media=callback;rtc->media_user=user;unlock(&rtc->data_gate);
 }
+void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
+{
+    if (rtc) rtc->diagnostic_trace = trace;
+}
 int x4_rtc_set_gamepad_source(X4Rtc *rtc,X4GamepadSource source,void *user)
 {
     if(!rtc || !source || rtc->input_thread_started || atomic_load(&rtc->input_stop))return -46;
@@ -691,8 +698,20 @@ void x4_rtc_snapshot(X4Rtc *rtc,X4RtcSnapshot *snapshot)
 int x4_rtc_request_keyframe(X4Rtc *rtc)
 {
     if(!rtc)return -1;
-    if(rtcIsOpen(rtc->channels[1]))send_text(rtc->channels[1],"{\"message\":\"videoKeyframeRequested\",\"ifrRequested\":true}");
-    return rtcRequestKeyframe(rtc->video);
+    /* Native dispatch attempts/results only, never a network delivery ACK.
+     * Keep the existing control message, RTCP call, cadence and return value. */
+    X4Trace *trace = rtc->diagnostic_trace;
+    if(rtcIsOpen(rtc->channels[1])) {
+        uint64_t ordinal = ++rtc->diagnostic_pli_ordinal;
+        x4_trace_record(trace, X4_TRACE_PLI_ATTEMPT, 1, ordinal, 0);
+        int control_rc = send_text(rtc->channels[1],"{\"message\":\"videoKeyframeRequested\",\"ifrRequested\":true}");
+        x4_trace_record(trace, X4_TRACE_PLI_RESULT, 1, ordinal, (uint32_t)control_rc);
+    }
+    uint64_t ordinal = ++rtc->diagnostic_pli_ordinal;
+    x4_trace_record(trace, X4_TRACE_PLI_ATTEMPT, 2, ordinal, 0);
+    int rc = rtcRequestKeyframe(rtc->video);
+    x4_trace_record(trace, X4_TRACE_PLI_RESULT, 2, ordinal, (uint32_t)rc);
+    return rc;
 }
 int x4_rtc_close(X4Rtc *rtc)
 {
