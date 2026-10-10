@@ -4,9 +4,9 @@
 
 Owner request, October 8, 2026: add an option to search titles from the Xbox catalog.
 
-**Status: now authorized for the next catalog update.** On October 9, 2026, the owner replaced the earlier deferral: first show the complete available catalog, group confirmed access and titles needing purchase when explicitly established, and add working case-insensitive substring search so gear/forza return every match. Unconfirmed entitlement alone does not establish a purchase requirement. Cover images are a subsequent improvement.
+**Status: local search/filter implemented in 0.7.29 and confirmed by the owner.** On October 9, 2026, the owner replaced the earlier deferral: first show the complete available catalog, group confirmed access and titles needing purchase when explicitly established, and add working case-insensitive substring search so gear/forza return every match. Unconfirmed entitlement alone does not establish a purchase requirement. Cover images are a subsequent improvement.
 
-Version 0.7.28 prepares a bounded capacity of 4,096 distinct entries instead of 128, with cached snapshots and explicit truncation. The owner confirms complete retention and the menu behavior; the console retains 2,734/2,734 titles. The 0.7.29 local search/filter candidate is prepared, with console behavior pending. Search must distinguish the available catalog from retained or named entries, support DualShock 4 text entry and return to selection without losing the account session. Store name enrichment currently covers only the first 32 entries; identifiers remain available for others.
+Version 0.7.28 prepares a bounded capacity of 4,096 distinct entries instead of 128, with cached snapshots and explicit truncation. The owner confirms complete retention and the menu behavior; the console retains 2,734/2,734 titles. The owner confirms the requested 0.7.29 search/filter/selected-game/return trial worked. Search must distinguish the available catalog from retained or named entries, support DualShock 4 text entry and return to selection without losing the account session. Store name enrichment currently covers only the first 32 entries; identifiers remain available for others.
 
 Live audio/video and controller input now work in the owner's trials. The current priorities are remaining pauses, complete catalog/search/access groups, and unobstructed playback.
 
@@ -23,3 +23,11 @@ The owner's queue question exposed a current limit: `WaitingForResources` is rec
 Review an appropriate longer waiting duration and clear queue/cancellation UI using actual server state. Present a server estimate only when one is supplied and validated; do not invent waiting times. Preserve cleanup and cancellation while researching the required session-maintenance behavior.
 
 Both 0.7.10 attempts reached `ReadyToConnect`, accepted `/connect` and `Provisioned` before their SDP-stage failures. Those captures do not establish a long-queue failure or a server queue-time estimate.
+
+## DualShock 4 vibration
+
+Owner request, October 9, 2026: add controller vibration in a future update. The owner reports that audio and controls worked well and felt alike in both 0.7.30 variants.
+
+**Status: recorded for a future update; no vibration implementation added.** Investigate the actual Xbox feedback messages and the supported DualShock 4 motor interface. Keep feedback handling bounded, add a user setting, and clear motor output on disconnect and close. Define how Xbox trigger-motor feedback should map to the DualShock 4's available motors.
+
+The Xbox **View** button (two overlapping rectangles) is already mapped to the **physical touchpad click** in `src/input/controller.c`; OPTIONS maps to Xbox Menu. This source mapping is separate from an individually verified View-button gameplay trial. L1 + R1 + touchpad click is the reserved Xbox Guide shortcut.

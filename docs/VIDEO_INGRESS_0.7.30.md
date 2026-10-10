@@ -33,7 +33,7 @@ The extra numeric `RX_CALLBACK` event is `0x402`: `a` high32 is simultaneous vid
 
 Queue age now starts at entry to the XCloud4 video receive function, rather than just after the old queue copy. Both experiment variants share this definition. Reorder arrival still starts at insertion; its **128-slot / depth32 / 25000 µs** policy, **16000 µs / four Decode** worker budget and AU recovery decisions are unchanged. The native decoder still supplies no output PTS, so no output is attributed to the last compressed input. Local `PLI_REQUEST` remains a consumed request, not a network dispatch or a server-response timestamp.
 
-## Host checks and console comparison
+## Preparation-time host checks and comparison protocol
 
 The explicitly requested POSIX harness tests argument validation, true fullness, maximum-size byte integrity, deterministic consumer/push overlap with free capacity, held-slot ownership, unpublished-head FIFO, four persistent concurrent producers with per-producer ordering, bounded CAS exhaustion, unsigned wrap, and stop/free/join. The runner builds both variants and optionally ASan/UBSan/leak and TSan. Host results are reported separately from console behavior; successful host checks cannot establish PS4 timing or fluent playback.
 
@@ -41,4 +41,12 @@ Compare **A → B → A**, using the same title, scene, actual stream dimensions
 
 Report per run: rejection counts by exact branch, callbacks and peak overlap, callback/reservation distributions, queue-age distributions, ingress resets and recovery episodes per active minute, new-presentation gaps >100 ms per minute and their p50/p95/maximum. Separate active gameplay exposure from loading, intentional inactive time and shutdown. Trace-window distributions describe retained observations only; final report counters and cadence header totals have separate coverage. Do not substitute a diagnostic-window sample for a whole-session distribution.
 
-A favorable result reduces consumer-contention rejections and associated recovery without worsening callback time, queue age, audio, controls or closure. Remaining pauses must be classified separately. Console comparison is pending; no solved-pause or stable-FPS claim is made.
+A favorable result was defined as fewer consumer-contention rejections and associated recovery without worsening callback time, queue age, audio, controls or closure. The protocol above preserves the preparation-time target. Active gameplay exposure and scene equivalence were not independently established in the completed attempts; the observed report instead uses explicit first-to-last NEW endpoint spans and separate whole-session counters.
+
+## Post-build console checkpoint
+
+The [completed A1 → B → A2 comparison](CONSOLE_COMPARISON_0.7.30.md) records **115 / 3 / 102** exact closed NEW-match intervals above 100 ms over **219.354041 / 222.923990 / 201.552959 seconds**: **31.456 / 0.807 / 30.364** per exposure minute. Whole-session consumer-lock rejections are **231 / 0 / 202**, ingress resets **207 / 0 / 186**, and queue-full rejections zero in all three. Callback overlap is zero, peak one; no general concurrent-provider claim follows. A2 completes 120 of 121 recovery episodes, leaving one duration unknown.
+
+Coherent post-check reporting windows show approximately **9.25 ms** native copying in every run; the observed change is not a copy-speed improvement. All first native pictures are **1280 × 720, pitch 1280**, despite the shared **960 × 540 / maxFPS 30** request. Both baseline captures exhaust saved-detail capacity; B has diagnostic omissions, unstable snapshots and one time-capped detail window. The report distinguishes these limits and the three remaining B gaps without deriving network loss, RTT or physical display latency from missing records.
+
+The owner reports markedly fewer stutters in NEW, confirms good/comparable audio and controls in both variants, and confirms the A2 menu return. Those reports are subjective; scene/server/network equivalence and individual controls were not independently verified. **The candidate is restored**, confirmed by two identical installed-package reads matching the release candidate's bytes and SHA-256. No solved-all-pauses or stable-FPS result is claimed. This documentation checkpoint changes no runtime or existing release asset.

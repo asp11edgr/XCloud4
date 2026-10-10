@@ -12,9 +12,13 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Prepared video ingress experiment: 0.7.30
+## Observed video ingress comparison: 0.7.30
 
-Product **0.7.30**, PS4 **APP_VER 01.00**, prepares a video-only queue correction for locally rejected RTP packets. The candidate removes the consumer's queue gate; an instrumented try-gate baseline supports a four-reader **A/B/A** comparison. Capacity, reorder, recovery, audio and codec settings remain unchanged. Both variants passed the explicitly requested normal host tests, ASan/UBSan/leak checks and TSan; console improvement is pending. See the [experiment and original evidence](docs/VIDEO_INGRESS_0.7.30.md) and [release notes](docs/RELEASE_NOTES_0.7.30.md).
+Product **0.7.30**, PS4 **APP_VER 01.00**, completes the observed **BASE A1 → NEW B → BASE A2** run order. The MPSC candidate removes the consumer's queue gate; capacity, reorder, recovery, audio, four copy readers and codec settings remain unchanged. Preparation-time source reviews, native/static correspondence and explicitly requested host/sanitizer checks are preserved in the [experiment](docs/VIDEO_INGRESS_0.7.30.md) and [release notes](docs/RELEASE_NOTES_0.7.30.md).
+
+The [console comparison](docs/CONSOLE_COMPARISON_0.7.30.md) records **115 / 3 / 102** closed fresh-image presentation intervals over 100 ms across **219.354 / 222.924 / 201.553 seconds**, respectively. Whole-session consumer-lock rejections are **231 / 0 / 202**, with zero queue-full rejections in all three. Those counters have a different lifetime from presentation exposure. Copy cost remains approximately **9.25 ms**. The owner reports much fewer stutters with NEW and says audio and controls worked well and similarly in both variants. These separate sessions were not controlled for scene/server/network equivalence, and three B gaps remain; no universal fluency, source-FPS or end-to-end latency result is claimed.
+
+Both variants requested **960 × 540 / maxFPS 30**, but their first native images were **1280 × 720**. The candidate is restored: two exact reads of the installed **8,912,896-byte** package match its existing release SHA-256. The owner confirmed A2's menu return; individual controls and a no-CE screen were not independently checked. The report preserves coverage omissions, scoped timings and remaining-gap classifications; runtime and existing release assets are unchanged.
 
 ## Tested catalog search: 0.7.29
 
@@ -162,6 +166,7 @@ The development package integrates pinned libdatachannel/libjuice, DTLS-SRTP, na
 | 0.7.15, partial | Two valid Xbox SDP answers applied; RTC fails and cleanup succeeds with zero media, followed by an uncaught timed-wait exception/application crash. |
 | 0.7.19, first live media | Connected SCTP/WebRTC, decoded Opus and a 1280×720 H.264 game image; owner confirms good audio and very slow video. Gamepad sending was absent. External closure caused a graphics-suspension timeout; a separate ARK attempt ended after roughly five minutes with RTC failure and successful remote cleanup. |
 | 0.7.26, completed diagnostics | Two-reader first-picture check and numeric export succeed; 82 complete intervals report 26.095 new draws/s and 16.016 ms mean copy. The trace counts 96 NEW-match intervals over 100 ms with incomplete detail; recovery is observed in every retained detailed interval, not established as the upstream cause. Session cleanup and helper join succeed. |
+| 0.7.30, observed A1/B/A2 | Baseline repeats count 115/102 fresh-image intervals over 100 ms versus 3 in the MPSC candidate, with exposure/coverage limits. Consumer-lock rejections are 231/0/202; audio and controls are reported comparable. NEW is restored by two exact installed-package reads; no controlled causal or all-stutters-fixed result is claimed. |
 
 The owner reported these results and console logs support them. Not every button, axis, catalog navigation action or cancellation path has been checked separately. A successful build does not establish hardware behavior.
 
