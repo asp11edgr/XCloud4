@@ -293,7 +293,7 @@ write_changed(source, text)
 
 # First-offer diagnostics are fixed numeric stages only. Never print SDP,
 # ICE credentials, addresses, certificate bytes or exception messages.
-def checked_patch(source, replacements, marker, exact=False):
+def checked_patch(source, replacements, marker, exact=False, verification_insertions=()):
     text = source.read_text()
     if marker not in text:
         for original, replacement in replacements:
@@ -302,10 +302,20 @@ def checked_patch(source, replacements, marker, exact=False):
             text = text.replace(original, replacement, 1)
     if marker not in text:
         raise SystemExit('Offer diagnostic was not applied: ' + str(source))
+    # A later checked receive overlay may insert a complete known hook within
+    # an older replacement. Normalize only that exact hook for verification;
+    # preserve the real source byte-for-byte and reject duplicate insertions.
+    verification_text = text
+    for insertion in verification_insertions:
+        occurrences = verification_text.count(insertion)
+        if occurrences > 1:
+            raise SystemExit('Ambiguous retained diagnostic hook: ' + str(source))
+        if occurrences == 1:
+            verification_text = verification_text.replace(insertion, '', 1)
     for original, replacement in replacements:
-        if replacement not in text:
+        if replacement not in verification_text:
             raise SystemExit('Incomplete pinned diagnostic patch: ' + str(source) + ': ' + original)
-        if exact and text.count(replacement) != 1:
+        if exact and verification_text.count(replacement) != 1:
             raise SystemExit('Ambiguous pinned diagnostic patch: ' + str(source) + ': ' + original)
     write_changed(source, text)
 
@@ -502,7 +512,11 @@ checked_patch(source, [
     ('\t\t} else {\n\t\t\tagent_conn_fail(agent);\n\t\t\tconn_impl->state = CONN_STATE_FINISHED;',
      '\t\t} else {\n\t\t\tX4_JUICE_EVENT(76, 2);\n\t\t\tX4_JUICE_EVENT(77, -ret);\n'
      '\t\t\tagent_conn_fail(agent);\n\t\t\tconn_impl->state = CONN_STATE_FINISHED;'),
-], 'X4_JUICE_EVENT(76, 1);')
+], 'X4_JUICE_EVENT(76, 1);', verification_insertions=(
+    '#ifdef X4_OPENORBIS\n'
+    '\t\tx4_rtc_receive_reject(X4_RD_UDP, X4_RD_SOCKET_POLL_ERROR, (int)pfd->revents, NULL, 0);\n'
+    '#endif\n',
+))
 
 source = base / 'libdatachannel/deps/libjuice/src/agent.c'
 checked_patch(source, [
@@ -702,4 +716,6 @@ checked_patch(source, [
 
 from prepare_receive_diagnostics import apply as apply_receive_diagnostics
 apply_receive_diagnostics(base)
+from prepare_receiver_nack import apply as apply_receiver_nack
+apply_receiver_nack(base)
 print('OpenOrbis dependency overlay prepared:', overlay)

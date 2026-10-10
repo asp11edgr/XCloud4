@@ -90,7 +90,31 @@ TRANSPORT = ('DATAGRAM ICE_DELIVER DTLS_QUEUE_ACCEPT DTLS_QUEUE_POP SRTP_INPUT '
 CRITICAL = ('UNKNOWN SEQUENCE_GAP LATE_POSITION REJECT RECOVERY_BEGIN RECOVERY_END '
     'PLI_LOCAL PLI_ATTEMPT PLI_RESULT AU_FILTER IDR_SEEN AU_PARAMETERS '
     'PRESENT_GAP_BEGIN PRESENT_GAP_END SEQUENCE_AMBIGUOUS AU_DISCARD '
-    'TRANSPORT_DELAY RTC_SETTING').split()
+    'TRANSPORT_DELAY RTC_SETTING NACK_DETECT NACK_REQUEST NACK_DISPATCH '
+    'NACK_SRTCP_BEGIN NACK_SRTCP_RESULT NACK_LOCAL_SEND_RESULT NACK_AUTH_RETURN '
+    'NACK_REORDER_RESULT NACK_AU_CONTRIBUTION NACK_STATE NACK_SUPPRESS NACK_COUNTER '
+    'NACK_DISPATCH_MASK').split()
+NACK_COUNTERS = ('observations wrong_payload_type observations_after_close sources_started '
+    'ssrc_changes forward_packets backward_packets duplicate_packets backward_untracked '
+    'before_epoch ambiguous_halfspan extended_overflow gap_ranges missing_positions '
+    'requests_reserved disabled_ranges disabled_positions oversized_ranges oversized_positions '
+    'budget_suppressed_ranges budget_suppressed_positions watched_ranges_evicted '
+    'pending_ranges_evicted pending_positions_evicted matched_arrivals first_arrivals '
+    'duplicate_arrivals completed_ranges pending_positions ssrc_retired_ranges '
+    'ssrc_retired_positions ambiguity_retired_ranges ambiguity_retired_positions '
+    'close_retired_ranges close_retired_positions observer_discontinuities '
+    'omission_retired_ranges omission_retired_positions clock_regressions').split()
+NACK_EXTRA_COUNTERS = {100: 'state_gate_omissions', 101: 'invalid_RTP',
+    102: 'non_authenticated_or_RTX_flagged', 103: 'dispatch_queue_full', 104: 'dispatch_gated',
+    105: 'handler_duplicates', 106: 'undispatched_on_close',
+    107: 'AU_ticket_omissions', 108: 'reorder_ticket_omissions',
+    109: 'delivery_ticket_set_get_operation_omissions'}
+NACK_AU_STAGES = ('in_progress_packet_contribution', 'structurally_complete',
+    'accepted_by_recovery_for_Decode', 'recovery_filter_rejected', 'discarded')
+NACK_SUPPRESS = {1: 'experiment_disabled', 2: 'range_cap', 3: 'session_request_cap',
+    4: 'range_no_longer_pending', 5: 'watch_range_not_retained',
+    6: 'feedback_not_confirmed', 7: 'closing', 8: 'dispatch_slot_already_queued'}
+NACK_REORDER = {0: 'stored', 1: 'late_or_occupied_slot', 2: 'window_jump'}
 T_COUNTER = ('packet_observations bytes last_us RTP_header_metadata_observations '
     'other_or_invalid_metadata_observations gap_events forward_skipped_positions '
     'backward_observations duplicate_observations sequence_gate_omitted '
@@ -511,6 +535,327 @@ def gap_chronology(cadence, records, sampled, incomplete):
     return out
 
 
+def nack_record(row):
+    """Decode local observations without equating a send and remote delivery."""
+    event = row['event']
+    out = dict(row, request_epoch=row['identity'] >> 32,
+               request_ordinal=row['identity'] & 0xffffffff)
+    out['source_metadata_available'] = bool(row['source'] & (1 << 63))
+    out['network_delivery_established'] = False
+    if event in (18, 19, 20):
+        count = row['b']-row['a']+1 if row['b'] >= row['a'] else None
+        out.update(first_missing_extended=row['a'], last_missing_extended=row['b'],
+            missing_positions=count, missing_range_inclusive=True,
+            range_valid=count is not None and 0 < count < 32768,
+            request_range_within_64=count is not None and 0 < count <= 64)
+        if event == 18:
+            out.update(gap_id=row['identity'], experiment_enabled=bool(row['flags'] & 1),
+                       received_extended=row['c'])
+        elif event == 19:
+            out['detected_us'] = row['c']
+        else:
+            out['requested_us'] = row['c']
+    elif event in (21, 22, 23):
+        status = signed(row['a'])
+        out.update(local_status=status, bytes=row['b'], dispatch_us=row['c'],
+                   exception_observed=bool(row['flags'] & 1))
+        out['byte_count_scope'] = 'protected_copy' if event == 22 else 'plaintext_original_message'
+        if event == 22:
+            out['SRTCP_local_success'] = status == 0 and not out['exception_observed']
+        elif event == 23:
+            out.update(local_send_success=status == 1 and not out['exception_observed'],
+                       status_semantics='0 failed, 1 success, -1 unavailable; local API only')
+    elif event == 24:
+        out.update(sequence_extended=row['a'], RTP_timestamp=row['b'], requested_us=row['c'],
+            first_observation=bool(row['flags'] & 1), duplicate_observation=bool(row['flags'] & 2),
+            range_complete_observed=bool(row['flags'] & 4), authenticated_original_RTP_observation=True,
+            retransmission_causality_established=False)
+    elif event == 25:
+        rejection_flags = row['flags'] & 7
+        rejected = row['b'] == 1
+        reason = ({1: 'behind_worker_expected', 2: 'occupied_slot',
+            4: 'other_or_unclassified'}.get(rejection_flags, 'unknown') if rejected else None)
+        out.update(sequence_extended=row['a'], decision=NACK_REORDER.get(row['b'], 'unknown'),
+            decision_code=row['b'], request_ordinal_observed=row['c'],
+            rejection_subreason=reason,
+            behind_worker_expected_before_insert=True if rejected and rejection_flags == 1
+                else False if rejected and rejection_flags == 2 else None,
+            occupied_slot_at_nonnegative_difference_before_insert=True
+                if rejected and rejection_flags == 2 else None,
+            admission_outcome='admitted' if row['b'] in (0, 2) else
+                'confirmed_behind_worker_expected' if rejected and rejection_flags == 1 else
+                'rejected_without_confirmed_behind_expected' if rejected else 'unknown',
+            rejection_code_alone_proves_late_after_worker_advance=False)
+    elif event == 26:
+        out.update(AU_ordinal=row['a'], AU_stage=NACK_AU_STAGES[row['b']]
+            if row['b'] < len(NACK_AU_STAGES) else 'unknown', AU_stage_code=row['b'],
+            sequence_extended=row['c'], presented_image_established=False,
+            successful_Decode_feed_established=False, native_Decode_output_established=False,
+            shutdown_discard_observation=row['b'] == 4 and bool(row['flags'] & 1))
+    elif event == 27:
+        checked = bool(row['flags'] & 16) and not bool(row['flags'] & 8)
+        out.update(experiment_enabled=bool(row['a']), session_request_cap=row['b'],
+            watch_slots=row['c'] >> 32, range_position_cap=row['c'] & 0xffffffff,
+            configuration_bits=row['flags'], closing_observation=bool(row['flags'] & 8),
+            answer_checked=True if checked else None,
+            remote_feedback_accepted=bool(row['flags'] & 2) if checked else None,
+            effective_requests_enabled=bool(row['a']) and bool(row['flags'] & 2) if checked else None)
+    elif event == 28:
+        out.update(reason=NACK_SUPPRESS.get(row['a'], 'unknown_%d' % row['a']),
+                   reason_code=row['a'], suppressed_positions=row['b'], gap_id=row['c'],
+                   identity_semantics='epoch plus request-or-gap ID; not a request association',
+                   suppression_request_association_available=False)
+    elif event == 29:
+        out.update(counter_id=row['a'], counter_name=NACK_COUNTERS[row['a']]
+            if row['a'] < len(NACK_COUNTERS) else NACK_EXTRA_COUNTERS.get(row['a'], 'unknown_%d' % row['a']),
+            value=row['b'], counter_epoch=row['c'], cumulative_snapshot_not_delta=True)
+        if row['a'] == 102:
+            out['counter_scope'] = 'Non-authenticated OR retransmission/RTX-normalized provenance; not authentication failures alone'
+        elif row['a'] == 109:
+            out.update(counter_scope='Ticket setter/getter omitted operations; can count twice for one packet',
+                       counter_is_lost_packet_count=False)
+    elif event == 30:
+        out.update(first_missing_extended=row['a'], pending_bitmap=row['b'],
+            selection_us=row['c'], dispatched_positions=[row['a']+bit for bit in range(64)
+                if row['b'] & (1 << bit)], bitmap_positions_are_actually_selected=True,
+            selection_is_atomic_transport_send=False)
+    return out
+
+
+def nack_analysis(cr, timeline):
+    """Bounded request/source/epoch correlation; later arrivals are observations."""
+    rows = sorted((r for r in timeline if 18 <= r['event'] <= 30),
+                  key=lambda r: (r['t_us'], r['ordinal']))
+    counts = {CRITICAL[i]: {'attempts': cr['attempted'][i], 'omitted': cr['omitted'][i],
+        'retained': cr['attempted'][i]-cr['omitted'][i]} for i in range(18, 31)}
+    states = [r for r in rows if r['event'] == 27]
+    coverage = {'event_counts': counts, 'retained_records': len(rows),
+        'NACK_detail_complete': not any(cr['omitted'][18:31]),
+        'configuration_details_retained': any(not r['closing_observation'] for r in states),
+        'answer_check_result_retained': any(r['answer_checked'] is True for r in states),
+        'local_status_absence_establishes_no_send': False,
+        'bounded_by_existing_4096_critical_records': True}
+    # Older v2 captures allocate these counter slots but have no emitter. A
+    # zero STATE is unavailability, not an experiment proven to be disabled.
+    if not cr['attempted'][27]:
+        return {'available': False, 'reason': 'No NACK_STATE observation; older v2 NACK hooks unavailable',
+            'coverage': coverage, 'orphan_new_event_records': rows,
+            'experiment_enabled': None, 'answer_checked': None,
+            'remote_feedback_accepted': None, 'effective_requests_enabled': None}
+
+    def elapsed(end, begin):
+        return end-begin if begin is not None and begin > 0 and end >= begin else None
+
+    def key(row):
+        return row['source'], row['identity']
+
+    def key_valid(row):
+        return (row['source_metadata_available'] and row['payload_type'] == 102 and
+                row['ssrc'] != 0 and 0 < row['request_ordinal'] <= 64)
+
+    request_rows, grouped, detections = {}, {}, {}
+    for row in rows:
+        if row['event'] == 18:
+            detections.setdefault((row['source'], row['identity'] >> 32, row['a'], row['b']), []).append(row)
+        elif 19 <= row['event'] <= 26 or row['event'] == 30:
+            grouped.setdefault(key(row), []).append(row)
+            if row['event'] == 19:
+                request_rows.setdefault(key(row), []).append(row)
+    requests, correlated_keys = [], set()
+    for request_key, candidates in request_rows.items():
+        if len(candidates) != 1:
+            requests.append({'source': request_key[0], 'identity': request_key[1],
+                'association_available': False, 'reason': 'Repeated request identity in retained records',
+                'request_observations': candidates})
+            continue
+        request = candidates[0]
+        if not key_valid(request) or not request['request_range_within_64']:
+            requests.append({'source': request_key[0], 'identity': request_key[1],
+                'association_available': False, 'reason': 'Invalid/unknown source, request ordinal or range',
+                'request_observations': candidates})
+            continue
+        correlated_keys.add(request_key)
+        members = grouped[request_key]
+        stages = {CRITICAL[i]: [r for r in members if r['event'] == i] for i in range(20, 27)}
+        stages['NACK_DISPATCH_MASK'] = [r for r in members if r['event'] == 30]
+        dispatches = stages['NACK_DISPATCH']
+        dispatch = dispatches[0] if (len(dispatches) == 1 and
+            dispatches[0]['a'] == request['a'] and dispatches[0]['b'] == request['b'] and
+            request['detected_us'] <= dispatches[0]['requested_us'] <= request['t_us'] and
+            dispatches[0]['t_us'] >= request['t_us']) else None
+        masks = stages['NACK_DISPATCH_MASK']
+        mask = masks[0] if (len(masks) == 1 and dispatch and
+            masks[0]['a'] == request['a'] and masks[0]['b'] != 0 and
+            masks[0]['b'] >> request['missing_positions'] == 0 and
+            request['t_us'] <= masks[0]['selection_us'] <= masks[0]['t_us']) else None
+        dispatched_positions = mask['dispatched_positions'] if mask else None
+        dispatch_references = {r['dispatch_us'] for i in range(21, 24) for r in stages[CRITICAL[i]]}
+        dispatch_reference = next(iter(dispatch_references)) if (len(dispatch_references) == 1 and
+            mask and mask['selection_us'] <= next(iter(dispatch_references)) <= dispatch['t_us']) else None
+        return_dispatch_boundary = dispatch_reference if dispatch_reference is not None else (
+            dispatch['t_us'] if dispatch else None)
+        returns = stages['NACK_AUTH_RETURN']
+        in_range = [r for r in returns if request['a'] <= r['sequence_extended'] <= request['b']]
+        valid_returns = [r for r in in_range if r['t_us'] >= request['t_us']]
+        first = min(valid_returns, key=lambda r: r['t_us'], default=None)
+        returned_positions = sorted({r['sequence_extended'] for r in valid_returns})
+        dispatched_returns = [r for r in valid_returns if mask and
+            r['sequence_extended'] in dispatched_positions and r['t_us'] >= return_dispatch_boundary]
+        first_postdispatch_observation = min(dispatched_returns, key=lambda r: r['t_us'], default=None)
+        returned_dispatched_positions = sorted({r['sequence_extended'] for r in dispatched_returns})
+        # A duplicate after dispatch cannot become a newly repaired position
+        # when its first authenticated arrival was already before dispatch.
+        # Unknown/conflicting flags remain observations, never first arrivals.
+        first_arrivals = [r for r in dispatched_returns if r['first_observation'] and
+            not r['duplicate_observation'] and not any(prior['first_observation'] and
+                prior['sequence_extended'] == r['sequence_extended'] and prior['t_us'] < r['t_us']
+                for prior in valid_returns)]
+        dispatched_first = min(first_arrivals, key=lambda r: r['t_us'], default=None)
+        first_arrival_positions = sorted({r['sequence_extended'] for r in first_arrivals})
+        predispatch_returns = [r for r in valid_returns if dispatch_reference is not None and
+            r['t_us'] < dispatch_reference]
+        au = stages['NACK_AU_CONTRIBUTION']
+        accepted = [r for r in au if r['AU_stage_code'] == 2 and
+            request['a'] <= r['sequence_extended'] <= request['b']]
+        # Compare only the same observed packet sequence, never two different
+        # positions in one requested range or a compressed input to decoder output.
+        accepted_same_first = min((r for r in accepted if first and
+            r['sequence_extended'] == first['sequence_extended'] and r['t_us'] >= first['t_us']),
+            key=lambda r: r['t_us'], default=None)
+        sr_begin, sr_result = stages['NACK_SRTCP_BEGIN'], stages['NACK_SRTCP_RESULT']
+        sr_span = elapsed(sr_result[0]['t_us'], sr_begin[0]['t_us']) if (
+            len(sr_begin) == len(sr_result) == 1 and
+            sr_begin[0]['dispatch_us'] == sr_result[0]['dispatch_us']) else None
+        matched_detection = [r for r in detections.get((request['source'], request['request_epoch'],
+            request['a'], request['b']), []) if request['detected_us'] <= r['t_us'] <= request['t_us']]
+        embedded_request_times = {r['requested_us'] for r in dispatches+returns}
+        requests.append({'source': request['source'], 'identity': request['identity'],
+            'request_epoch': request['request_epoch'], 'request_ordinal': request['request_ordinal'],
+            'ssrc': request['ssrc'], 'payload_type': request['payload_type'],
+            'association_available': True, 'association_scope': 'source plus full epoch/request identity',
+            'request': request, 'exact_detection_candidates': matched_detection,
+            'detection_association_uses_source_epoch_range_and_bounded_record_time': True,
+            'detection_identity_unique': len(matched_detection) == 1,
+            'retained_stage_records': stages, 'first_authenticated_return': first,
+            'retained_authenticated_positions': returned_positions,
+            'dispatch_mask_association_available': mask is not None,
+            'actually_dispatched_positions': dispatched_positions,
+            'mask_selection_us': mask['selection_us'] if mask else None,
+            'actual_transport_dispatch_reference_us': dispatch_reference,
+            'return_dispatch_boundary_kind': 'embedded_transport_dispatch_reference' if dispatch_reference is not None
+                else 'later_dispatch_record_clock' if dispatch else 'unavailable',
+            'first_authenticated_return_of_dispatched_position_after_dispatch': dispatched_first,
+            'first_post_dispatch_authenticated_observation': first_postdispatch_observation,
+            'retained_authenticated_dispatched_positions_after_dispatch': returned_dispatched_positions,
+            'first_authenticated_arrival_positions_after_dispatch': first_arrival_positions,
+            'post_dispatch_duplicate_observations': sum(r['duplicate_observation'] for r in dispatched_returns),
+            'post_dispatch_unknown_or_conflicting_first_flags':
+                sum(r['first_observation'] == r['duplicate_observation'] for r in dispatched_returns),
+            'post_dispatch_completion_requires_first_arrival_flags': True,
+            'all_selected_positions_have_first_authenticated_arrival_after_dispatch':
+                set(first_arrival_positions) == set(dispatched_positions) if mask else None,
+            'all_original_range_positions_observed_in_retained_authenticated_returns':
+                len(returned_positions) == request['missing_positions'],
+            'returns_before_dispatch_observations': len(predispatch_returns) if dispatch_reference is not None else None,
+            'returns_before_dispatch_record_observations':
+                sum(r['t_us'] < dispatch['t_us'] for r in valid_returns) if dispatch else None,
+            'returns_outside_dispatch_mask_observations':
+                sum(r['sequence_extended'] not in dispatched_positions for r in valid_returns) if mask else None,
+            'pre_dispatch_arrival_is_retransmission_response': False,
+            'return_classification_does_not_infer_state_cancellation': True,
+            'return_outside_requested_range_observations': len(returns)-len(in_range),
+            'return_before_request_observations': len(in_range)-len(valid_returns),
+            'first_flag_observations': sum(r['first_observation'] for r in valid_returns),
+            'duplicate_flag_observations': sum(r['duplicate_observation'] for r in valid_returns),
+            'range_complete_flag_observations': sum(r['range_complete_observed'] for r in valid_returns),
+            'embedded_request_reference_matches_retained_request_time':
+                all(r['requested_us'] == request['t_us'] for r in dispatches+returns),
+            'embedded_request_reference_consistent_across_retained_stages':
+                len(embedded_request_times) == 1 and
+                all(request['detected_us'] <= time <= request['t_us'] for time in embedded_request_times),
+            'request_record_and_embedded_request_time_are_separate_observations': True,
+            'timings_us': {'detection_to_request_record': elapsed(request['t_us'], request['c']),
+                'request_record_to_dispatch_record': elapsed(dispatch['t_us'], request['t_us']) if dispatch else None,
+                'SRTCP_local_call_span': sr_span,
+                'request_record_to_first_authenticated_return': elapsed(first['t_us'], request['t_us']) if first else None,
+                'dispatch_record_to_first_authenticated_return': elapsed(dispatched_first['t_us'], dispatch['t_us'])
+                    if dispatched_first and dispatch else None,
+                'dispatch_record_to_first_post_dispatch_authenticated_observation':
+                    elapsed(first_postdispatch_observation['t_us'], dispatch['t_us'])
+                    if first_postdispatch_observation and dispatch else None,
+                'dispatch_timestamp_to_first_authenticated_dispatched_position':
+                    elapsed(dispatched_first['t_us'], dispatch_reference) if dispatched_first else None,
+                'serialized_selection_to_dispatch_reference':
+                    elapsed(dispatch_reference, mask['selection_us']) if dispatch_reference is not None and mask else None,
+                'embedded_request_to_first_authenticated_return': elapsed(first['t_us'], first['requested_us']) if first else None,
+                'first_authenticated_return_to_first_accepted_AU_observation':
+                    elapsed(accepted_same_first['t_us'], first['t_us']) if accepted_same_first and first else None},
+            'AU_observation_counts_by_stage': dict(Counter(r['AU_stage'] for r in au)),
+            'reorder_observation_counts_by_decision': dict(Counter(r['decision'] for r in stages['NACK_REORDER_RESULT'])),
+            'reorder_observation_counts_by_admission_outcome':
+                dict(Counter(r['admission_outcome'] for r in stages['NACK_REORDER_RESULT'])),
+            'reorder_rejection_observation_counts_by_subreason':
+                dict(Counter(r['rejection_subreason'] for r in stages['NACK_REORDER_RESULT']
+                    if r['decision_code'] == 1)),
+            'accepted_AU_observation_is_presented_image': False,
+            'accepted_AU_observation_establishes_successful_Decode_feed': False,
+            'accepted_AU_observation_establishes_native_Decode_output': False,
+            'later_return_proves_NACK_delivery_or_retransmission': False,
+            'no_return_record_proves_no_remote_return': False})
+    counter_rows = [r for r in rows if r['event'] == 29]
+    latest = {}
+    for row in counter_rows:
+        latest[(row['source'], row['counter_epoch'], row['counter_id'])] = row
+    tracking_ids = {21, 22, 23, 35, 36, 37, 100, 103, 104, 106, 107, 108, 109}
+    tracking_rows = [r for r in latest.values() if r['counter_id'] in tracking_ids]
+    coverage.update(retained_functional_tracking_limit_snapshots=tracking_rows,
+        functional_tracking_limit_observed=any(r['value'] for r in tracking_rows),
+        global_ticket_counters_include_unknown_source=True,
+        absent_tracking_counter_is_zero=False,
+        missing_tracking_counter_ids=sorted(tracking_ids-{r['counter_id'] for r in tracking_rows}),
+        authenticated_return_absence_claims_permitted=False)
+    configured_states = [r for r in states if not r['closing_observation']]
+    configuration = configured_states[-1] if configured_states else None
+    checked_states = [r for r in configured_states if r['answer_checked'] is True and
+        configuration and r['request_epoch'] == configuration['request_epoch']]
+    feedback_result = checked_states[-1] if checked_states else None
+    return {'available': True, 'experiment_enabled': configuration['experiment_enabled'] if configuration else None,
+        'answer_checked': True if feedback_result else None,
+        'remote_feedback_accepted': feedback_result['remote_feedback_accepted'] if feedback_result else None,
+        'effective_requests_enabled': configuration['experiment_enabled'] and feedback_result['remote_feedback_accepted']
+            if configuration and feedback_result else None,
+        'feedback_result_scope': 'latest retained checked result in current configuration epoch; not proof of final state',
+        'latest_retained_answer_check_result': feedback_result,
+        'feedback_state_at_stop_established': False,
+        'closing_observation_retained': any(r['closing_observation'] for r in states),
+        'retained_state_observations': states, 'coverage': coverage,
+        'request_correlations': requests,
+        'orphan_or_ambiguous_request_stage_records': [r for r in rows if (19 <= r['event'] <= 26 or r['event'] == 30)
+            and key(r) not in correlated_keys],
+        'retained_detection_observations': [r for r in rows if r['event'] == 18],
+        'retained_suppression_observations': [r for r in rows if r['event'] == 28],
+        'latest_retained_counter_snapshots': sorted(latest.values(),
+            key=lambda r: (r['counter_epoch'], r['source'], r['counter_id'])),
+        'counter_snapshot_duplicates_not_summed': len(counter_rows)-len(latest),
+        'limitations': ['NACK request, dispatch, SRTCP result and local send are distinct local observations.',
+            'A local successful send is not acknowledgment or proof of delivery to the server.',
+            'A later authenticated original packet may be delayed/reordered rather than retransmitted.',
+            'Only retained validated dispatch-mask bits describe actually selected positions; the original gap can be larger.',
+            'The mask clock is serialized selection; a later arrival can race packet construction before transport dispatch.',
+            'Returns before dispatch are distinct observations, not evidence of a response or automatic state cancellation.',
+            'Post-dispatch duplicate observations do not qualify as first-arrival repair candidates or post-dispatch completion.',
+            'First-arrival candidates use explicit producer flags; missing first-arrival records remain unknown, not no delivery.',
+            'Only a retained non-closing STATE with flag16 observes a completed remote Answer check; attach/media STATE is unknown.',
+            'Feedback summaries use retained checked results in the current configuration epoch; omitted later observations can hide a change.',
+            'Extended sequence identity is source and request epoch local; SSRC changes and resync epochs remain separate.',
+            'Missing critical records and evicted watch ranges prevent absence claims.',
+            'Request-to-return times are local observed spans, not server RTT or capture age.',
+            'AU stage2 means acceptance by the recovery filter before Decode feed, not a successful feed, native output or presented image.',
+            'Reorder code1 also covers occupied slots/invalid input; only its explicit flag1 proves behind worker expected before insertion.',
+            'The decoder has no returned PTS; no compressed input is assigned to the latest native output.',
+            'Counter snapshots are cumulative per epoch and must not be added as independent deltas.']}
+
+
 def critical_analysis(p):
     cr = p['critical']
     if cr is None:
@@ -551,6 +896,8 @@ def critical_analysis(p):
                 item['preceding_SRTP_INPUT_observation_established'] = False
         elif row['event'] == 16:
             item.update(previous_stage_us=row['b'], measured_delay_us=row['c'])
+        if 18 <= row['event'] <= 30:
+            item = nack_record(item)
         timeline.append(item)
     # Exact modular range identities only. Overlapping but nonidentical ranges
     # are not silently equated; RTX PT/SSRC remain separate unless a recorded
@@ -658,6 +1005,11 @@ def critical_analysis(p):
         elif r['identity'] == 23:
             item.update(process_trace_bindings=r['a'], process_global_sink=bool(r['b']),
                         transport_owner_epoch_association_available=bool(r['c']))
+        elif r['identity'] == 24:
+            item.update(local_feedback_check_error=signed(r['a']),
+                        answer_checked=None, remote_feedback_accepted=None,
+                        error_establishes_feedback_not_supported=False,
+                        media_session_failure_established=False)
         settings.append(item)
     return {'available': True, 'schema': 'X4CRIT2/v2', 'stages': stages,
         'coverage': {'retained_records': h[5], 'critical_attempts': h[6],
@@ -678,6 +1030,7 @@ def critical_analysis(p):
             'context_retention_omissions': h[22]},
         'AU_stage_totals': au,
         'retained_negotiation_and_RTX_settings': settings,
+        'receiver_NACK': nack_analysis(cr, timeline),
         'exact_range_candidate_groups': groups,
         'retained_gap_chronology': sorted(chronology, key=lambda r: (r['t_us'], r['ordinal'])),
         'retained_critical_timeline': timeline,

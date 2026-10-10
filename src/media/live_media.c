@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_media.h"
 #include "video_ingress.h"
+#include "../streaming/rtc_receive_diag.h"
 #include "../video/live_h264.h"
 #include "../video/display.h"
 #include "../audio/live_audio.h"
@@ -186,6 +187,11 @@ struct X4LiveMedia {
     unsigned diagnostic_worker_phase; /* Worker-owned phase restored after mailbox publication. */
     uint64_t reset_counts[RESET_COUNT], discard_counts[RESET_COUNT], damage_counts[13];
     X4VideoIngress ingress; /* Video only; the original ring stays in audio. */
+    /* Numeric tickets follow the existing publication and reorder ownership.
+     * They never change admission, ordering, recovery or decoder scheduling. */
+    X4IngressTicket reorder_tickets[128], au_tickets[128];
+    unsigned au_ticket_count;
+    uint64_t au_ticket_omissions, reorder_ticket_omissions;
     atomic_uint callback_active, callback_peak;
     atomic_uint_fast64_t callback_calls, callback_overlap, callback_us, callback_max_us;
     atomic_uint_fast64_t reserve_us, reserve_max_us, rx_invalid;
@@ -241,8 +247,20 @@ static void note_damage(X4LiveMedia *m, uint32_t bit)
     }
     m->damage_bits |= bit;
 }
+static void nack_au_stage(X4LiveMedia *m, unsigned stage)
+{
+    uint64_t now = x4_trace_now_us();
+    for (unsigned i=0;i<m->au_ticket_count;++i) {
+        const X4IngressTicket *t=&m->au_tickets[i];
+        x4_trace_monitor_critical(m->trace, now, X4_MON_CR_NACK_AU_CONTRIBUTION,
+            0xffffu, stage == 4 && atomic_load(&m->stop) ? 1u : 0u,
+            t->identity, t->source, m->trace_au, stage, t->extended_sequence);
+    }
+}
 static void reset_au(X4LiveMedia *m, bool gap, unsigned reason, unsigned detail)
 {
+    if (gap && m->au_ticket_count) nack_au_stage(m, 4);
+    m->au_ticket_count = 0;
     bool waiting_before = m->waiting_keyframe;
     if (reason < RESET_COUNT) ++m->reset_counts[reason];
     uint16_t flags = (gap ? 1u : 0u) | (m->au_open ? 2u : 0u) | (m->fu ? 4u : 0u) |
@@ -288,12 +306,19 @@ static bool nal(X4LiveMedia *m, const uint8_t *p, size_t size)
     if (!append(m, (const uint8_t *)"\0\0\0\1", 4) || !append(m, p, size)) return false;
     cache_nal(m, p, size); return true;
 }
-static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
+static void depacketize(X4LiveMedia *m, const X4LiveRtp *r, const X4IngressTicket *ticket)
 {
     if (m->au_open && m->timestamp != r->timestamp) reset_au(m, true, RESET_TIMESTAMP, 0);
     if (!m->au_open) {
         m->au_open = true; m->timestamp = r->timestamp; m->trace_au = ++m->trace_au_next;
         x4_trace_record(m->trace, MT_AU_OPEN, m->waiting_keyframe ? 1u : 0u, m->trace_au, r->sequence);
+    }
+    if (ticket && ticket->identity) {
+        if (m->au_ticket_count < 128) {
+            m->au_tickets[m->au_ticket_count++] = *ticket;
+            x4_trace_monitor_critical(m->trace, x4_trace_now_us(), X4_MON_CR_NACK_AU_CONTRIBUTION,
+                0xffffu, 0, ticket->identity, ticket->source, m->trace_au, 0, ticket->extended_sequence);
+        } else ++m->au_ticket_omissions;
     }
     if (m->discard_timestamp_valid) {
         if (r->timestamp == m->discard_timestamp) { note_damage(m, DM_DISCARDED); m->damaged = true; }
@@ -347,11 +372,13 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
         (m->idr ? 1u : 0u) | (m->waiting_keyframe ? 2u : 0u) |
         (m->sps_size || m->au_sps_size ? 4u : 0u) |
         (m->pps_size || m->au_pps_size ? 8u : 0u), m->trace_au, m->au_size);
+    nack_au_stage(m, 1);
     /* Parameter sets are committed only after the complete AU is valid.
      * A damaged STAP-A/FU-A cannot poison a later keyframe's cache. */
     if (m->au_sps_size) { memcpy(m->sps, m->au_sps, m->au_sps_size); m->sps_size = m->au_sps_size; }
     if (m->au_pps_size) { memcpy(m->pps, m->au_pps, m->au_pps_size); m->pps_size = m->au_pps_size; }
     if (m->waiting_keyframe && (!m->idr || !m->sps_size || !m->pps_size)) {
+        nack_au_stage(m, 3);
         x4_trace_record(m->trace, X4_TRACE_AU_FILTER_REJECT,
             (!m->idr ? 1u : 0u) | (!m->sps_size ? 2u : 0u) |
             (!m->pps_size ? 4u : 0u), m->trace_au, m->au_size);
@@ -365,6 +392,9 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
     x4_trace_record(m->trace, X4_TRACE_AU_VALID,
         (m->idr ? X4_TRACE_F_IDR : 0u) | (m->waiting_keyframe ? 1u : 0u),
         m->trace_au, m->au_size);
+    /* Recovery accepted this AU for Decode; feed/output success is separate
+     * and is not implied by this pre-Decode event. */
+    nack_au_stage(m, 2);
     ++m->au_submitted;
     m->video.trace_au = m->trace_au;
     x4_trace_record(m->trace, MT_SUBMIT_BEGIN, m->waiting_keyframe ? 1u : 0u, m->trace_au, m->au_size);
@@ -487,7 +517,12 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
     x4_trace_monitor_rx(m->trace, X4_MON_RX_VIDEO, parsed >= 0,
         parsed >= 0 ? r.ssrc : 0, parsed >= 0 ? r.sequence : 0, size, callback_begin);
     X4IngressResult result = { .reason = X4_INGRESS_INVALID };
-    bool pushed = parsed >= 0 && x4_video_ingress_push(&m->ingress, p, size, callback_begin, &result);
+    X4NackPacket delivered = x4_rtc_nack_delivery_ticket();
+    X4IngressTicket ticket = {delivered.identity, delivered.source, delivered.extended_sequence, delivered.rtp_timestamp};
+    uint64_t source = parsed >= 0 ? (1ull<<63) | ((uint64_t)r.payload_type<<32) | r.ssrc : 0;
+    if (parsed < 0 || ticket.source != source || (uint16_t)ticket.extended_sequence != r.sequence ||
+        ticket.rtp_timestamp != r.timestamp) ticket = (X4IngressTicket){0};
+    bool pushed = parsed >= 0 && x4_video_ingress_push_ticket(&m->ingress, p, size, callback_begin, &result, &ticket);
     if (parsed < 0) atomic_fetch_add_explicit(&m->rx_invalid, 1, memory_order_relaxed);
     if (parsed < 0 || !pushed) {
         atomic_fetch_add(&m->dropped, 1); atomic_store(&m->ingress_gap, true); atomic_store(&m->keyframe, true);
@@ -557,7 +592,13 @@ static void drain_reordered(X4LiveMedia *m, uint64_t begin, uint64_t decode_begi
         }
         X4LiveRtp r; if (x4_live_rtp_parse(p, size, &r) == 0) {
             x4_trace_record(m->trace, MT_REORDER_EMIT, r.marker ? X4_TRACE_F_MARKER : 0u, r.sequence, size);
-            depacketize(m, &r);
+            X4IngressTicket ticket = m->reorder_tickets[r.sequence & 127u];
+            m->reorder_tickets[r.sequence & 127u] = (X4IngressTicket){0};
+            if (ticket.identity && ((uint16_t)ticket.extended_sequence != r.sequence ||
+                (uint32_t)ticket.source != r.ssrc || ticket.rtp_timestamp != r.timestamp)) {
+                ++m->reorder_ticket_omissions; ticket = (X4IngressTicket){0};
+            }
+            depacketize(m, &r, &ticket);
         }
     }
 }
@@ -830,7 +871,8 @@ static void video_batch(X4LiveMedia *m)
         if (tick_budget(m, begin, decode_begin)) break;
         uint64_t arrival = 0;
         uint64_t pop_before = atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed);
-        size_t size = x4_video_ingress_pop(&m->ingress, packet, &arrival);
+        X4IngressTicket ticket = {0};
+        size_t size = x4_video_ingress_pop_ticket(&m->ingress, packet, &arrival, &ticket);
         if (!size) {
             if (atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed) != pop_before)
                 x4_trace_record(m->trace, MT_POP_CONTENDED, X4_TRACE_REASON(X4_TRACE_R_POP_CONTENDED),
@@ -855,6 +897,7 @@ static void video_batch(X4LiveMedia *m)
             atomic_fetch_add(&m->dropped, 1); continue;
         }
         if (track == X4_LIVE_TRACK_NEW) {
+            memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
             x4_trace_record(m->trace, MT_TRACK, locked ? 1u : 0u, ++m->trace_track_epoch, r.sequence);
             reset_au(m, true, RESET_TRACK, locked ? 1u : 0u); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
             if (locked) {
@@ -865,7 +908,22 @@ static void video_batch(X4LiveMedia *m)
             }
         }
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
+        /* LATE also includes occupied slots. Observe the owning worker's
+         * pre-insert state without changing the reorder decision. */
+        unsigned nack_reject = 4u;
+        if (ticket.identity && m->reorder.window && size && size <= X4_LIVE_RTP_MAX) {
+            if (m->reorder.started && (int16_t)(r.sequence - expected) < 0)
+                nack_reject = 1u;
+            else if (m->reorder.slots[r.sequence & (m->reorder.window - 1u)].used)
+                nack_reject = 2u;
+        }
         int rc = x4_live_reorder_insert(&m->reorder, packet, size, r.sequence, sceKernelGetProcessTime());
+        if (rc == X4_LIVE_REORDER_JUMP) memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
+        if (ticket.identity) x4_trace_monitor_critical(m->trace, x4_trace_now_us(),
+            X4_MON_CR_NACK_REORDER_RESULT, 0xffffu,
+            rc == X4_LIVE_REORDER_LATE ? nack_reject : 0, ticket.identity, ticket.source,
+            ticket.extended_sequence, rc, ticket.identity & UINT32_MAX);
+        if (rc != X4_LIVE_REORDER_LATE) m->reorder_tickets[r.sequence & 127u] = ticket;
         if (rc == X4_LIVE_REORDER_JUMP)
             x4_trace_record(m->trace, X4_TRACE_REORDER_WINDOW_JUMP, 0,
                 ((uint64_t)expected << 32) | r.sequence, buffered);
@@ -1106,6 +1164,11 @@ int x4_live_media_close(X4LiveMedia *m)
     X4LiveMediaSnapshot final_ingress, zero = {0};
     x4_live_media_snapshot(m, &final_ingress);
     report_ingress(&final_ingress, &zero, true);
+    if (m->au_ticket_count) nack_au_stage(m,4); /* Partial AU abandoned by explicit shutdown. */
+    x4_trace_monitor_critical(m->trace, x4_trace_now_us(), X4_MON_CR_NACK_COUNTER,
+        0xffffu, 0, 0, 0, 107, m->au_ticket_omissions, 0);
+    x4_trace_monitor_critical(m->trace, x4_trace_now_us(), X4_MON_CR_NACK_COUNTER,
+        0xffffu, 0, 0, 0, 108, m->reorder_ticket_omissions, 0);
     if (!x4_video_ingress_free(&m->ingress)) return X4_LIVE_ERR_STATE;
     /* Closed-session totals are independent of trace-window admission/caps. */
     for (unsigned i = 0; i < RESET_COUNT; ++i)

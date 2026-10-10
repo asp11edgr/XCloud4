@@ -18,6 +18,11 @@ CFLAGS += -DX4_INGRESS_BASELINE
 else ifneq ($(X4_INGRESS_MODE),mpsc)
 $(error X4_INGRESS_MODE must be mpsc or baseline)
 endif
+X4_RECEIVER_NACK ?= 0
+ifneq ($(filter $(X4_RECEIVER_NACK),0 1),$(X4_RECEIVER_NACK))
+$(error X4_RECEIVER_NACK must be 0 or 1)
+endif
+CFLAGS += -DX4_RECEIVER_NACK=$(X4_RECEIVER_NACK)
 CXXFLAGS := $(filter-out -std=c23,$(CFLAGS)) -std=c++17 -nostdinc++ -isystem $(SDK)/include/c++/v1
 LDFLAGS := -m elf_x86_64 -pie --script $(SDK)/link.x --eh-frame-hdr -L$(SDK)/lib
 RTC_LIBS := $(X4_WEBRTC_ROOT)/build-datachannel/libdatachannel-static.a \

@@ -767,6 +767,58 @@ static void test_window_pre_reservation_and_duplicate(void)
     free(d.data);CHECK(x4_monitor_free(m));
     puts("PASS bounded prehistory reserves episode capacity and prevents duplicate windows");
 }
+static void test_nack_events_keep_v2_layout(void)
+{
+    clock_reset(); X4Monitor *m=x4_monitor_create(33,4); CHECK(m!=NULL);
+    const uint64_t source=(UINT64_C(1)<<63)|(UINT64_C(102)<<32)|42;
+    const uint64_t request=(UINT64_C(7)<<32)|1;
+    x4_monitor_critical(m,1000000,X4_MON_CR_NACK_STATE,0xffffu,0,
+        UINT64_C(7)<<32,source,1,64,(UINT64_C(16)<<32)|64);
+    x4_monitor_critical(m,1000001,X4_MON_CR_NACK_DETECT,0xffffu,1,
+        9,source,65535,65536,65537);
+    x4_monitor_critical(m,1000010,X4_MON_CR_NACK_REQUEST,0xffffu,0,
+        request,source,65535,65536,1000001);
+    x4_monitor_critical(m,1000020,X4_MON_CR_NACK_DISPATCH,0xffffu,0,
+        request,source,65535,65536,1000010);
+    x4_monitor_critical(m,1000030,X4_MON_CR_NACK_SRTCP_BEGIN,0xffffu,0,
+        request,source,0,20,1000020);
+    x4_monitor_critical(m,1000040,X4_MON_CR_NACK_SRTCP_RESULT,0xffffu,1,
+        request,source,UINT64_MAX,30,1000020);
+    x4_monitor_critical(m,1000050,X4_MON_CR_NACK_LOCAL_SEND_RESULT,0xffffu,0,
+        request,source,0,30,1000020);
+    x4_monitor_critical(m,1000100,X4_MON_CR_NACK_AUTH_RETURN,0xffffu,1,
+        request,source,65535,12345,1000010);
+    x4_monitor_critical(m,1000101,X4_MON_CR_NACK_REORDER_RESULT,0xffffu,0,
+        request,source,65535,0,1);
+    x4_monitor_critical(m,1000102,X4_MON_CR_NACK_AU_CONTRIBUTION,0xffffu,0,
+        request,source,22,2,65535);
+    x4_monitor_critical(m,1000103,X4_MON_CR_NACK_SUPPRESS,0xffffu,0,
+        10,source,2,65,10);
+    x4_monitor_critical(m,1000104,X4_MON_CR_NACK_COUNTER,0xffffu,0,
+        UINT64_C(7)<<32,source,14,1,7);
+    x4_monitor_critical(m,1000105,X4_MON_CR_NACK_DISPATCH_MASK,0xffffu,0,
+        request,source,65535,3,1000020);
+    finish_unstarted(m); Dump d=export_dump(m);
+    CHECK(d.ch[4]==4096 && d.ch[5]==13 && d.ch[6]==13);
+    CHECK(d.ch[7]==0 && d.ch[8]==0 && d.ch[12]==32);
+    for(unsigned event=18;event<=30;++event){
+        CHECK(word(&d,d.critical_offset+256+event*8)==1);
+        CHECK(word(&d,d.critical_offset+256+32*8+event*8)==0);
+    }
+    size_t records=critical_records_offset(&d);
+    CHECK((word(&d,records+2*8)&0xffffu)==27);
+    CHECK(word(&d,records+3*8)==source);
+    CHECK(word(&d,records+6*8)==((UINT64_C(16)<<32)|64));
+    CHECK(word(&d,records+5*64+4*8)==UINT64_MAX);
+    CHECK(word(&d,records+7*64+1*8)==request);
+    CHECK(word(&d,records+7*64+4*8)==65535);
+    CHECK(word(&d,records+11*64+7*8)==12);
+    CHECK((word(&d,records+12*64+2*8)&0xffffu)==30);
+    CHECK(word(&d,records+12*64+5*8)==3);
+    CHECK(word(&d,records+12*64+7*8)==13);
+    free(d.data); CHECK(x4_monitor_free(m));
+    puts("PASS sparse NACK stages preserve v2 capacities, signed status and source/request identities");
+}
 static void test_disabled_and_lifetime(void)
 {
     clock_reset();
@@ -821,6 +873,7 @@ int main(void)
     test_transport_wrap_and_late();
     test_critical_ring_and_au_separation();
     test_window_pre_reservation_and_duplicate();
+    test_nack_events_keep_v2_layout();
     test_disabled_and_lifetime();
     alarm(0);
     puts("PASS progress-monitor host campaign; native scheduling/overhead unverified");

@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-static atomic_uint calls, reject_calls, setting_calls;
+static atomic_uint calls, reject_calls, setting_calls, nack_calls;
 static atomic_bool hold, entered, release_hook, detached;
 static bool last_valid;
 static uint32_t last_ssrc, last_flags;
@@ -36,7 +36,10 @@ void x4_trace_monitor_transport_reject(X4Trace *t,unsigned stage,unsigned reason
 void x4_trace_monitor_critical(X4Trace *t,uint64_t time,unsigned event,unsigned stage,
     uint32_t flags,uint64_t identity,uint64_t source,uint64_t a,uint64_t b,uint64_t c)
 {(void)time;(void)flags;(void)identity;(void)source;(void)a;(void)b;(void)c;assert(t==handle);
- assert(event==X4_MON_CR_RTC_SETTING&&stage==0xffffu);atomic_fetch_add(&setting_calls,1);}
+ assert(stage==0xffffu);
+ if(event==X4_MON_CR_RTC_SETTING) atomic_fetch_add(&setting_calls,1);
+ else if(event==X4_MON_CR_NACK_REQUEST) atomic_fetch_add(&nack_calls,1);
+ else { assert(event==X4_MON_CR_NACK_COUNTER && a==109); }}
 static void *producer(void *unused)
 {(void)unused;uint8_t p[12]={0x80,102,0,1};x4_rtc_receive_packet(X4_RD_UDP,p,sizeof(p),0,1);return NULL;}
 static void *detacher(void *unused)
@@ -67,6 +70,15 @@ int main(void)
     unsigned settings_before=atomic_load(&setting_calls);
     x4_rtc_receive_setting(4,6,0,0);assert(setting_calls==settings_before+1);
     puts("PASS independent reject, settings and delivery clock");
+    errno=E2BIG;x4_rtc_nack_event(X4_MON_CR_NACK_REQUEST,0,3,4,5,6,7);
+    assert(errno==E2BIG && atomic_load(&nack_calls)==1);
+    x4_rtc_nack_delivery(0x100000002ull,0x8000006612345678ull,65536,789);
+    X4NackPacket ticket=x4_rtc_nack_delivery_ticket();
+    assert(ticket.identity==0x100000002ull && ticket.source==0x8000006612345678ull &&
+        ticket.extended_sequence==65536 && ticket.rtp_timestamp==789);
+    x4_rtc_nack_delivery(0,0,0,0);ticket=x4_rtc_nack_delivery_ticket();
+    assert(!ticket.identity && !ticket.source && !ticket.extended_sequence && !ticket.rtp_timestamp);
+    puts("PASS numeric NACK critical observation and clearing of delivery tickets");
     atomic_store(&hold,true);pthread_t writer,closer;
     assert(!pthread_create(&writer,NULL,producer,NULL));while(!atomic_load(&entered))usleep(50);
     assert(!pthread_create(&closer,NULL,detacher,NULL));usleep(10000);assert(!atomic_load(&detached));
@@ -81,5 +93,5 @@ int main(void)
     simulated_id=100;assert(x4_rtc_receive_socket_time()==0);
     assert(x4_rtc_receive_delivery_time()==0);
     puts("PASS bounded thread identity registry returns unknown when full");
-    puts("7 receive bridge cases passed");return 0;
+    puts("8 receive bridge cases passed");return 0;
 }

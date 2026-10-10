@@ -21,6 +21,16 @@ if [[ ${X4_DIAG_SANITIZERS:-1} == 1 ]]; then
             exit 1
         fi
         cat "$TEMP/sanitizer-build.log"
-        "$TEMP/receive-sanitized"
+        if "$TEMP/receive-sanitized" >"$TEMP/sanitizer-run.log" 2>&1; then
+            cat "$TEMP/sanitizer-run.log"
+        else
+            status=$?
+            cat "$TEMP/sanitizer-run.log"
+            if [[ "$sanitizer" == thread ]] && grep -Eq 'FATAL: ThreadSanitizer: (unexpected memory mapping|unsupported)' "$TEMP/sanitizer-run.log"; then
+                printf 'UNAVAILABLE sanitizer %s runtime; not a race-free result\n' "$sanitizer"
+            else
+                exit "$status"
+            fi
+        fi
     done
 fi

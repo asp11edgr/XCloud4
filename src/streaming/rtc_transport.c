@@ -17,6 +17,10 @@
 #define CANDIDATE_COUNT 64u
 #define CALLBACK_SLOTS 64u
 #define INPUT_INTERVAL_USEC 16667u
+#ifndef X4_RECEIVER_NACK
+#define X4_RECEIVER_NACK 0
+#endif
+#define NACK_POLL_USEC 500u
 
 _Static_assert(sizeof(double) == 8, "Xbox input uses a float64 timestamp");
 
@@ -46,6 +50,10 @@ struct X4Rtc {
     void *input_user;
     OrbisPthread input_thread;
     bool input_thread_started;
+    OrbisPthread nack_thread;
+    bool nack_thread_started;
+    atomic_bool nack_stop;
+    uint32_t nack_epoch;
     int input_join_error;
     uint32_t input_sequence;
     atomic_bool input_stop, input_ready, input_metadata_sent, startup_complete;
@@ -76,6 +84,19 @@ static void fail(X4Rtc *rtc, int error)
 {
     atomic_store(&rtc->error, error);
     atomic_store(&rtc->state, X4_RTC_FAILED);
+}
+/* Identical observer/dispatcher scheduling in ON and OFF builds. Reception
+ * only creates bounded numeric requests; existing protected transport sends
+ * happen here, never while the receive state gate is held. A 500us sleep is
+ * a requested cadence, not a promised dispatch deadline. */
+static void *nack_sender(void *pointer)
+{
+    X4Rtc *rtc = pointer;
+    while (!atomic_load_explicit(&rtc->nack_stop, memory_order_acquire)) {
+        (void)x4_rtc_poll_receiver_nack(rtc->video);
+        sceKernelUsleep(NACK_POLL_USEC);
+    }
+    return NULL;
 }
 
 /* Structural diagnostics only. Never print input strings: the SDP contains
@@ -613,6 +634,7 @@ X4Rtc *x4_rtc_open(int *error)
     atomic_init(&rtc->video_packets, 0);
     atomic_init(&rtc->audio_packets, 0);
     atomic_init(&rtc->input_stop,false);atomic_init(&rtc->input_ready,false);
+    atomic_init(&rtc->nack_stop,false);
     atomic_init(&rtc->input_metadata_sent,false);atomic_init(&rtc->startup_complete,false);
     atomic_init(&rtc->input_error,0);
     atomic_init(&rtc->input_packets,0);atomic_init(&rtc->input_dropped,0);
@@ -621,6 +643,7 @@ X4Rtc *x4_rtc_open(int *error)
     if (slots_used < CALLBACK_SLOTS) { rtc->slot=&slots[slots_used++]; rtc->slot->context=rtc; }
     unlock(&callback_gate);
     if (!rtc->slot) { free(rtc); rc=-45; goto fail_no_context; }
+    rtc->nack_epoch = (uint32_t)(rtc->slot - slots) + 1u;
     rtcInitLogger(RTC_LOG_NONE, NULL); /* Raw dependency logs can contain ICE credentials. */
     /* Explicit application policy: four RTC workers. The SDK's precompiled
      * hardware_concurrency probe reported200112 workers in the actual0.7.1
@@ -664,6 +687,7 @@ X4Rtc *x4_rtc_open(int *error)
         CHECK(rtcChainRtcpReceivingSession(tracks[i]));
         CHECK(rtcSetMessageCallback(tracks[i],rtp_callback));
     }
+    CHECK(x4_rtc_configure_receiver_nack(rtc->video, X4_RECEIVER_NACK, rtc->nack_epoch));
     const char *labels[]={"chat","control","input","message"};
     const char *protocols[]={"chatV1","controlV1","1.0","messageV1"};
     for(unsigned i=0;i<4;++i) {
@@ -697,10 +721,9 @@ void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
     if (rtc) {
         rtc->diagnostic_trace = trace;
         x4_rtc_receive_attach(trace);
-        /* ReceivingSession chained; no receiver NACK generator or sender
-         * NackResponder is configured by XCloud4. The vendor getter observes
-         * existing handler state without changing it. */
-        x4_rtc_receive_setting(20, 1, 0, 0);
+        x4_rtc_receive_setting(20, 1, 1, 0); /* ReceivingSession, receiver generator, sender responder */
+        x4_rtc_nack_event(X4_MON_CR_NACK_STATE, 4u | (X4_RECEIVER_NACK ? 1u : 0u),
+            (uint64_t)rtc->nack_epoch<<32, 0, X4_RECEIVER_NACK, 64, (16ull<<32)|64);
         (void)x4_rtc_receive_track_config(rtc->audio);
         (void)x4_rtc_receive_track_config(rtc->video);
     }
@@ -771,8 +794,19 @@ int x4_rtc_set_remote_description(X4Rtc *rtc,const char *sdp)
     if(rc<0) fail(rtc,rc);
     else {
         sdp_receive_shape(sdp,strlen(sdp),1);
+        int nack_rc = x4_rtc_receiver_nack_accept(rtc->video, rtc->pc);
+        /* The experiment must not turn an unavailable feedback observation
+         * into a media-session failure, especially in the OFF reference.
+         * A fresh generator stays disabled unless the Answer check succeeds. */
+        if (nack_rc < 0)
+            x4_rtc_receive_setting(24, (uint64_t)(int64_t)nack_rc, 0, 0);
         (void)x4_rtc_receive_track_config(rtc->audio);
         (void)x4_rtc_receive_track_config(rtc->video);
+        if (!rtc->nack_thread_started) {
+            int thread_rc = scePthreadCreate(&rtc->nack_thread, NULL, nack_sender, rtc, "XCloud4Nack");
+            if (thread_rc) { fail(rtc, thread_rc); return thread_rc; }
+            rtc->nack_thread_started = true;
+        }
     }
     return rc;
 }
@@ -812,6 +846,22 @@ int x4_rtc_request_keyframe(X4Rtc *rtc)
 int x4_rtc_close(X4Rtc *rtc)
 {
     if(!rtc)return 0;
+    atomic_store_explicit(&rtc->nack_stop,true,memory_order_release);
+    if (rtc->nack_thread_started) {
+        int rc=scePthreadJoin(rtc->nack_thread,NULL);
+        if (rc) { fail(rtc,rc); return rc; } /* Preserve context on join failure. */
+        rtc->nack_thread_started=false;
+    }
+    if (rtc->video>=0) {
+        uint64_t deadline=sceKernelGetProcessTime()+100000u;
+        int rc;
+        do {
+            rc=x4_rtc_close_receiver_nack(rtc->video);
+            if (!rc) break;
+            if (rc != -1 || sceKernelGetProcessTime()>=deadline) { fail(rtc,rc); return rc; }
+            sceKernelUsleep(50); /* Shutdown owner only; incoming never waits. */
+        } while (true);
+    }
     atomic_store(&rtc->input_stop,true);
     if(rtc->input_thread_started) {
         int rc=scePthreadJoin(rtc->input_thread,NULL);

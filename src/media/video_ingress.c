@@ -68,8 +68,8 @@ static void highwater(X4VideoIngress *q, unsigned depth)
         if (atomic_compare_exchange_strong_explicit(&q->highwater, &old, depth,
             memory_order_relaxed, memory_order_relaxed)) break;
 }
-bool x4_video_ingress_push(X4VideoIngress *q, const uint8_t *p, size_t size,
-    uint64_t arrival, X4IngressResult *result)
+bool x4_video_ingress_push_ticket(X4VideoIngress *q, const uint8_t *p, size_t size,
+    uint64_t arrival, X4IngressResult *result, const X4IngressTicket *ticket)
 {
     X4IngressResult r = { .reason = X4_INGRESS_INVALID };
     if (!q || !q->capacity) { if (result) *result = r; return false; }
@@ -98,6 +98,7 @@ bool x4_video_ingress_push(X4VideoIngress *q, const uint8_t *p, size_t size,
             HOOK(q, X4_INGRESS_AFTER_RESERVE, position);
             X4IngressSlot *slot = &q->slots[position & (q->capacity - 1)];
             memcpy(slot->data, p, size); slot->size = (uint16_t)size;
+            slot->ticket = ticket ? *ticket : (X4IngressTicket){0};
             atomic_store_explicit(&slot->arrival_us, arrival, memory_order_relaxed);
             atomic_store_explicit(&slot->ready, true, memory_order_release);
             atomic_store_explicit(&q->enqueue, position + 1, memory_order_relaxed);
@@ -129,6 +130,7 @@ bool x4_video_ingress_push(X4VideoIngress *q, const uint8_t *p, size_t size,
             HOOK(q, X4_INGRESS_AFTER_RESERVE, position);
             X4IngressSlot *slot = &q->slots[position & (q->capacity - 1)];
             memcpy(slot->data, p, size); slot->size = (uint16_t)size;
+            slot->ticket = ticket ? *ticket : (X4IngressTicket){0};
             atomic_store_explicit(&slot->arrival_us, arrival, memory_order_relaxed);
             atomic_store_explicit(&slot->ready, true, memory_order_release);
             goto done;
@@ -152,9 +154,13 @@ done:
     if (result) *result = r;
     return r.reason == X4_INGRESS_OK;
 }
-size_t x4_video_ingress_pop(X4VideoIngress *q, uint8_t *out, uint64_t *arrival)
+bool x4_video_ingress_push(X4VideoIngress *q, const uint8_t *p, size_t size,
+    uint64_t arrival, X4IngressResult *result)
+{ return x4_video_ingress_push_ticket(q, p, size, arrival, result, NULL); }
+size_t x4_video_ingress_pop_ticket(X4VideoIngress *q, uint8_t *out, uint64_t *arrival, X4IngressTicket *ticket)
 {
     if (arrival) *arrival = 0;
+    if (ticket) *ticket = (X4IngressTicket){0};
     if (!q || !q->capacity || !out) return 0;
     atomic_fetch_add_explicit(&q->active_ops, 1, memory_order_acquire);
 #ifdef X4_INGRESS_BASELINE
@@ -170,6 +176,7 @@ size_t x4_video_ingress_pop(X4VideoIngress *q, uint8_t *out, uint64_t *arrival)
     size_t size = 0;
     if (atomic_load_explicit(&slot->ready, memory_order_acquire)) {
         size = slot->size; memcpy(out, slot->data, size);
+        if (ticket) *ticket = slot->ticket;
         if (arrival) *arrival = atomic_load_explicit(&slot->arrival_us, memory_order_relaxed);
         HOOK(q, X4_INGRESS_BEFORE_RELEASE, head);
         atomic_store_explicit(&slot->ready, false, memory_order_relaxed);
@@ -181,6 +188,8 @@ size_t x4_video_ingress_pop(X4VideoIngress *q, uint8_t *out, uint64_t *arrival)
     atomic_fetch_sub_explicit(&q->active_ops, 1, memory_order_release);
     return size;
 }
+size_t x4_video_ingress_pop(X4VideoIngress *q, uint8_t *out, uint64_t *arrival)
+{ return x4_video_ingress_pop_ticket(q, out, arrival, NULL); }
 void x4_video_ingress_stop(X4VideoIngress *q)
 { if (q) atomic_store_explicit(&q->accepting, false, memory_order_release); }
 bool x4_video_ingress_free(X4VideoIngress *q)

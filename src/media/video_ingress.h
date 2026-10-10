@@ -8,10 +8,12 @@
 enum { X4_INGRESS_PACKET_MAX = 2048, X4_INGRESS_RESERVE_ATTEMPTS = 16 };
 enum { X4_INGRESS_OK, X4_INGRESS_INVALID, X4_INGRESS_CONTENDED,
     X4_INGRESS_FULL, X4_INGRESS_STOPPED };
+typedef struct { uint64_t identity, source, extended_sequence, rtp_timestamp; } X4IngressTicket;
 typedef struct {
     atomic_bool ready;
     uint16_t size;
     atomic_uint_fast64_t arrival_us; /* independently sampled diagnostics */
+    X4IngressTicket ticket; /* published by the existing ready-release */
     uint8_t data[X4_INGRESS_PACKET_MAX];
 } X4IngressSlot;
 typedef struct {
@@ -40,6 +42,10 @@ int x4_video_ingress_init(X4VideoIngress *q, uint32_t capacity);
 bool x4_video_ingress_push(X4VideoIngress *q, const uint8_t *p, size_t size,
     uint64_t arrival_us, X4IngressResult *result);
 size_t x4_video_ingress_pop(X4VideoIngress *q, uint8_t *out, uint64_t *arrival_us);
+bool x4_video_ingress_push_ticket(X4VideoIngress *q, const uint8_t *p, size_t size,
+    uint64_t arrival_us, X4IngressResult *result, const X4IngressTicket *ticket);
+size_t x4_video_ingress_pop_ticket(X4VideoIngress *q, uint8_t *out,
+    uint64_t *arrival_us, X4IngressTicket *ticket);
 uint32_t x4_video_ingress_depth(const X4VideoIngress *q);
 uint64_t x4_video_ingress_oldest(const X4VideoIngress *q);
 void x4_video_ingress_stop(X4VideoIngress *q);

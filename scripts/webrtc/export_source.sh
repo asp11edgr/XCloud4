@@ -112,6 +112,14 @@ for name, url, expected in pins:
         if source.exists() or source.is_symlink():
             add(source, 'vendor/' + name + '/' + relative)
 
+# The NACK overlay adds this translation unit outside upstream Git tracking.
+# Include its actual build-tree bytes explicitly as well as its project copy.
+generator = rtc / 'libdatachannel/src/rtc_receiver_nack.cpp'
+if generator.read_bytes() != (project / 'src/streaming/rtc_receiver_nack.cpp').read_bytes():
+    raise SystemExit('Vendor NACK generator differs from its frozen project source')
+add(generator, 'vendor/libdatachannel/src/rtc_receiver_nack.cpp')
+components[0]['added_paths'] = ['src/rtc_receiver_nack.cpp']
+
 # Opus is the official release-tar tree, not a Git checkout. Builds reside in
 # the sibling build-opus directory and are never traversed by this exporter.
 opus = rtc / 'opus-1.5.2'
@@ -130,7 +138,7 @@ for current, dirs, files in os.walk(opus):
         source = pathlib.Path(current) / name
         add(source, 'vendor/opus-1.5.2/' + source.relative_to(opus).as_posix())
 
-for name in ('prepare_port.py', 'prepare_receive_diagnostics.py', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
+for name in ('prepare_port.py', 'prepare_receive_diagnostics.py', 'prepare_receiver_nack.py', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
     # build_native invokes the scripts in the project, not unrelated copies in
     # RTC_ROOT. Preserve those exact reproducible inputs in the source export.
     add(project / 'scripts/webrtc' / name, 'scripts/webrtc/' + name)

@@ -68,7 +68,13 @@ enum {
     X4_MON_CR_PLI_ATTEMPT, X4_MON_CR_PLI_RESULT, X4_MON_CR_AU_FILTER,
     X4_MON_CR_IDR_SEEN, X4_MON_CR_AU_PARAMETERS, X4_MON_CR_PRESENT_GAP_BEGIN,
     X4_MON_CR_PRESENT_GAP_END, X4_MON_CR_SEQUENCE_AMBIGUOUS,
-    X4_MON_CR_AU_DISCARD, X4_MON_CR_TRANSPORT_DELAY, X4_MON_CR_RTC_SETTING
+    X4_MON_CR_AU_DISCARD, X4_MON_CR_TRANSPORT_DELAY, X4_MON_CR_RTC_SETTING,
+    X4_MON_CR_NACK_DETECT, X4_MON_CR_NACK_REQUEST, X4_MON_CR_NACK_DISPATCH,
+    X4_MON_CR_NACK_SRTCP_BEGIN, X4_MON_CR_NACK_SRTCP_RESULT,
+    X4_MON_CR_NACK_LOCAL_SEND_RESULT, X4_MON_CR_NACK_AUTH_RETURN,
+    X4_MON_CR_NACK_REORDER_RESULT, X4_MON_CR_NACK_AU_CONTRIBUTION,
+    X4_MON_CR_NACK_STATE, X4_MON_CR_NACK_SUPPRESS, X4_MON_CR_NACK_COUNTER,
+    X4_MON_CR_NACK_DISPATCH_MASK
 };
 enum {
     X4_MON_CR_CAP = 4096, X4_MON_CR_EVENT_CAP = 32,
@@ -81,6 +87,31 @@ enum {
  * event-specific numeric fields, and independent critical ordinal. */
 typedef struct { uint64_t w[8]; } X4MonitorCritical;
 _Static_assert(sizeof(X4MonitorCritical) == 64, "critical diagnostic ABI");
+_Static_assert(X4_MON_CR_NACK_DETECT == 18 && X4_MON_CR_NACK_COUNTER == 29 &&
+    X4_MON_CR_NACK_DISPATCH_MASK == 30 &&
+    (int)X4_MON_CR_NACK_DISPATCH_MASK < (int)X4_MON_CR_EVENT_CAP,
+    "NACK uses existing v2 event slots");
+/* NACK source: bit63 | (original payload type102 <<32) | SSRC. Request
+ * identity: session epoch high32 and session request ordinal low32. The
+ * extended sequence is source/epoch local, not a cross-source packet ID.
+ * DETECT: identity gap, a first missing, b last missing (inclusive), c received.
+ * REQUEST: a first, b last, c detected time. DISPATCH: c request time.
+ * SRTCP BEGIN/RESULT and LOCAL SEND: a signed int64 status, b bytes,
+ * c dispatch time; local-send status is0 failed,1 success,-1 unavailable.
+ * AUTH RETURN: a extended sequence,b RTP timestamp,c request time; flags
+ * first1,duplicate2,range-complete4. Later arrival need not be retransmission.
+ * REORDER RESULT: a extended sequence,b existing decision,c request ordinal.
+ * AU CONTRIBUTION: a AU ordinal,b stage0 in-progress,1 structural,
+ * 2 accepted feed,3 recovery filter,4 discarded,c extended sequence.
+ * For stage4, flags1 is shutdown discard; it is not recovery completion.
+ * STATE: a enabled,b session request cap,c(watch slots<<32)|range cap.
+ * SUPPRESS: a reason,b positions,c gap ordinal. COUNTER: a counter ID,
+ * b exact snapshot,c session epoch. Repeated snapshots must not be summed.
+ * DISPATCH MASK: a first extended,b actual pending positions bitmap64,
+ * c serialized selection time. Bit0 is a; bits outside the REQUEST range
+ * are invalid. Selection precedes transport dispatch and is not atomic send.
+ * STATE is configuration/lifecycle only; flags8 marks closing, not disabled.
+ * Local status success establishes neither delivery nor a presented image. */
 typedef struct {
     uint64_t t_us, a, b;
     uint32_t ordinal;

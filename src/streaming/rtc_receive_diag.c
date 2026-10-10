@@ -26,10 +26,14 @@ static atomic_uint producers;
 enum { RECEIVE_THREAD_CAP = 32 };
 typedef struct {
     atomic_uint_fast64_t key, socket_time, delivery_time;
+    /* One native thread writes/reads its own ticket. Different threads own
+     * disjoint cells; no ticket is borrowed across a callback boundary. */
+    X4NackPacket nack;
 } ReceiveThread;
 static ReceiveThread thread_slots[RECEIVE_THREAD_CAP];
 static atomic_uint_fast64_t thread_omissions;
 static atomic_uint_fast64_t binding_count;
+static atomic_uint_fast64_t nack_ticket_omissions;
 _Static_assert(ATOMIC_POINTER_LOCK_FREE == 2 && ATOMIC_INT_LOCK_FREE == 2 &&
     ATOMIC_LONG_LOCK_FREE == 2 && ATOMIC_LLONG_LOCK_FREE == 2,
     "Receive diagnostics require lock-free bridge atomics");
@@ -160,6 +164,29 @@ void x4_rtc_receive_setting(unsigned setting, uint64_t a, uint64_t b, uint64_t c
     leave();
     errno = saved;
 }
+void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
+    uint64_t source, uint64_t a, uint64_t b, uint64_t c)
+{
+    int saved = errno;
+    uint64_t now = x4_rtc_receive_clock();
+    X4Trace *trace = enter();
+    if (trace) x4_trace_monitor_critical(trace, now, event, 0xffffu, flags,
+        identity, source, a, b, c);
+    leave(); errno = saved;
+}
+void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
+    uint64_t extended_sequence, uint32_t rtp_timestamp)
+{
+    ReceiveThread *slot = thread_slot();
+    if (slot) slot->nack = (X4NackPacket){identity, source, extended_sequence, rtp_timestamp};
+    else atomic_fetch_add_explicit(&nack_ticket_omissions,1,memory_order_relaxed);
+}
+X4NackPacket x4_rtc_nack_delivery_ticket(void)
+{
+    ReceiveThread *slot = thread_slot();
+    if (!slot) atomic_fetch_add_explicit(&nack_ticket_omissions,1,memory_order_relaxed);
+    return slot ? slot->nack : (X4NackPacket){0};
+}
 void x4_rtc_receive_attach(X4Trace *trace)
 {
     uint64_t bindings = atomic_fetch_add_explicit(&binding_count,1,memory_order_relaxed)+1;
@@ -194,5 +221,7 @@ void x4_rtc_receive_detach(X4Trace *trace)
             atomic_load_explicit(&thread_omissions,memory_order_relaxed),used,1);
         x4_trace_monitor_critical(trace,now,X4_MON_CR_RTC_SETTING,0xffffu,0,23,0,
             atomic_load_explicit(&binding_count,memory_order_relaxed),1,0);
+        x4_trace_monitor_critical(trace,now,X4_MON_CR_NACK_COUNTER,0xffffu,0,0,0,
+            109,atomic_load_explicit(&nack_ticket_omissions,memory_order_relaxed),0);
     }
 }

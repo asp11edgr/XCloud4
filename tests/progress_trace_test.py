@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import struct
 import subprocess
 import sys
@@ -141,6 +142,539 @@ def critical_record(event, stage=10, *, t=100000, identity=1, ssrc=42, pt=102,
                     a=0, b=0, c=0, flags=2, ordinal=1):
     return (t, identity, event | (stage << 16) | (flags << 32),
             ssrc | (pt << 32), a, b, c, ordinal)
+
+
+def nack_critical_record(event, **kwargs):
+    """Literal .733 sparse contract; does not import producer enum values."""
+    kwargs.setdefault('stage', 65535)
+    kwargs.setdefault('flags', 0)
+    row = list(critical_record(event, **kwargs))
+    row[3] |= 1 << 63
+    return tuple(row)
+
+
+class ReceiverNackReaderTests(unittest.TestCase):
+    def analyze(self, rows, omitted=None):
+        numbered = [tuple(row[:7])+(i+1,) for i, row in enumerate(rows)]
+        return p.analyze(fixture_v2(critical=numbered, omitted=omitted))['upstream_diagnostics']['receiver_NACK']
+
+    def state(self, enabled=1, epoch=7):
+        return nack_critical_record(27, identity=epoch << 32, a=enabled, b=64, c=(16 << 32)|64)
+
+    def request(self, epoch=7, ordinal=1, ssrc=42, first=65535, last=65536):
+        return nack_critical_record(19, t=110010, identity=(epoch << 32)|ordinal,
+            ssrc=ssrc, a=first, b=last, c=110000)
+
+    def test_older_v2_without_state_is_unavailable_not_disabled(self):
+        out = self.analyze([])
+        self.assertFalse(out['available'])
+        self.assertIsNone(out['experiment_enabled'])
+
+    def test_explicit_disabled_state_is_available_observation(self):
+        out = self.analyze([self.state(0)])
+        self.assertTrue(out['available'])
+        self.assertFalse(out['experiment_enabled'])
+        self.assertEqual(out['retained_state_observations'][0]['watch_slots'], 16)
+        self.assertEqual(out['retained_state_observations'][0]['range_position_cap'], 64)
+
+    def test_attach_or_media_state_does_not_prove_remote_feedback_result(self):
+        for flags in (0, 4, 6):
+            with self.subTest(flags=flags):
+                out = self.analyze([nack_critical_record(27, identity=7 << 32,
+                    a=1, b=64, c=(16 << 32)|64, flags=flags)])
+                state = out['retained_state_observations'][0]
+                for item in (state, out):
+                    self.assertIsNone(item['answer_checked'])
+                    self.assertIsNone(item['remote_feedback_accepted'])
+                    self.assertIsNone(item['effective_requests_enabled'])
+                self.assertFalse(out['coverage']['answer_check_result_retained'])
+
+    def test_checked_answer_state_records_acceptance_and_effective_mode(self):
+        for enabled in (0, 1):
+            for accepted in (0, 1):
+                with self.subTest(enabled=enabled, accepted=accepted):
+                    out = self.analyze([self.state(enabled), nack_critical_record(27,
+                        t=100010, identity=7 << 32, a=enabled, b=64,
+                        c=(16 << 32)|64, flags=16 | (2 if accepted else 0))])
+                    state = out['retained_state_observations'][-1]
+                    for item in (state, out):
+                        self.assertTrue(item['answer_checked'])
+                        self.assertEqual(item['remote_feedback_accepted'], bool(accepted))
+                        self.assertEqual(item['effective_requests_enabled'], bool(enabled and accepted))
+                    self.assertTrue(out['coverage']['answer_check_result_retained'])
+                    self.assertFalse(out['feedback_state_at_stop_established'])
+
+    def test_omitted_answer_state_does_not_infer_rejection_or_activation(self):
+        omitted = [0]*32; omitted[27] = 1
+        out = self.analyze([self.state()], omitted)
+        self.assertIsNone(out['answer_checked'])
+        self.assertIsNone(out['remote_feedback_accepted'])
+        self.assertIsNone(out['effective_requests_enabled'])
+        self.assertFalse(out['coverage']['NACK_detail_complete'])
+
+    def test_checked_answer_does_not_cross_configuration_epoch(self):
+        out = self.analyze([nack_critical_record(27, identity=6 << 32,
+            a=1, flags=18), self.state(epoch=7)])
+        self.assertIsNone(out['answer_checked'])
+        self.assertIsNone(out['remote_feedback_accepted'])
+        self.assertIsNone(out['effective_requests_enabled'])
+        self.assertTrue(out['coverage']['answer_check_result_retained'])
+
+    def test_later_media_and_close_states_do_not_replace_checked_answer(self):
+        out = self.analyze([self.state(), nack_critical_record(27, t=100010,
+            identity=7 << 32, a=1, flags=18), nack_critical_record(27, t=100020,
+            identity=7 << 32, a=1, flags=4), nack_critical_record(27, t=100030,
+            identity=7 << 32, a=0, flags=8|16)])
+        self.assertTrue(out['remote_feedback_accepted'])
+        self.assertTrue(out['effective_requests_enabled'])
+        self.assertIsNone(out['retained_state_observations'][-1]['answer_checked'])
+        self.assertEqual(out['latest_retained_answer_check_result']['t_us'], 100010)
+
+    def test_feedback_check_local_error_is_not_a_compatibility_result(self):
+        result = p.analyze(fixture_v2(critical=[self.state(),
+            critical_record(17, 65535, identity=24, a=(1 << 64)-1, ordinal=2)]))['upstream_diagnostics']
+        setting = result['retained_negotiation_and_RTX_settings'][0]
+        self.assertEqual(setting['local_feedback_check_error'], -1)
+        self.assertIsNone(setting['remote_feedback_accepted'])
+        self.assertFalse(setting['error_establishes_feedback_not_supported'])
+        self.assertFalse(setting['media_session_failure_established'])
+        self.assertIsNone(result['receiver_NACK']['effective_requests_enabled'])
+
+    def test_request_dispatch_auth_reorder_and_AU_are_distinct(self):
+        key = (7 << 32)|1
+        rows = [self.state(), nack_critical_record(18, t=110000, identity=(7 << 32)|9,
+            a=65535, b=65536, c=65537, flags=1), self.request(),
+            nack_critical_record(20, t=110020, identity=key, a=65535, b=65536, c=110010),
+            nack_critical_record(30, t=110021, identity=key, a=65535, b=3, c=110020),
+            nack_critical_record(21, t=110030, identity=key, a=0, b=20, c=110020),
+            nack_critical_record(22, t=110040, identity=key, a=0, b=30, c=110020),
+            nack_critical_record(23, t=110050, identity=key, a=1, b=30, c=110020),
+            nack_critical_record(24, t=110100, identity=key, a=65535, b=42, c=110010, flags=1),
+            nack_critical_record(24, t=110200, identity=key, a=65536, b=42, c=110010, flags=5),
+            nack_critical_record(25, t=110201, identity=key, a=65536, b=0, c=1),
+            nack_critical_record(26, t=110202, identity=key, a=4, b=1, c=65536),
+            nack_critical_record(26, t=110210, identity=key, a=4, b=2, c=65536)]
+        out = self.analyze(rows)
+        request = out['request_correlations'][0]
+        self.assertTrue(request['association_available'])
+        self.assertTrue(request['detection_identity_unique'])
+        self.assertEqual(request['timings_us']['detection_to_request_record'], 10)
+        self.assertEqual(request['timings_us']['SRTCP_local_call_span'], 10)
+        self.assertEqual(request['timings_us']['request_record_to_first_authenticated_return'], 90)
+        self.assertEqual(request['timings_us']['dispatch_record_to_first_authenticated_return'], 80)
+        self.assertTrue(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertNotIn('all_requested_positions_observed_in_retained_authenticated_returns', request)
+        self.assertEqual(request['retained_authenticated_positions'], [65535, 65536])
+        self.assertEqual(request['actually_dispatched_positions'], [65535, 65536])
+        self.assertEqual(request['AU_observation_counts_by_stage']['accepted_by_recovery_for_Decode'], 1)
+        self.assertFalse(request['accepted_AU_observation_is_presented_image'])
+        self.assertFalse(request['later_return_proves_NACK_delivery_or_retransmission'])
+
+    def test_signed_status_and_bool_send_have_separate_meanings(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(22, t=110020, identity=key, a=(1 << 64)-1, flags=1),
+            nack_critical_record(23, t=110030, identity=key, a=0)])
+        stages = out['request_correlations'][0]['retained_stage_records']
+        self.assertEqual(stages['NACK_SRTCP_RESULT'][0]['local_status'], -1)
+        self.assertFalse(stages['NACK_SRTCP_RESULT'][0]['SRTCP_local_success'])
+        self.assertFalse(stages['NACK_LOCAL_SEND_RESULT'][0]['local_send_success'])
+
+    def test_protected_and_local_send_bytes_have_distinct_scopes(self):
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(21, t=110020, identity=(7 << 32)|1, b=32),
+            nack_critical_record(22, t=110030, identity=(7 << 32)|1, b=42),
+            nack_critical_record(23, t=110040, identity=(7 << 32)|1, a=1, b=32)])
+        stages = out['request_correlations'][0]['retained_stage_records']
+        self.assertEqual(stages['NACK_SRTCP_BEGIN'][0]['byte_count_scope'], 'plaintext_original_message')
+        self.assertEqual(stages['NACK_SRTCP_RESULT'][0]['byte_count_scope'], 'protected_copy')
+        self.assertEqual(stages['NACK_LOCAL_SEND_RESULT'][0]['byte_count_scope'], 'plaintext_original_message')
+        self.assertEqual(stages['NACK_SRTCP_RESULT'][0]['bytes'], 42)
+        self.assertEqual(stages['NACK_LOCAL_SEND_RESULT'][0]['bytes'], 32)
+
+    def test_recovery_acceptance_then_feed_failure_preserves_both_AU_facts(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(26, t=110100, identity=key, a=7, b=2, c=65535),
+            nack_critical_record(26, t=110110, identity=key, a=7, b=4, c=65535)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['AU_observation_counts_by_stage'],
+            {'accepted_by_recovery_for_Decode': 1, 'discarded': 1})
+        rows = request['retained_stage_records']['NACK_AU_CONTRIBUTION']
+        self.assertEqual([r['AU_ordinal'] for r in rows], [7, 7])
+        self.assertFalse(rows[0]['successful_Decode_feed_established'])
+        self.assertFalse(rows[0]['native_Decode_output_established'])
+        self.assertFalse(request['accepted_AU_observation_establishes_successful_Decode_feed'])
+        self.assertFalse(request['accepted_AU_observation_establishes_native_Decode_output'])
+        self.assertFalse(request['accepted_AU_observation_is_presented_image'])
+
+    def test_local_send_success_does_not_require_or_prove_return(self):
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(23, t=110020, identity=(7 << 32)|1, a=1)])
+        request = out['request_correlations'][0]
+        self.assertIsNone(request['first_authenticated_return'])
+        self.assertIsNone(request['timings_us']['request_record_to_first_authenticated_return'])
+        self.assertFalse(request['no_return_record_proves_no_remote_return'])
+
+    def test_sources_and_epochs_never_correlate_by_sequence_alone(self):
+        rows = [self.state(), self.request(), self.request(ssrc=43), self.request(epoch=8),
+            nack_critical_record(24, t=110100, identity=(8 << 32)|1, a=65535, c=110010, flags=1)]
+        requests = self.analyze(rows)['request_correlations']
+        self.assertEqual(len(requests), 3)
+        self.assertEqual([r['first_authenticated_return'] is not None for r in requests], [False, False, True])
+
+    def test_duplicate_flags_and_positions_do_not_count_as_new_returns(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(24, t=110100, identity=key, a=65535, c=110010, flags=1),
+            nack_critical_record(24, t=110101, identity=key, a=65535, c=110010, flags=2)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['retained_authenticated_positions'], [65535])
+        self.assertEqual(request['duplicate_flag_observations'], 1)
+        self.assertFalse(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+
+    def test_returns_outside_range_or_before_request_are_not_latency(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(24, t=110100, identity=key, a=65537, c=110010),
+            nack_critical_record(24, t=110000, identity=key, a=65535, c=110010)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['return_outside_requested_range_observations'], 1)
+        self.assertEqual(request['return_before_request_observations'], 1)
+        self.assertIsNone(request['first_authenticated_return'])
+
+    def test_request_cap_and_reversed_range_are_not_correlated(self):
+        for first, last in ((1, 65), (8, 7)):
+            with self.subTest(first=first, last=last):
+                out = self.analyze([self.state(), self.request(first=first, last=last)])
+                self.assertFalse(out['request_correlations'][0]['association_available'])
+
+    def test_repeated_request_identity_is_explicitly_ambiguous(self):
+        out = self.analyze([self.state(), self.request(), self.request(first=3, last=4)])
+        self.assertFalse(out['request_correlations'][0]['association_available'])
+        self.assertEqual(len(out['orphan_or_ambiguous_request_stage_records']), 2)
+
+    def test_omitted_state_does_not_invent_enabled_mode(self):
+        omitted = [0]*32; omitted[27] = 1
+        out = self.analyze([self.request()], omitted)
+        self.assertTrue(out['available'])
+        self.assertIsNone(out['experiment_enabled'])
+        self.assertFalse(out['coverage']['NACK_detail_complete'])
+        self.assertFalse(out['coverage']['configuration_details_retained'])
+
+    def test_non_NACK_omission_does_not_hide_NACK_specific_coverage(self):
+        omitted = [0]*32; omitted[1] = 2
+        out = self.analyze([self.state()], omitted)
+        self.assertTrue(out['coverage']['NACK_detail_complete'])
+
+    def test_missing_request_keeps_return_as_orphan(self):
+        out = self.analyze([self.state(), nack_critical_record(24, identity=(7 << 32)|1, a=9)])
+        self.assertEqual(len(out['orphan_or_ambiguous_request_stage_records']), 1)
+        self.assertEqual(out['request_correlations'], [])
+
+    def test_counters_are_latest_per_epoch_not_summed(self):
+        out = self.analyze([self.state(),
+            nack_critical_record(29, t=110000, a=14, b=1, c=7),
+            nack_critical_record(29, t=110100, a=14, b=2, c=7),
+            nack_critical_record(29, t=110200, a=14, b=1, c=8),
+            nack_critical_record(29, t=110300, a=100, b=5, c=7)])
+        self.assertEqual(out['counter_snapshot_duplicates_not_summed'], 1)
+        items = out['latest_retained_counter_snapshots']
+        self.assertEqual([(r['counter_epoch'], r['counter_id'], r['value']) for r in items],
+                         [(7, 14, 2), (7, 100, 5), (8, 14, 1)])
+        self.assertEqual(items[0]['counter_name'], 'requests_reserved')
+        self.assertEqual(items[1]['counter_name'], 'state_gate_omissions')
+
+    def test_unknown_AU_and_reorder_codes_stay_unknown(self):
+        key = (7 << 32)|1
+        request = self.analyze([self.state(), self.request(),
+            nack_critical_record(25, identity=key, a=65535, b=99),
+            nack_critical_record(26, identity=key, a=1, b=99, c=65535)])['request_correlations'][0]
+        self.assertEqual(request['reorder_observation_counts_by_decision'], {'unknown': 1})
+        self.assertEqual(request['AU_observation_counts_by_stage'], {'unknown': 1})
+
+    def test_reorder_rejection_flags_distinguish_behind_from_occupied(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(25, t=110100, identity=key, a=65535, b=1, c=1, flags=1),
+            nack_critical_record(25, t=110110, identity=key, a=65536, b=1, c=1, flags=2)])
+        rows = out['request_correlations'][0]['retained_stage_records']['NACK_REORDER_RESULT']
+        self.assertEqual([r['decision'] for r in rows], ['late_or_occupied_slot']*2)
+        self.assertTrue(rows[0]['behind_worker_expected_before_insert'])
+        self.assertIsNone(rows[0]['occupied_slot_at_nonnegative_difference_before_insert'])
+        self.assertEqual(rows[0]['rejection_subreason'], 'behind_worker_expected')
+        self.assertFalse(rows[1]['behind_worker_expected_before_insert'])
+        self.assertTrue(rows[1]['occupied_slot_at_nonnegative_difference_before_insert'])
+        self.assertEqual(rows[1]['rejection_subreason'], 'occupied_slot')
+
+    def test_unflagged_or_conflicting_reorder_rejection_is_not_confirmed_late(self):
+        key = (7 << 32)|1
+        for flags in (0, 3, 4, 5, 7):
+            with self.subTest(flags=flags):
+                out = self.analyze([self.state(), self.request(),
+                    nack_critical_record(25, t=110100, identity=key, a=65535, b=1, c=1, flags=flags)])
+                row = out['request_correlations'][0]['retained_stage_records']['NACK_REORDER_RESULT'][0]
+                self.assertIsNone(row['behind_worker_expected_before_insert'])
+                self.assertIsNone(row['occupied_slot_at_nonnegative_difference_before_insert'])
+                self.assertEqual(row['admission_outcome'], 'rejected_without_confirmed_behind_expected')
+                self.assertFalse(row['rejection_code_alone_proves_late_after_worker_advance'])
+
+    def test_reorder_window_jump_is_admission_not_confirmed_behind(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(25, t=110100, identity=key, a=65535, b=2, c=1, flags=1)])
+        row = out['request_correlations'][0]['retained_stage_records']['NACK_REORDER_RESULT'][0]
+        self.assertEqual(row['decision'], 'window_jump')
+        self.assertEqual(row['admission_outcome'], 'admitted')
+        self.assertIsNone(row['behind_worker_expected_before_insert'])
+        self.assertIsNone(row['rejection_subreason'])
+
+    def test_reorder_admission_counts_do_not_count_all_code1_as_late(self):
+        key = (7 << 32)|1
+        rows = [self.state(), self.request()]
+        for i, (code, flags) in enumerate(((0, 0), (2, 0), (1, 1), (1, 2), (1, 4), (1, 0))):
+            rows.append(nack_critical_record(25, t=110100+i, identity=key,
+                a=65535, b=code, c=1, flags=flags))
+        request = self.analyze(rows)['request_correlations'][0]
+        self.assertEqual(request['reorder_observation_counts_by_admission_outcome'],
+            {'admitted': 2, 'confirmed_behind_worker_expected': 1,
+             'rejected_without_confirmed_behind_expected': 3})
+        self.assertEqual(request['reorder_rejection_observation_counts_by_subreason'],
+            {'behind_worker_expected': 1, 'occupied_slot': 1, 'other_or_unclassified': 1, 'unknown': 1})
+
+    def test_counter_names_match_current_state_declaration_order(self):
+        header = PARSER.parents[1]/'src/streaming/receiver_nack_state.h'
+        text = header.read_text(encoding='utf-8')
+        block = text[text.index('uint64_t observations;'):text.index('} X4ReceiverNackCounters;')]
+        self.assertEqual(p.NACK_COUNTERS, re.findall(r'uint64_t (\w+);', block))
+        self.assertEqual(p.NACK_COUNTERS[35:39], ['observer_discontinuities',
+            'omission_retired_ranges', 'omission_retired_positions', 'clock_regressions'])
+
+    def test_global_ticket_omissions_with_unknown_source_are_coverage(self):
+        row = list(nack_critical_record(29, t=110100, identity=0, a=107, b=3, c=0))
+        row[3] = 0
+        out = self.analyze([self.state(), tuple(row)])
+        coverage = out['coverage']
+        self.assertTrue(coverage['functional_tracking_limit_observed'])
+        self.assertFalse(coverage['authenticated_return_absence_claims_permitted'])
+        self.assertEqual(coverage['retained_functional_tracking_limit_snapshots'][0]['counter_name'], 'AU_ticket_omissions')
+        self.assertEqual(coverage['retained_functional_tracking_limit_snapshots'][0]['source'], 0)
+
+    def test_provenance_and_ticket_operation_counters_are_not_packet_loss(self):
+        out = self.analyze([self.state(),
+            nack_critical_record(29, t=110100, a=102, b=2, c=7),
+            nack_critical_record(29, t=110110, a=109, b=2, c=7)])
+        counters = out['latest_retained_counter_snapshots']
+        self.assertEqual(counters[0]['counter_name'], 'non_authenticated_or_RTX_flagged')
+        self.assertIn('RTX-normalized', counters[0]['counter_scope'])
+        self.assertEqual(counters[1]['counter_name'], 'delivery_ticket_set_get_operation_omissions')
+        self.assertFalse(counters[1]['counter_is_lost_packet_count'])
+        self.assertTrue(out['coverage']['functional_tracking_limit_observed'])
+
+    def test_suppression_gap_id_collision_does_not_create_request_association(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(28, t=110100, identity=key, a=1, b=2, c=1)])
+        suppression = out['retained_suppression_observations'][0]
+        self.assertFalse(suppression['suppression_request_association_available'])
+        self.assertEqual(out['request_correlations'][0]['retained_stage_records']['NACK_AUTH_RETURN'], [])
+
+    def test_feedback_not_confirmed_suppression_does_not_infer_rejection(self):
+        for checked_flags in (None, 16):
+            with self.subTest(checked_flags=checked_flags):
+                rows = [self.state()]
+                if checked_flags is not None:
+                    rows.append(nack_critical_record(27, t=100010,
+                        identity=7 << 32, a=1, flags=checked_flags))
+                rows.append(nack_critical_record(28, t=110100,
+                    identity=(7 << 32)|1, a=6, b=2, c=1))
+                out = self.analyze(rows)
+                self.assertEqual(out['retained_suppression_observations'][0]['reason'], 'feedback_not_confirmed')
+                if checked_flags is None:
+                    self.assertIsNone(out['remote_feedback_accepted'])
+                else:
+                    self.assertFalse(out['remote_feedback_accepted'])
+
+    def test_dispatch_mask_restricts_selected_positions_and_predispatch_return(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(first=100, last=102),
+            nack_critical_record(24, t=110015, identity=key, a=100, c=110010, flags=1),
+            nack_critical_record(20, t=110021, identity=key, a=100, b=102, c=110010),
+            nack_critical_record(30, t=110022, identity=key, a=100, b=6, c=110020),
+            nack_critical_record(23, t=110025, identity=key, a=1, b=30, c=110020),
+            nack_critical_record(24, t=110030, identity=key, a=101, c=110010, flags=1),
+            nack_critical_record(24, t=110040, identity=key, a=102, c=110010, flags=5)])
+        request = out['request_correlations'][0]
+        self.assertTrue(request['dispatch_mask_association_available'])
+        self.assertEqual(request['actually_dispatched_positions'], [101, 102])
+        self.assertEqual(request['retained_authenticated_positions'], [100, 101, 102])
+        self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [101, 102])
+        self.assertEqual(request['returns_before_dispatch_observations'], 1)
+        self.assertEqual(request['returns_outside_dispatch_mask_observations'], 1)
+        self.assertEqual(request['first_authenticated_return']['sequence_extended'], 100)
+        self.assertEqual(request['first_authenticated_return_of_dispatched_position_after_dispatch']['sequence_extended'], 101)
+        self.assertEqual(request['timings_us']['dispatch_record_to_first_authenticated_return'], 9)
+        self.assertEqual(request['timings_us']['dispatch_timestamp_to_first_authenticated_dispatched_position'], 10)
+        self.assertTrue(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertTrue(request['return_classification_does_not_infer_state_cancellation'])
+        self.assertFalse(request['pre_dispatch_arrival_is_retransmission_response'])
+
+    def test_missing_dispatch_mask_does_not_claim_original_range_was_sent(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(20, t=110020, identity=key, a=65535, b=65536, c=110010),
+            nack_critical_record(24, t=110100, identity=key, a=65535, c=110010)])
+        request = out['request_correlations'][0]
+        self.assertFalse(request['dispatch_mask_association_available'])
+        self.assertIsNone(request['actually_dispatched_positions'])
+        self.assertIsNone(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertIsNone(request['timings_us']['dispatch_record_to_first_authenticated_return'])
+
+    def test_invalid_or_ambiguous_dispatch_masks_are_not_correlated(self):
+        key = (7 << 32)|1
+        for first, bits in ((65534, 1), (65535, 4), (65535, 0)):
+            with self.subTest(first=first, bits=bits):
+                out = self.analyze([self.state(), self.request(),
+                    nack_critical_record(20, t=110020, identity=key, a=65535, b=65536, c=110010),
+                    nack_critical_record(30, t=110021, identity=key, a=first, b=bits, c=110020)])
+                self.assertFalse(out['request_correlations'][0]['dispatch_mask_association_available'])
+        mask = nack_critical_record(30, t=110021, identity=key, a=65535, b=3, c=110020)
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(20, t=110020, identity=key, a=65535, b=65536, c=110010), mask, mask])
+        self.assertFalse(out['request_correlations'][0]['dispatch_mask_association_available'])
+
+    def test_highest_dispatch_mask_bit_and_wrap_are_not_truncated(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(first=65520, last=65583),
+            nack_critical_record(20, t=110020, identity=key, a=65520, b=65583, c=110010),
+            nack_critical_record(30, t=110021, identity=key, a=65520, b=1 << 63, c=110020),
+            nack_critical_record(24, t=110100, identity=key, a=65583, c=110010, flags=1)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['actually_dispatched_positions'], [65583])
+        self.assertTrue(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertFalse(request['all_original_range_positions_observed_in_retained_authenticated_returns'])
+
+    def test_close_state_does_not_change_experiment_configuration(self):
+        out = self.analyze([self.state(), nack_critical_record(27, t=110100,
+            identity=7 << 32, flags=8, a=0, b=0, c=0)])
+        self.assertTrue(out['experiment_enabled'])
+        self.assertTrue(out['closing_observation_retained'])
+        self.assertTrue(out['coverage']['configuration_details_retained'])
+
+    def test_AU_latency_does_not_pair_distinct_positions_in_one_range(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(24, t=110100, identity=key, a=65535, c=110010),
+            nack_critical_record(26, t=110110, identity=key, a=4, b=2, c=65536)])
+        request = out['request_correlations'][0]
+        self.assertIsNone(request['timings_us']['first_authenticated_return_to_first_accepted_AU_observation'])
+
+    def test_omitted_dispatch_mask_is_NACK_coverage_loss(self):
+        omitted = [0]*32; omitted[30] = 1
+        out = self.analyze([self.state(), self.request()], omitted)
+        self.assertFalse(out['coverage']['NACK_detail_complete'])
+        self.assertEqual(out['coverage']['event_counts']['NACK_DISPATCH_MASK']['omitted'], 1)
+
+    def test_embedded_times_are_distinct_from_later_critical_record_clock(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(),
+            nack_critical_record(18, t=110002, identity=(7 << 32)|9, a=65535, b=65536, c=65537),
+            self.request(),
+            nack_critical_record(30, t=110023, identity=key, a=65535, b=3, c=110020),
+            nack_critical_record(20, t=110025, identity=key, a=65535, b=65536, c=110008),
+            nack_critical_record(24, t=110100, identity=key, a=65535, c=110008)])
+        request = out['request_correlations'][0]
+        self.assertTrue(request['dispatch_mask_association_available'])
+        self.assertTrue(request['detection_identity_unique'])
+        self.assertFalse(request['embedded_request_reference_matches_retained_request_time'])
+        self.assertTrue(request['embedded_request_reference_consistent_across_retained_stages'])
+        self.assertEqual(request['timings_us']['request_record_to_dispatch_record'], 15)
+        self.assertEqual(request['timings_us']['embedded_request_to_first_authenticated_return'], 92)
+
+    def test_mask_selection_precedes_actual_transport_dispatch(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(30, t=110022, identity=key, a=65535, b=3, c=110020),
+            nack_critical_record(24, t=110030, identity=key, a=65535, c=110010),
+            nack_critical_record(20, t=110045, identity=key, a=65535, b=65536, c=110010),
+            nack_critical_record(23, t=110047, identity=key, a=1, b=30, c=110040),
+            nack_critical_record(24, t=110050, identity=key, a=65536, c=110010, flags=1)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['mask_selection_us'], 110020)
+        self.assertEqual(request['actual_transport_dispatch_reference_us'], 110040)
+        self.assertEqual(request['returns_before_dispatch_observations'], 1)
+        self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [65536])
+        self.assertEqual(request['timings_us']['serialized_selection_to_dispatch_reference'], 20)
+        self.assertEqual(request['timings_us']['dispatch_timestamp_to_first_authenticated_dispatched_position'], 10)
+        self.assertFalse(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+
+    def test_mask_alone_does_not_establish_transport_dispatch_reference(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(30, t=110022, identity=key, a=65535, b=3, c=110020),
+            nack_critical_record(20, t=110045, identity=key, a=65535, b=65536, c=110010)])
+        request = out['request_correlations'][0]
+        self.assertIsNone(request['actual_transport_dispatch_reference_us'])
+        self.assertIsNone(request['returns_before_dispatch_observations'])
+        self.assertEqual(request['return_dispatch_boundary_kind'], 'later_dispatch_record_clock')
+
+    def test_shutdown_AU_discard_is_separate_from_recovery_filter(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(),
+            nack_critical_record(26, t=110100, identity=key, a=7, b=4, c=65535, flags=1)])
+        request = out['request_correlations'][0]
+        row = request['retained_stage_records']['NACK_AU_CONTRIBUTION'][0]
+        self.assertTrue(row['shutdown_discard_observation'])
+        self.assertEqual(row['AU_stage'], 'discarded')
+        self.assertNotIn('recovery_filter_rejected', request['AU_observation_counts_by_stage'])
+
+    def test_duplicate_after_dispatch_is_not_a_first_arrival_repair_candidate(self):
+        key = (7 << 32)|1
+        out = self.analyze([self.state(), self.request(first=100, last=100),
+            nack_critical_record(30, t=110022, identity=key, a=100, b=1, c=110020),
+            nack_critical_record(24, t=110030, identity=key, a=100, c=110010, flags=5),
+            nack_critical_record(20, t=110045, identity=key, a=100, b=100, c=110010),
+            nack_critical_record(23, t=110047, identity=key, a=1, b=30, c=110040),
+            nack_critical_record(24, t=110050, identity=key, a=100, c=110010, flags=2)])
+        request = out['request_correlations'][0]
+        self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [100])
+        self.assertEqual(request['post_dispatch_duplicate_observations'], 1)
+        self.assertEqual(request['first_post_dispatch_authenticated_observation']['t_us'], 110050)
+        self.assertEqual(request['timings_us']['dispatch_record_to_first_post_dispatch_authenticated_observation'], 5)
+        self.assertEqual(request['first_authenticated_arrival_positions_after_dispatch'], [])
+        self.assertIsNone(request['first_authenticated_return_of_dispatched_position_after_dispatch'])
+        self.assertIsNone(request['timings_us']['dispatch_record_to_first_authenticated_return'])
+        self.assertFalse(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertEqual(request['returns_before_dispatch_observations'], 1)
+        self.assertFalse(request['later_return_proves_NACK_delivery_or_retransmission'])
+
+    def test_duplicate_without_retained_first_arrival_does_not_invent_completion(self):
+        key = (7 << 32)|1
+        omitted = [0]*32; omitted[24] = 1
+        out = self.analyze([self.state(), self.request(first=100, last=100),
+            nack_critical_record(30, t=110022, identity=key, a=100, b=1, c=110020),
+            nack_critical_record(20, t=110045, identity=key, a=100, b=100, c=110010),
+            nack_critical_record(23, t=110047, identity=key, a=1, b=30, c=110040),
+            nack_critical_record(24, t=110050, identity=key, a=100, c=110010, flags=2)], omitted)
+        request = out['request_correlations'][0]
+        self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [100])
+        self.assertEqual(request['first_authenticated_arrival_positions_after_dispatch'], [])
+        self.assertFalse(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertFalse(out['coverage']['NACK_detail_complete'])
+        self.assertFalse(out['coverage']['authenticated_return_absence_claims_permitted'])
+
+    def test_unknown_or_conflicting_flags_remain_observations(self):
+        key = (7 << 32)|1
+        for flags in (0, 3):
+            with self.subTest(flags=flags):
+                out = self.analyze([self.state(), self.request(first=100, last=100),
+                    nack_critical_record(30, t=110022, identity=key, a=100, b=1, c=110020),
+                    nack_critical_record(20, t=110045, identity=key, a=100, b=100, c=110010),
+                    nack_critical_record(24, t=110050, identity=key, a=100, c=110010, flags=flags)])
+                request = out['request_correlations'][0]
+                self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [100])
+                self.assertEqual(request['first_authenticated_arrival_positions_after_dispatch'], [])
+                self.assertEqual(request['post_dispatch_unknown_or_conflicting_first_flags'], 1)
 
 
 class V2ProgressReaderTests(unittest.TestCase):

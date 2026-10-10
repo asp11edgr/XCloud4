@@ -12,6 +12,12 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Prepared receiver NACK experiment: 0.7.33
+
+The [bounded OFF/ON experiment](docs/RECEIVER_NACK_EXPERIMENT_0.7.33.md) adds one original-video receiver request generator through the existing protected RTCP path, gated by NACK feedback in the actual remote Answer. It reserves at most **64 single attempts per fresh session**, with ranges of at most 64 positions and 16 watched ranges. Selected bitmap, protection, local send, authenticated return, reorder and AU utility remain separate observations; a successful local send does not prove server delivery. NEW/MPSC256, four readers, stream request, reorder and recovery remain unchanged.
+
+Portable state, production wire/handler, reader and monitor/ingress/bridge checks pass within their stated scopes. Both native OFF/ON applications compile and pass selected linked inspection; see [release evidence](docs/RELEASE_NOTES_0.7.33.md). **Console OFF/ON results and diagnostic overhead remain unmeasured.** The proposed trial uses fresh one-session launches and 10–15 manually stable minutes per mode. Depth 32 can trigger recovery before the configured 25 ms timeout, so later packet repair may be too late without establishing absent server support. No pause correction is claimed; 0.7.32 assets and original evidence stay preserved.
+
 ## Console-exercised reception diagnostics: 0.7.32
 
 The [reception diagnostic plan](docs/RECEPTION_DIAGNOSTICS_0.7.32.md) instruments the existing UDP/ICE/Mbed TLS/SRTP/Track path and separates structural AU completion from recovery rejection. The [console report](docs/CONSOLE_REPORT_0.7.32.md) retains **10.52 manually stable minutes / 10 intervals >100 ms (0.951/min)** and **1280 × 720** delivered geometry. The critical ledger preserves all **643 events**: **14 video sequence gaps / 202 positions** and **two audio gaps / three positions** already appear at the positive UDP socket-read boundary and recur through all 12 RTP stages. This bounds the observed absence before that read; it cannot distinguish kernel, network and sender causes.

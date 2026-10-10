@@ -55,6 +55,20 @@ uint64_t x4_rtc_receive_delivery_time(void);
 void x4_rtc_receive_attach(X4Trace *);
 /* Session owner only. Waits only at shutdown, never in a receive producer. */
 void x4_rtc_receive_detach(X4Trace *);
+/* Explicit XCloud4 vendor experiment extensions. No upstream API implied. */
+int x4_rtc_configure_receiver_nack(int track, int enabled, uint32_t epoch);
+int x4_rtc_receiver_nack_accept(int track, int peer_connection);
+int x4_rtc_poll_receiver_nack(int track);
+int x4_rtc_close_receiver_nack(int track);
+void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
+    uint64_t source, uint64_t a, uint64_t b, uint64_t c);
+/* Track-pop thread owns this numeric ticket until its next delivery. */
+typedef struct {
+    uint64_t identity, source, extended_sequence, rtp_timestamp;
+} X4NackPacket;
+void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
+    uint64_t extended_sequence, uint32_t rtp_timestamp);
+X4NackPacket x4_rtc_nack_delivery_ticket(void);
 #ifdef __cplusplus
 }
 #endif
