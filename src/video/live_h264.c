@@ -13,12 +13,26 @@
 #include <smmintrin.h>
 
 enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024 };
+/* VIDEO trace namespace. IDs identify observed calls/leased outputs, never
+ * correlate the current input PTS/AU with a returned native picture. */
+enum {
+    VT_DECODE_BEGIN = X4_TRACE_DECODE_BEGIN, VT_DECODE_END = X4_TRACE_DECODE_END,
+    VT_OUTPUT_INVALID = X4_TRACE_OUTPUT_REJECT, VT_OUTPUT = X4_TRACE_OUTPUT_VALID,
+    VT_OUTPUT_SUPERSEDE = X4_TRACE_OUTPUT_SUPERSEDED,
+    VT_COPY_BEGIN = X4_TRACE_COPY_BEGIN, VT_COPY_END = X4_TRACE_COPY_END,
+    VT_CONVERT_BEGIN = X4_TRACE_CONVERT_BEGIN, VT_CONVERT_END = X4_TRACE_CONVERT_END,
+    VT_NOFRAME = X4_TRACE_OUTPUT_NONE,
+    VT_OWNER_BEGIN = 0x220, VT_OWNER_END, VT_HELPER_BEGIN, VT_HELPER_END,
+    VT_WAIT_BEGIN, VT_WAIT_END, VT_CHECK_BEGIN, VT_CHECK_END, VT_GEOMETRY,
+    VT_ERROR, VT_START, VT_STOP, VT_FEED_REJECT, VT_PRESERVE_BEGIN, VT_PRESERVE_END
+};
 typedef struct { void *p; off_t offset; size_t size; int allocated; } Memory;
 typedef struct {
     const uint8_t *source;
     uint8_t *destination;
     size_t length;
     bool streaming;
+    uint64_t trace_copy;
 } CopyJob;
 typedef struct {
     int32_t (*QueryComputeMemoryInfo)(OrbisVideodec2ComputeMemoryInfo *);
@@ -35,6 +49,8 @@ typedef struct {
     unsigned input_slot, slot;
     OrbisVideodec2OutputInfo pending;
     bool pending_valid;
+    X4Trace *trace;
+    uint64_t pending_output;
     void *staging_allocation;
     uint8_t *staging;
     size_t staging_size;
@@ -56,6 +72,7 @@ static int stage(X4LiveVideo *v, const char *name, int rc)
 {
     snprintf(v->stage, sizeof(v->stage), "%s", name);
     if (rc < 0) v->error = rc;
+    if (rc < 0) x4_trace_record(v->trace, VT_ERROR, 0, v->trace_decoder_epoch, (uint32_t)rc);
     printf("XCloud4: video %s -> 0x%08x\n", name, (unsigned)rc);
     return rc;
 }
@@ -94,6 +111,7 @@ int x4_live_video_stop(X4LiveVideo *v)
 {
     VideoState *s = v->state;
     if (!s) return 0;
+    x4_trace_record(v->trace, VT_STOP, 0, v->trace_decoder_epoch, 0);
     /* A failed join leaves the helper lifetime unknown. Never retry native
      * deletion or release its source/staging while that lifetime is unknown. */
     if (s->copy_join_error) return stage(v, "CERRAR COPIA CPU", s->copy_join_error);
@@ -141,13 +159,22 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
 {
     if (!v || !pixels || pixel_capacity < (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT) return -7;
     if (v->state) { int rc = x4_live_video_stop(v); if (rc < 0) return rc; }
+    /* Diagnostic identity is session-scoped, unlike the restarted decoder's
+     * ordinary counters. The pointer stays alive through helper/owner joins. */
+    X4Trace *trace = v->trace;
+    uint64_t decode_id = v->trace_decode_next, output_id = v->trace_output_next;
+    uint64_t copy_id = v->trace_copy_next, epoch = v->trace_decoder_epoch + 1;
     memset(v, 0, sizeof(*v));
+    v->trace = trace; v->trace_decode_next = decode_id; v->trace_output_next = output_id;
+    v->trace_copy_next = copy_id; v->trace_decoder_epoch = epoch;
+    x4_trace_record(trace, VT_START, 0, epoch, 0);
     VideoState *s = calloc(1, sizeof(*s));
     if (!s) return stage(v, "MEMORIA", -5);
     atomic_init(&s->copy_stop, false);
     atomic_init(&s->copy_submitted, 0);
     atomic_init(&s->copy_completed, 0);
     v->state = s;
+    s->trace = trace;
     int handle = x4_module_open("libSceVideodec2"), rc = handle;
     if (stage(v, "MODULO H264", rc) < 0) goto fail;
 #define SYMBOL(field) do { rc = x4_module_symbol(handle, "sceVideodec2" #field, (void **)&s->field); if (stage(v, #field, rc) < 0) goto fail; } while (0)
@@ -390,12 +417,16 @@ static void *copy_worker(void *context)
              * Storage/reservations remain alive until this thread is joined. */
             CopyJob job = s->copy_job;
             int result = valid_copy_job(s, &job) ? 0 : -7;
+            x4_trace_record(s->trace, VT_HELPER_BEGIN, 0, job.trace_copy, job.length);
             uint64_t begin = sceKernelGetProcessTime();
             if (!result) copy_span(job.destination, job.source, job.length, job.streaming);
             s->copy_result = result;
             s->copy_elapsed_us = sceKernelGetProcessTime() - begin;
             previous = sequence;
             atomic_store_explicit(&s->copy_completed, sequence, memory_order_release);
+            /* Local IDs remain valid even if completion lets owner publish
+             * its next job before this diagnostic record is captured. */
+            x4_trace_record(s->trace, VT_HELPER_END, result ? 1u : 0u, job.trace_copy, (uint32_t)result);
             continue;
         }
         /* A published job is completed before stop can be honored. There is
@@ -425,9 +456,12 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         !((uintptr_t)s->staging & 63) && split >= 64 && split < length && length - split >= 64;
     bool parallel = s->parallel_enabled && s->copy_running && eligible;
     bool check = !s->copy_check_done;
+    uint64_t copy_id = ++v->trace_copy_next;
+    x4_trace_record(v->trace, VT_COPY_BEGIN, parallel ? 1u : 0u, copy_id, s->pending_output);
     uint8_t *reference = NULL;
     uint64_t check_pre_us = 0;
     if (check) {
+        x4_trace_record(v->trace, VT_CHECK_BEGIN, 0, copy_id, length);
         s->copy_check_done = true;
         ++v->copy_check_attempts;
         uint64_t begin = sceKernelGetProcessTime();
@@ -444,6 +478,7 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
             ++v->copy_check_not_checked;
             v->copy_check_us += check_pre_us;
             report_copy_check(COPY_CHECK_NOT_CHECKED, reason, length, check_pre_us);
+            x4_trace_record(v->trace, VT_CHECK_END, (uint16_t)reason, copy_id, COPY_CHECK_NOT_CHECKED);
         }
     }
 
@@ -452,16 +487,21 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
     if (parallel) {
         if (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != s->copy_sequence) result = -7;
         else {
-            s->copy_job = (CopyJob){source + split, s->staging + split, length - split, s->streaming_copy};
+            s->copy_job = (CopyJob){source + split, s->staging + split, length - split, s->streaming_copy,
+                copy_id};
             uint64_t sequence = ++s->copy_sequence;
             atomic_store_explicit(&s->copy_submitted, sequence, memory_order_release);
             uint64_t owner_begin = sceKernelGetProcessTime();
+            x4_trace_record(v->trace, VT_OWNER_BEGIN, 1u, copy_id, split);
             copy_span(s->staging, source, split, s->streaming_copy);
             v->copy_owner_us += sceKernelGetProcessTime() - owner_begin;
+            x4_trace_record(v->trace, VT_OWNER_END, 1u, copy_id, 0);
             uint64_t wait_begin = sceKernelGetProcessTime();
+            x4_trace_record(v->trace, VT_WAIT_BEGIN, 0, copy_id, s->pending_output);
             while (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != sequence)
                 sceKernelUsleep(50);
             uint64_t wait_us = sceKernelGetProcessTime() - wait_begin;
+            x4_trace_record(v->trace, VT_WAIT_END, 0, copy_id, wait_us);
             v->copy_wait_us += wait_us;
             if (wait_us > v->copy_wait_max_us) v->copy_wait_max_us = wait_us;
             v->copy_helper_us += s->copy_elapsed_us;
@@ -470,15 +510,19 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         }
     } else {
         uint64_t owner_begin = sceKernelGetProcessTime();
+        x4_trace_record(v->trace, VT_OWNER_BEGIN, 0, copy_id, length);
         copy_span(s->staging, source, length, s->streaming_copy);
         v->copy_owner_us += sceKernelGetProcessTime() - owner_begin;
+        x4_trace_record(v->trace, VT_OWNER_END, 0, copy_id, 0);
     }
     uint64_t elapsed = sceKernelGetProcessTime() - begin;
+    x4_trace_record(v->trace, VT_COPY_END, (parallel ? 1u : 0u) | (result ? 2u : 0u), copy_id, elapsed);
     if (result) {
         if (reference) {
             free(reference);
             ++v->copy_check_not_checked; v->copy_check_us += check_pre_us;
             report_copy_check(COPY_CHECK_NOT_CHECKED, COPY_REASON_JOB, length, check_pre_us);
+            x4_trace_record(v->trace, VT_CHECK_END, COPY_REASON_JOB, copy_id, COPY_CHECK_NOT_CHECKED);
         }
         s->parallel_enabled = false;
         /* Caller retains pending_valid and cannot Decode/reuse this output. */
@@ -503,22 +547,25 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         uint64_t check_us = check_pre_us + sceKernelGetProcessTime() - check_begin;
         v->copy_check_bytes += length; v->copy_check_us += check_us;
         report_copy_check(equal ? COPY_CHECK_PASS : COPY_CHECK_MISMATCH, COPY_REASON_NONE, length, check_us);
+        x4_trace_record(v->trace, VT_CHECK_END, COPY_REASON_NONE, copy_id,
+            equal ? COPY_CHECK_PASS : COPY_CHECK_MISMATCH);
     }
     return 0;
 }
 
-static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
+static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o, unsigned *reason)
 {
-    if (o->isErrorFrame) return -7;
+    *reason = 0;
+    if (o->isErrorFrame) { *reason = 1; return -7; }
     if (!o->isValid) return 0;
     if (o->codecType != 1 || !o->frameWidth || o->frameWidth > X4_LIVE_WIDTH || (o->frameWidth & 1) ||
-        !o->frameHeight || o->frameHeight > X4_LIVE_HEIGHT || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) return -7;
+        !o->frameHeight || o->frameHeight > X4_LIVE_HEIGHT || (o->frameHeight & 1) || o->framePitch < o->frameWidth || o->framePitch > 8192) { *reason = 2; return -7; }
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
-    if (length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) return -7;
+    if (length > o->frameBufferSize || length > s->staging_size || !s->staging || ((uintptr_t)o->pFrameBuffer & 15)) { *reason = 3; return -7; }
     int owned = 0;
     for (unsigned i = 0; i < RING; ++i)
         if (o->pFrameBuffer == s->output[i].p && length <= s->output[i].size) owned = 1;
-    if (!owned) return -7;
+    if (!owned) { *reason = 4; return -7; }
     return 1;
 }
 
@@ -528,10 +575,12 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
     if (!s || !s->pending_valid) return 0;
     if (v->error) return v->error;
     const OrbisVideodec2OutputInfo *o = &s->pending;
+    uint64_t output_id = s->pending_output;
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
     int rc = copy_picture(v, s, o->pFrameBuffer, length);
     if (rc < 0) return rc;
     uint64_t begin = sceKernelGetProcessTime();
+    x4_trace_record(v->trace, VT_CONVERT_BEGIN, 0, output_id, 0);
     convert_nv12_sse2(v->pixels, s->staging, o->frameWidth, o->frameHeight, o->framePitch);
     s->pending_valid = false;
     v->width = o->frameWidth; v->height = o->frameHeight;
@@ -541,6 +590,8 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
     if (v->last_picture_time_us && completed - v->last_picture_time_us > v->picture_gap_max_us)
         v->picture_gap_max_us = completed - v->last_picture_time_us;
     v->last_picture_time_us = completed;
+    v->trace_converted_output = output_id;
+    x4_trace_record(v->trace, VT_CONVERT_END, 0, output_id, elapsed);
     if (++v->frames == 1) printf("XCloud4: primera imagen H264 %ux%u pitch=%u\n", o->frameWidth, o->frameHeight, o->framePitch);
     return 0;
 }
@@ -549,7 +600,10 @@ int x4_live_video_convert_pending(X4LiveVideo *v)
 int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64_t pts)
 {
     VideoState *s = v ? v->state : NULL;
-    if (!s || !s->decoder || !bytes || !size || size > X4_LIVE_AU_MAX || v->error) return -7;
+    if (!s || !s->decoder || !bytes || !size || size > X4_LIVE_AU_MAX || v->error) {
+        if (v) x4_trace_record(v->trace, VT_FEED_REJECT, 0, v->trace_au, size);
+        return -7;
+    }
     Memory *compressed = &s->input[s->input_slot];
     memcpy(compressed->p, bytes, size);
     Memory *m = &s->output[s->slot];
@@ -558,7 +612,10 @@ int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64
      * Otherwise only the newest valid output of a batch needs conversion. */
     if (s->pending_valid && s->pending.pFrameBuffer == m->p) {
         ++v->forced_preserve_calls;
+        uint64_t preserved_output = s->pending_output;
+        x4_trace_record(v->trace, VT_PRESERVE_BEGIN, 0, preserved_output, v->trace_au);
         int rc = x4_live_video_convert_pending(v);
+        x4_trace_record(v->trace, VT_PRESERVE_END, 0, preserved_output, (uint32_t)rc);
         if (rc < 0 || v->error || s->pending_valid)
             return rc < 0 ? rc : v->error ? v->error : stage(v, "PRESERVAR IMAGEN", -7);
     }
@@ -566,17 +623,35 @@ int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64
     OrbisVideodec2OutputInfo output = {.thisSize = sizeof(output)};
     OrbisVideodec2InputData input = {.thisSize = sizeof(input), .pAuData = compressed->p,
         .auSize = size, .ptsData = pts, .dtsData = pts};
+    uint64_t call_id = ++v->trace_decode_next;
+    x4_trace_record(v->trace, VT_DECODE_BEGIN, 0, call_id, v->trace_au);
     uint64_t begin = sceKernelGetProcessTime();
     int rc = s->Decode(s->decoder, &input, &frame, &output);
     uint64_t elapsed = sceKernelGetProcessTime() - begin;
+    x4_trace_record(v->trace, VT_DECODE_END,
+        (frame.isAccepted ? 1u : 0u) | (output.isValid ? 2u : 0u) | (output.isErrorFrame ? 4u : 0u),
+        call_id, (uint32_t)rc);
     ++v->decode_calls; v->decode_us += elapsed;
     if (elapsed > v->decode_max_us) v->decode_max_us = elapsed;
     if (rc < 0) return stage(v, "DECODIFICAR JUEGO H264", rc);
     s->input_slot = (s->input_slot + 1) % INPUT_RING;
     if (frame.isAccepted) s->slot = (s->slot + 1) % RING;
-    rc = validate_picture(s, &output);
-    if (rc < 0) return stage(v, "FORMATO DE IMAGEN", rc);
-    if (rc > 0) { s->pending = output; s->pending_valid = true; ++v->decoded_frames; }
-    else ++v->no_picture_calls;
+    unsigned reason = 0;
+    rc = validate_picture(s, &output, &reason);
+    if (rc < 0) {
+        x4_trace_record(v->trace, VT_OUTPUT_INVALID, (uint16_t)reason, call_id, v->trace_decoder_epoch);
+        return stage(v, "FORMATO DE IMAGEN", rc);
+    }
+    if (rc > 0) {
+        uint64_t output_id = ++v->trace_output_next;
+        if (s->pending_valid) x4_trace_record(v->trace, VT_OUTPUT_SUPERSEDE, 0, s->pending_output, output_id);
+        s->pending = output; s->pending_valid = true; s->pending_output = output_id; ++v->decoded_frames;
+        /* This call observed the picture. Output ABI contains no returned PTS;
+         * it is not proof that the call's current AU produced this picture. */
+        x4_trace_record(v->trace, VT_OUTPUT, X4_TRACE_F_OBSERVED_METADATA, output_id, v->trace_decoder_epoch);
+        x4_trace_record(v->trace, VT_GEOMETRY, 0, output_id,
+            ((uint64_t)output.framePitch << 32) | ((uint64_t)output.frameHeight << 16) | output.frameWidth);
+    }
+    else { ++v->no_picture_calls; x4_trace_record(v->trace, VT_NOFRAME, 0, call_id, v->trace_decoder_epoch); }
     return 0;
 }

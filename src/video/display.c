@@ -39,26 +39,55 @@ fail:
     return rc;
 }
 uint32_t *x4_display_pixels(X4Display *d) { return d->buffers[d->index]; }
-int x4_display_present(X4Display *d)
+static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh)
 {
+    uint16_t flags = fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT;
+    uint64_t submitted = (uint64_t)d->frame;
     int rc = sceVideoOutSubmitFlip(d->handle, d->index, ORBIS_VIDEO_OUT_FLIP_VSYNC, d->frame);
-    if (rc < 0) return rc;
+    if (rc < 0) {
+        x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_SUBMIT),
+                        generation, (uint32_t)rc);
+        return rc;
+    }
+    x4_trace_record(trace, X4_TRACE_FLIP_SUBMIT, flags, generation, submitted);
     /* Complete this frame's graphics submission before waiting for scanout.
      * The 0.7.19 external suspension fault explicitly reported missing
      * submitDone. This does not replace VideoOut's buffer-ownership wait. */
     rc = sceGnmSubmitDone();
     if (d->frame == 1 || rc < 0)
         printf("XCloud4: Gnm submitDone result=0x%08x\n", (unsigned)rc);
-    if (rc < 0) return rc;
+    if (rc < 0) {
+        x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_GNM),
+                        generation, (uint32_t)rc);
+        return rc;
+    }
+    x4_trace_record(trace, X4_TRACE_GNM_DONE, flags, generation, (uint32_t)rc);
     /* Bound the wait and never rewrite a buffer still being scanned out. */
     for (unsigned attempt = 0; attempt < 2000; ++attempt) {
+        x4_trace_poll(trace);
         OrbisVideoOutFlipStatus status = {0};
         rc = sceVideoOutGetFlipStatus(d->handle, &status);
-        if (rc < 0) return rc;
-        if (status.flipArg == d->frame) { d->index ^= 1; ++d->frame; return 0; }
+        if (rc < 0) {
+            x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_STATUS),
+                            generation, (uint32_t)rc);
+            return rc;
+        }
+        if (status.flipArg == d->frame) {
+            /* This observation updates NEW cadence even if the event ring
+             * cannot admit a record. Repeat/UI matches never reset it. */
+            x4_trace_present_complete(trace, generation, fresh, status.num, submitted);
+            d->index ^= 1; ++d->frame; return 0;
+        }
         sceKernelUsleep(1000);
     }
+    x4_trace_record(trace, X4_TRACE_FLIP_FAIL, flags | X4_TRACE_REASON(X4_TRACE_R_TIMEOUT),
+                    generation, (uint32_t)-1);
     return -1;
+}
+int x4_display_present(X4Display *d) { return present(d, NULL, 0, false); }
+int x4_display_present_trace(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh)
+{
+    return present(d, trace, generation, fresh);
 }
 void x4_display_close(X4Display *d)
 {

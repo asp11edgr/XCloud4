@@ -10,6 +10,16 @@
 #include "../media/live_media.h"
 #include "lifecycle.h"
 
+static void trace_inactive(X4LiveMedia *live)
+{
+    if (live) x4_trace_set_active(x4_live_media_trace(live), false);
+}
+static bool trace_session_active(enum X4SessionState state)
+{
+    return state != X4_SESSION_STOPPING && state != X4_SESSION_CLOSED &&
+        state != X4_SESSION_CANCELLED && state != X4_SESSION_ERROR;
+}
+
 int main(void)
 {
     X4Display display;
@@ -47,7 +57,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.25: copia NV12 con dos lectores y verificacion inicial\n");
+    printf("XCloud4 0.7.26: diagnostico de pausas con dos lectores NV12\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();
@@ -102,9 +112,12 @@ reopen_interface:;
             if (game_input && chord && (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS))
                 screen.exit_requested = 1;
         }
-        if ((previous_page == 4 || previous_page == 5 || previous_page == 6) && screen.page != previous_page)
+        if ((previous_page == 4 || previous_page == 5 || previous_page == 6) && screen.page != previous_page) {
+            trace_inactive(live);
             x4_auth_cancel(auth);
+        }
         if (screen.exit_requested) {
+            trace_inactive(live);
             if (x4_auth_busy(auth)) {
                 x4_auth_cancel(auth);
                 closing = 1;
@@ -135,6 +148,7 @@ reopen_interface:;
         x4_auth_session_snapshot(auth, &session);
         if (!closing && screen.page == 6 && previous_page == 6) {
             if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || chord)) {
+                trace_inactive(live);
                 x4_auth_cancel(auth);
                 session_back = 1;
             }
@@ -164,6 +178,7 @@ reopen_interface:;
                     live_presented = false;
                     live_error = 0;
                     if (live) {
+                        trace_inactive(live);
                         live_error = x4_auth_set_media_callback(auth, NULL, NULL);
                         if (!live_error) live_error = x4_live_media_close(live);
                         if (!live_error) live = NULL;
@@ -198,13 +213,14 @@ reopen_interface:;
             x4_live_media_snapshot(live, &live_status);
             if (x4_auth_busy(auth)) {
                 if (x4_live_media_take_keyframe_request(live)) x4_auth_request_keyframe(auth);
-                if (live_status.video_error) x4_auth_cancel(auth);
+                if (live_status.video_error) { trace_inactive(live); x4_auth_cancel(auth); }
                 if (screen.page == 6 && (controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && (!game_input || chord)) {
                     live_muted = !live_muted;
                     x4_live_media_set_muted(live, live_muted != 0);
                 }
             } else {
                 /* The worker closes RTC before publishing completion. */
+                trace_inactive(live);
                 int stop_rc = x4_auth_set_media_callback(auth, NULL, NULL);
                 if (!stop_rc) stop_rc = x4_live_media_close(live);
                 if (!stop_rc) live = NULL;
@@ -238,6 +254,12 @@ reopen_interface:;
         bool live_visible = screen.page == 6 && live && x4_auth_busy(auth) && !closing && !session_back &&
             !live_error && !live_status.video_error && session.state != X4_SESSION_STOPPING &&
             live_status.video_ready;
+        X4Trace *live_trace = live ? x4_live_media_trace(live) : NULL;
+        bool trace_active = live_visible && !live_retained && trace_session_active(session.state);
+        x4_trace_set_active(live_trace, trace_active);
+        /* Runs before the idle continue too: a repeated/status-only refresh
+         * must not conceal a gap in actual NEW live completions. */
+        x4_trace_poll(live_trace);
         int next_overlay_key[10] = {screen.page, live_muted, live_status.audio_error,
             live_status.audio_playing, session.input_error, session.input_ready,
             session.rtc_connected, session.state, screen.exit_error, controller.data.connected};
@@ -250,6 +272,13 @@ reopen_interface:;
             continue;
         }
         bool drew_live = live_visible && x4_live_media_draw(live, x4_display_pixels(&display));
+        uint64_t drawn_generation = 0, drawn_output = 0;
+        bool drawn_fresh = false;
+        if (drew_live && !live_retained)
+            x4_live_media_drawn(live, &drawn_generation, &drawn_output, &drawn_fresh);
+        /* Media draw records the independent native-output identity. Display
+         * uses the actual drawn publication tag, never a later snapshot. */
+        (void)drawn_output;
         if (!drew_live) x4_screen_draw(&screen, &controller, x4_display_pixels(&display));
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
         if (screen.page == 6) {
@@ -277,7 +306,9 @@ reopen_interface:;
             x4_catalog_draw(&catalog, catalog_selected, x4_auth_busy(auth), x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         uint64_t present_begin = sceKernelGetProcessTime();
-        rc = x4_display_present(&display);
+        rc = drew_live && trace_active ?
+            x4_display_present_trace(&display, live_trace, drawn_generation, drawn_fresh) :
+            x4_display_present(&display);
         if (rc == 0 && drew_live && live && !live_retained) {
             x4_live_media_note_present(live, sceKernelGetProcessTime() - present_begin);
             memcpy(overlay_key, next_overlay_key, sizeof(overlay_key));
@@ -291,6 +322,7 @@ reopen_interface:;
     }
     /* A display failure can break the loop early: cancel then join before
      * cleaning the UI. Ordinary OPTIONS keeps rendering while it cancels. */
+    trace_inactive(live);
     x4_auth_cancel(auth);
     while (x4_auth_busy(auth)) sceKernelUsleep(100000);
     if (live) {

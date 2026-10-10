@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "live_trace.h"
 
 enum { X4_LIVE_KIND_VIDEO = 0, X4_LIVE_KIND_AUDIO = 1 };
 /* Largest RTP packet copied from the transport; larger packets are dropped. */
@@ -84,6 +85,11 @@ void x4_live_media_tick(X4LiveMedia *media);
 /* Main-thread query: a completed publication has not yet been presented.
  * UI changes can force draw even when this returns false. */
 bool x4_live_media_has_new_picture(X4LiveMedia *media);
+/* Borrowed until close succeeds; numeric diagnostics only. Main-only drawn
+ * observation does not advance presentation state or read a newer slot. */
+X4Trace *x4_live_media_trace(X4LiveMedia *media);
+bool x4_live_media_drawn(X4LiveMedia *media, uint64_t *generation,
+    uint64_t *native_output_id, bool *fresh_vs_presented);
 /* Draws the last real picture scaled with aspect ratio into a 1920x1080
  * framebuffer with black bars. Returns 1 when drawn, 0 when no real picture
  * exists yet (the framebuffer is untouched). */

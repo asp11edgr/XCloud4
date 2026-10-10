@@ -2,6 +2,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "../media/live_trace.h"
 enum { X4_LIVE_WIDTH = 1280, X4_LIVE_HEIGHT = 720, X4_LIVE_AU_MAX = 2 * 1024 * 1024 };
 typedef struct {
     void *state;
@@ -21,6 +22,11 @@ typedef struct {
     uint64_t last_picture_time_us, picture_gap_max_us;
     int error;
     char stage[48];
+    /* Session diagnostic ordinals survive decoder restart. Native output has
+     * no returned PTS: output IDs never identify an input AU. */
+    X4Trace *trace;
+    uint64_t trace_au, trace_decode_next, trace_output_next, trace_copy_next;
+    uint64_t trace_decoder_epoch, trace_converted_output;
 } X4LiveVideo;
 /* All calls run on one video-owner thread. An optional CPU-only copy helper
  * finishes its disjoint span before conversion, Decode or native teardown.

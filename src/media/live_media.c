@@ -9,28 +9,55 @@
 #include <stdio.h>
 static unsigned be16(const uint8_t *p) { return ((unsigned)p[0] << 8) | p[1]; }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p + 2); }
-int x4_live_rtp_parse(const uint8_t *p, size_t size, X4LiveRtp *r)
+/* Fixed trace schema. No RTP timestamp, SSRC, payload, address or pointer.
+ * MEDIA events 0x100..0x13f are reserved in live_trace.h. */
+enum {
+    MT_RTP = X4_TRACE_RX_VALID, MT_RX_REJECT = X4_TRACE_RX_REJECT,
+    MT_QUEUE_REJECT = X4_TRACE_QUEUE_DROP, MT_POP = X4_TRACE_QUEUE_POP,
+    MT_FOREIGN = X4_TRACE_REORDER_DROP, MT_TRACK = X4_TRACE_SOURCE_EPOCH,
+    MT_REORDER_INSERT = X4_TRACE_REORDER_INSERT, MT_REORDER_GAP = X4_TRACE_REORDER_HOLE,
+    MT_AU_OPEN = X4_TRACE_AU_BEGIN, MT_AU_RESET = X4_TRACE_AU_RESET,
+    MT_MARKER = X4_TRACE_AU_COMPLETE, MT_PUBLISH = X4_TRACE_RGB_PUBLICATION,
+    MT_SUPERSEDE = X4_TRACE_RGB_SUPERSEDED, MT_WORKER_START = X4_TRACE_MEDIA_START,
+    MT_WORKER_STOP = X4_TRACE_MEDIA_STOP, MT_KEY_REQUEST = X4_TRACE_PLI_REQUEST,
+    MT_DAMAGE = 0x120, MT_IDR, MT_SUBMIT_BEGIN, MT_SUBMIT_END, MT_RESET_TOTAL,
+    MT_DAMAGE_TOTAL, MT_WAIT_BEGIN, MT_WAIT_END, MT_POP_CONTENDED,
+    MT_REORDER_EMIT = X4_TRACE_REORDER_EMIT, MT_YIELD = X4_TRACE_WORKER_YIELD
+};
+enum { RESET_SUBMITTED, RESET_TIMESTAMP, RESET_MARKER, RESET_WAIT,
+    RESET_PARAMS, RESET_FEED, RESET_INGRESS, RESET_TRACK, RESET_JUMP,
+    RESET_REORDER, RESET_COUNT };
+enum {
+    DM_FORBIDDEN = 1u << 0, DM_NAL_TYPE = 1u << 1, DM_FU_ACTIVE = 1u << 2,
+    DM_STAP_SHORT = 1u << 3, DM_STAP_LENGTH = 1u << 4, DM_STAP_TRAIL = 1u << 5,
+    DM_FU_HEADER = 1u << 6, DM_FU_NESTED = 1u << 7, DM_FU_ORPHAN = 1u << 8,
+    DM_FU_MISMATCH = 1u << 9, DM_CAPACITY = 1u << 10,
+    DM_DISCARDED = 1u << 11, DM_PACKETIZATION = 1u << 12
+};
+static int rtp_parse_reason(const uint8_t *p, size_t size, X4LiveRtp *r, unsigned *reason)
 {
-    if (!p || !r || size < 12 || size > X4_LIVE_RTP_MAX || (p[0] >> 6) != 2 || (p[1] >= 200 && p[1] <= 206)) return -1;
+    if (reason) *reason = 0;
+    if (!p || !r || size < 12 || size > X4_LIVE_RTP_MAX || (p[0] >> 6) != 2 || (p[1] >= 200 && p[1] <= 206)) { if (reason) *reason = 1; return -1; }
     size_t at = 12 + (p[0] & 15) * 4u;
-    if (at > size) return -1;
+    if (at > size) { if (reason) *reason = 2; return -1; }
     if (p[0] & 16) {
-        if (size - at < 4) return -1;
+        if (size - at < 4) { if (reason) *reason = 3; return -1; }
         size_t ext = (size_t)be16(p + at + 2) * 4u + 4;
-        if (ext > size - at) return -1;
+        if (ext > size - at) { if (reason) *reason = 4; return -1; }
         at += ext;
     }
     size_t end = size;
     if (p[0] & 32) {
         unsigned pad = p[size - 1];
-        if (!pad || pad > size - at) return -1;
+        if (!pad || pad > size - at) { if (reason) *reason = 5; return -1; }
         end -= pad;
     }
-    if (at >= end) return -1;
+    if (at >= end) { if (reason) *reason = 6; return -1; }
     *r = (X4LiveRtp){.payload = p + at, .size = end - at, .sequence = be16(p + 2),
         .timestamp = be32(p + 4), .ssrc = be32(p + 8), .payload_type = p[1] & 127, .marker = (p[1] & 128) != 0};
     return 0;
 }
+int x4_live_rtp_parse(const uint8_t *p, size_t size, X4LiveRtp *r) { return rtp_parse_reason(p, size, r, NULL); }
 int x4_live_ring_init(X4LiveRing *q, uint32_t capacity)
 {
     memset(q, 0, sizeof(*q)); atomic_flag_clear(&q->lock);
@@ -43,10 +70,12 @@ int x4_live_ring_init(X4LiveRing *q, uint32_t capacity)
     q->capacity = capacity; return 0;
 }
 void x4_live_ring_free(X4LiveRing *q) { free(q->sizes); free(q->data); free(q->arrivals); q->sizes = NULL; q->data = NULL; q->arrivals = NULL; q->capacity = 0; }
-bool x4_live_ring_push(X4LiveRing *q, const uint8_t *p, size_t size)
+static bool ring_push_reason(X4LiveRing *q, const uint8_t *p, size_t size, unsigned *reason)
 {
-    if (!q || !q->capacity || !p || !size || size > X4_LIVE_RTP_MAX) return false;
+    if (reason) *reason = 0;
+    if (!q || !q->capacity || !p || !size || size > X4_LIVE_RTP_MAX) { if (reason) *reason = 1; return false; }
     if (atomic_flag_test_and_set_explicit(&q->lock, memory_order_acquire)) {
+        if (reason) *reason = 2;
         atomic_fetch_add_explicit(&q->push_contended, 1, memory_order_relaxed); return false;
     }
     bool ok = q->count < q->capacity;
@@ -61,14 +90,17 @@ bool x4_live_ring_push(X4LiveRing *q, const uint8_t *p, size_t size)
         if (q->count > atomic_load_explicit(&q->highwater, memory_order_relaxed))
             atomic_store_explicit(&q->highwater, q->count, memory_order_relaxed);
     }
-    else atomic_fetch_add_explicit(&q->full, 1, memory_order_relaxed);
+    else { if (reason) *reason = 3; atomic_fetch_add_explicit(&q->full, 1, memory_order_relaxed); }
     atomic_flag_clear_explicit(&q->lock, memory_order_release); return ok;
 }
-static size_t ring_pop_at(X4LiveRing *q, uint8_t *p, uint64_t *arrival)
+bool x4_live_ring_push(X4LiveRing *q, const uint8_t *p, size_t size) { return ring_push_reason(q, p, size, NULL); }
+static size_t ring_pop_at(X4LiveRing *q, uint8_t *p, uint64_t *arrival, unsigned *reason)
 {
+    if (reason) *reason = 0;
     if (arrival) *arrival = 0;
     if (!q || !q->capacity) return 0;
     if (atomic_flag_test_and_set_explicit(&q->lock, memory_order_acquire)) {
+        if (reason) *reason = 2;
         atomic_fetch_add_explicit(&q->pop_contended, 1, memory_order_relaxed); return 0;
     }
     size_t size = 0;
@@ -81,7 +113,7 @@ static size_t ring_pop_at(X4LiveRing *q, uint8_t *p, uint64_t *arrival)
     atomic_store_explicit(&q->depth, q->count, memory_order_relaxed);
     atomic_flag_clear_explicit(&q->lock, memory_order_release); return size;
 }
-size_t x4_live_ring_pop(X4LiveRing *q, uint8_t *p) { return ring_pop_at(q, p, NULL); }
+size_t x4_live_ring_pop(X4LiveRing *q, uint8_t *p) { return ring_pop_at(q, p, NULL, NULL); }
 void x4_live_track_init(X4LiveTrack *t, int pt) { memset(t, 0, sizeof(*t)); t->forced_type = pt; }
 int x4_live_track_accept(X4LiveTrack *t, const X4LiveRtp *r)
 {
@@ -113,8 +145,9 @@ int x4_live_reorder_insert(X4LiveReorder *q, const uint8_t *p, size_t size, uint
     q->slots[at] = (X4LiveReorderSlot){.sequence = seq, .size = size, .used = true, .arrival = now};
     ++q->buffered; return result;
 }
-const uint8_t *x4_live_reorder_next(X4LiveReorder *q, uint64_t now, size_t *size, uint32_t *lost)
+static const uint8_t *reorder_next_reason(X4LiveReorder *q, uint64_t now, size_t *size, uint32_t *lost, unsigned *reason)
 {
+    if (reason) *reason = 0;
     *size = 0; *lost = 0;
     if (!q || !q->started || !q->buffered) return NULL;
     unsigned at = q->expected & (q->window - 1);
@@ -129,6 +162,8 @@ const uint8_t *x4_live_reorder_next(X4LiveReorder *q, uint64_t now, size_t *size
         /* A zero clock suppresses time expiry while ingress still awaits
          * insertion. The bounded depth/window policy continues to apply. */
         if (gap >= q->window || (q->buffered < q->depth && (!now || now - oldest < q->max_wait))) return NULL;
+        if (reason) *reason = (q->buffered >= q->depth ? 1u : 0u) |
+            (now && now - oldest >= q->max_wait ? 2u : 0u);
         q->expected += gap; *lost = gap; at = q->expected & (q->window - 1);
     }
     X4LiveReorderSlot *s = &q->slots[at];
@@ -136,9 +171,17 @@ const uint8_t *x4_live_reorder_next(X4LiveReorder *q, uint64_t now, size_t *size
     *size = s->size; s->used = false; --q->buffered; ++q->expected;
     return q->data + (size_t)at * X4_LIVE_RTP_MAX;
 }
+const uint8_t *x4_live_reorder_next(X4LiveReorder *q, uint64_t now, size_t *size, uint32_t *lost)
+{ return reorder_next_reason(q, now, size, lost, NULL); }
 enum { RGB_SLOTS = 3, WORKER_BUDGET_US = 16000, WORKER_DECODE_LIMIT = 4 };
-typedef struct { uint32_t *pixels; unsigned width, height; uint64_t generation, completed_us; } RgbSlot;
+typedef struct { uint32_t *pixels; unsigned width, height; uint64_t generation, completed_us, native_output; } RgbSlot;
 struct X4LiveMedia {
+    X4Trace *trace;
+    uint64_t trace_session;
+    uint64_t trace_au_next, trace_au, trace_track_epoch, last_draw_output;
+    uint32_t damage_bits, first_damage;
+    unsigned trace_budget_reason;
+    uint64_t reset_counts[RESET_COUNT], discard_counts[RESET_COUNT], damage_counts[13];
     X4LiveRing ring;
     X4LiveReorder reorder;
     X4LiveTrack track;
@@ -182,92 +225,134 @@ static void mailbox_lock(X4LiveMedia *m)
 }
 static void mailbox_unlock(X4LiveMedia *m) { atomic_flag_clear_explicit(&m->mailbox_gate, memory_order_release); }
 static void *video_worker(void *context);
-static void reset_au(X4LiveMedia *m, bool gap)
+static void note_damage(X4LiveMedia *m, uint32_t bit)
 {
+    if (!m->first_damage) {
+        m->first_damage = bit;
+        x4_trace_record(m->trace, MT_DAMAGE, 0, m->trace_au, bit);
+    }
+    m->damage_bits |= bit;
+}
+static void reset_au(X4LiveMedia *m, bool gap, unsigned reason, unsigned detail)
+{
+    bool waiting_before = m->waiting_keyframe;
+    if (reason < RESET_COUNT) ++m->reset_counts[reason];
+    uint16_t flags = (gap ? 1u : 0u) | (m->au_open ? 2u : 0u) | (m->fu ? 4u : 0u) |
+        (m->idr ? 8u : 0u) | (m->damaged ? 16u : 0u) | (!m->au_size ? 32u : 0u) |
+        (waiting_before ? 64u : 0u);
+    if (gap && m->au_open) {
+        if (reason < RESET_COUNT) ++m->discard_counts[reason];
+        for (unsigned i = 0; i < 13; ++i) if (m->damage_bits & (1u << i)) ++m->damage_counts[i];
+    }
     if (gap) {
         if (m->au_open) { m->discard_timestamp = m->timestamp; m->discard_timestamp_valid = true; ++m->dropped_frames; }
         m->waiting_keyframe = true; atomic_store(&m->keyframe, true);
     }
+    if (m->waiting_keyframe) flags |= 128u;
+    x4_trace_record(m->trace, MT_AU_RESET, flags, m->trace_au,
+        ((uint64_t)reason << 48) | ((uint64_t)(detail & 0xffffu) << 32) | m->damage_bits);
+    if (!waiting_before && m->waiting_keyframe)
+        x4_trace_record(m->trace, MT_WAIT_BEGIN, (uint16_t)reason, m->trace_au, 0);
     m->au_size = 0; m->fu = m->au_open = m->idr = m->damaged = false;
+    m->damage_bits = m->first_damage = 0;
     m->au_sps_size = m->au_pps_size = 0;
 }
 static bool append(X4LiveMedia *m, const uint8_t *p, size_t size)
 {
-    if (size > X4_LIVE_AU_MAX - m->au_size) return false;
+    if (size > X4_LIVE_AU_MAX - m->au_size) { note_damage(m, DM_CAPACITY); return false; }
     memcpy(m->au + m->au_size, p, size); m->au_size += size; return true;
 }
 static void cache_nal(X4LiveMedia *m, const uint8_t *p, size_t size)
 {
     unsigned type = p[0] & 31;
-    if (type == 5) m->idr = true;
+    if (type == 5) { m->idr = true; x4_trace_record(m->trace, MT_IDR, 0, m->trace_au, 0); }
     if (size > 4092) return;
     uint8_t *to = type == 7 ? m->au_sps : type == 8 ? m->au_pps : NULL;
     if (to) { memcpy(to, "\0\0\0\1", 4); memcpy(to + 4, p, size); if (type == 7) m->au_sps_size = size + 4; else m->au_pps_size = size + 4; }
 }
 static bool nal(X4LiveMedia *m, const uint8_t *p, size_t size)
 {
-    if (!size || (p[0] & 128) || !(p[0] & 31) || (p[0] & 31) > 23) return false;
+    if (!size || (p[0] & 128) || !(p[0] & 31) || (p[0] & 31) > 23) {
+        note_damage(m, size && (p[0] & 128) ? DM_FORBIDDEN : DM_NAL_TYPE); return false;
+    }
     if (!append(m, (const uint8_t *)"\0\0\0\1", 4) || !append(m, p, size)) return false;
     cache_nal(m, p, size); return true;
 }
 static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
 {
-    if (m->au_open && m->timestamp != r->timestamp) reset_au(m, true);
-    if (!m->au_open) { m->au_open = true; m->timestamp = r->timestamp; }
+    if (m->au_open && m->timestamp != r->timestamp) reset_au(m, true, RESET_TIMESTAMP, 0);
+    if (!m->au_open) {
+        m->au_open = true; m->timestamp = r->timestamp; m->trace_au = ++m->trace_au_next;
+        x4_trace_record(m->trace, MT_AU_OPEN, m->waiting_keyframe ? 1u : 0u, m->trace_au, r->sequence);
+    }
     if (m->discard_timestamp_valid) {
-        if (r->timestamp == m->discard_timestamp) m->damaged = true;
+        if (r->timestamp == m->discard_timestamp) { note_damage(m, DM_DISCARDED); m->damaged = true; }
         else m->discard_timestamp_valid = false;
     }
     const uint8_t *p = r->payload; size_t size = r->size; unsigned type = p[0] & 31;
     bool ok = !(p[0] & 128);
-    if (ok && type >= 1 && type <= 23) { if (m->fu) ok = false; else ok = nal(m, p, size); }
+    if (!ok) note_damage(m, DM_FORBIDDEN);
+    if (ok && type >= 1 && type <= 23) { if (m->fu) { note_damage(m, DM_FU_ACTIVE); ok = false; } else ok = nal(m, p, size); }
     else if (ok && type == 24 && size > 1 && !m->fu) {
         size_t at = 1;
         while (ok && at < size) {
-            if (size - at < 2) { ok = false; break; }
+            if (size - at < 2) { note_damage(m, DM_STAP_SHORT); ok = false; break; }
             size_t length = be16(p + at); at += 2;
-            if (!length || length > size - at) { ok = false; break; }
+            if (!length || length > size - at) { note_damage(m, DM_STAP_LENGTH); ok = false; break; }
             ok = nal(m, p + at, length); at += length;
         }
-        if (at != size) ok = false;
+        if (at != size) { note_damage(m, DM_STAP_TRAIL); ok = false; }
     } else if (ok && type == 28 && size > 2) {
         unsigned nt = p[1] & 31; bool start = p[1] & 128, end = p[1] & 64;
-        if ((p[1] & 32) || !nt || nt > 23 || (start && end)) ok = false;
+        if ((p[1] & 32) || !nt || nt > 23 || (start && end)) { note_damage(m, DM_FU_HEADER); ok = false; }
         else if (start) {
-            if (m->fu) ok = false;
+            if (m->fu) { note_damage(m, DM_FU_NESTED); ok = false; }
             else {
                 uint8_t header = (p[0] & 0xe0) | nt;
                 m->fu_start = m->au_size + 4; m->fu_type = header;
                 ok = append(m, (const uint8_t *)"\0\0\0\1", 4) && append(m, &header, 1) && append(m, p + 2, size - 2);
                 m->fu = ok;
             }
-        } else if (!m->fu || ((p[0] & 0xe0) | nt) != m->fu_type) ok = false;
+        } else if (!m->fu || ((p[0] & 0xe0) | nt) != m->fu_type) {
+            note_damage(m, !m->fu ? DM_FU_ORPHAN : DM_FU_MISMATCH); ok = false;
+        }
         else {
             ok = append(m, p + 2, size - 2);
             if (ok && end) { m->fu = false; cache_nal(m, m->au + m->fu_start, m->au_size - m->fu_start); }
         }
-    } else ok = false;
+    } else {
+        note_damage(m, type == 24 && m->fu ? DM_FU_ACTIVE : DM_PACKETIZATION); ok = false;
+    }
     if (!ok) m->damaged = true;
     if (!r->marker) return;
+    x4_trace_record(m->trace, MT_MARKER,
+        (m->fu ? 1u : 0u) | (m->damaged ? 2u : 0u) | (!m->au_size ? 4u : 0u) | (m->idr ? 8u : 0u),
+        m->trace_au, m->au_size);
     if (m->fu || m->damaged || !m->au_size) {
-        reset_au(m, true); return;
+        reset_au(m, true, RESET_MARKER, (m->fu ? 1u : 0u) | (m->damaged ? 2u : 0u) | (!m->au_size ? 4u : 0u)); return;
     }
     /* Parameter sets are committed only after the complete AU is valid.
      * A damaged STAP-A/FU-A cannot poison a later keyframe's cache. */
     if (m->au_sps_size) { memcpy(m->sps, m->au_sps, m->au_sps_size); m->sps_size = m->au_sps_size; }
     if (m->au_pps_size) { memcpy(m->pps, m->au_pps, m->au_pps_size); m->pps_size = m->au_pps_size; }
     if (m->waiting_keyframe && (!m->idr || !m->sps_size || !m->pps_size)) {
-        reset_au(m, true); return;
+        reset_au(m, true, RESET_WAIT, (!m->idr ? 1u : 0u) | (!m->sps_size ? 2u : 0u) | (!m->pps_size ? 4u : 0u)); return;
     }
     if (m->waiting_keyframe) {
         size_t params = m->sps_size + m->pps_size;
-        if (params > X4_LIVE_AU_MAX - m->au_size) { reset_au(m, true); return; }
+        if (params > X4_LIVE_AU_MAX - m->au_size) { reset_au(m, true, RESET_PARAMS, 0); return; }
         memmove(m->au + params, m->au, m->au_size); memcpy(m->au, m->sps, m->sps_size); memcpy(m->au + m->sps_size, m->pps, m->pps_size); m->au_size += params;
     }
     ++m->au_submitted;
+    m->video.trace_au = m->trace_au;
+    x4_trace_record(m->trace, MT_SUBMIT_BEGIN, m->waiting_keyframe ? 1u : 0u, m->trace_au, m->au_size);
     int rc = x4_live_video_feed(&m->video, m->au, m->au_size, (uint64_t)m->timestamp * 1000000 / 90000);
-    if (rc < 0) reset_au(m, true);
-    else { m->waiting_keyframe = false; reset_au(m, false); }
+    x4_trace_record(m->trace, MT_SUBMIT_END, 0, m->trace_au, (uint32_t)rc);
+    if (rc < 0) reset_au(m, true, RESET_FEED, 0);
+    else {
+        if (m->waiting_keyframe) x4_trace_record(m->trace, MT_WAIT_END, 0, m->trace_au, 0);
+        m->waiting_keyframe = false; reset_au(m, false, RESET_SUBMITTED, 0);
+    }
 }
 X4LiveMedia *x4_live_media_create(int *error)
 {
@@ -291,6 +376,10 @@ X4LiveMedia *x4_live_media_create(int *error)
         m->rgb[i].pixels = calloc((size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(uint32_t));
         if (!m->rgb[i].pixels) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     }
+    m->trace_session = x4_trace_now_us();
+    m->trace = x4_trace_create(m->trace_session);
+    m->video.trace = m->trace;
+    printf("XCloud4: numeric trace enabled=%u readers=2\n", m->trace ? 1u : 0u);
     if (error) *error = 0; return m;
 fail:
     if (error) *error = rc; x4_live_media_close(m); return NULL;
@@ -322,25 +411,57 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
     if (kind == X4_LIVE_KIND_AUDIO) { x4_live_audio_receive(m->audio, p, size); return; }
     if (kind != X4_LIVE_KIND_VIDEO) return;
     X4LiveRtp r;
-    if (x4_live_rtp_parse(p, size, &r) < 0 || !x4_live_ring_push(&m->ring, p, size)) {
+    unsigned parse_reason = 0;
+    int parsed = rtp_parse_reason(p, size, &r, &parse_reason);
+    unsigned reason = 0;
+    bool pushed = parsed >= 0 && ring_push_reason(&m->ring, p, size, &reason);
+    if (parsed < 0 || !pushed) {
         atomic_fetch_add(&m->dropped, 1); atomic_store(&m->ingress_gap, true); atomic_store(&m->keyframe, true);
     }
     else atomic_fetch_add(&m->packets, 1);
+    /* Exact push branch, not a racy difference of queue counters. Queue gate
+     * has already been released. seq16 alone is not proof of packet loss. */
+    if (parsed < 0) x4_trace_record(m->trace, MT_RX_REJECT, X4_TRACE_REASON(X4_TRACE_R_RTP_INVALID), size, parse_reason);
+    else {
+        x4_trace_record(m->trace, MT_RTP, (r.marker ? X4_TRACE_F_MARKER : 0u) |
+            (pushed ? X4_TRACE_F_OBSERVED_METADATA : 0u), r.sequence, size);
+        if (!pushed) x4_trace_record(m->trace, MT_QUEUE_REJECT,
+            X4_TRACE_REASON(reason == 2 ? X4_TRACE_R_PUSH_CONTENDED : reason == 3 ? X4_TRACE_R_QUEUE_FULL : X4_TRACE_R_SIZE),
+            r.sequence, atomic_load_explicit(&m->ring.depth, memory_order_relaxed));
+    }
+    x4_trace_poll(m->trace);
 }
-static bool tick_budget(const X4LiveMedia *m, uint64_t begin, uint64_t decode_begin)
+static bool tick_budget(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin)
 {
-    return atomic_load(&m->stop) || m->video.decode_calls - decode_begin >= WORKER_DECODE_LIMIT ||
-        sceKernelGetProcessTime() - begin >= WORKER_BUDGET_US;
+    /* Preserve original short-circuit order and every yielding condition.
+     * Only the exact condition observed at a budget check is recorded. */
+    if (atomic_load(&m->stop)) { m->trace_budget_reason = X4_TRACE_R_USER_STOP; return true; }
+    if (m->video.decode_calls - decode_begin >= WORKER_DECODE_LIMIT) {
+        m->trace_budget_reason = X4_TRACE_R_BUDGET_DECODE; return true;
+    }
+    if (sceKernelGetProcessTime() - begin >= WORKER_BUDGET_US) {
+        m->trace_budget_reason = X4_TRACE_R_BUDGET_TIME; return true;
+    }
+    return false;
 }
 static void drain_reordered(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin, bool allow_expire)
 {
     for (unsigned n = 0; n < 128 && !m->video.error; ++n) {
         if (tick_budget(m, begin, decode_begin)) break;
         size_t size = 0; uint32_t lost = 0;
-        const uint8_t *p = x4_live_reorder_next(&m->reorder, allow_expire ? sceKernelGetProcessTime() : 0, &size, &lost);
+        unsigned reason = 0;
+        uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
+        const uint8_t *p = reorder_next_reason(&m->reorder, allow_expire ? sceKernelGetProcessTime() : 0, &size, &lost, &reason);
         if (!p) break;
-        if (lost) { m->lost += lost; reset_au(m, true); }
-        X4LiveRtp r; if (x4_live_rtp_parse(p, size, &r) == 0) depacketize(m, &r);
+        if (lost) {
+            x4_trace_record(m->trace, MT_REORDER_GAP, (uint16_t)(reason | (allow_expire ? 4u : 0u)),
+                ((uint64_t)expected << 32) | lost, buffered);
+            m->lost += lost; reset_au(m, true, RESET_REORDER, reason);
+        }
+        X4LiveRtp r; if (x4_live_rtp_parse(p, size, &r) == 0) {
+            x4_trace_record(m->trace, MT_REORDER_EMIT, r.marker ? X4_TRACE_F_MARKER : 0u, r.sequence, size);
+            depacketize(m, &r);
+        }
     }
 }
 static void retire_video_counters(X4LiveMedia *m)
@@ -427,20 +548,27 @@ static void finish_rgb(X4LiveMedia *m, int slot, bool converted)
 {
     X4LiveMediaSnapshot s;
     prepare_worker_view(m, &s);
+    uint64_t superseded = 0, generation = 0, output_id = 0;
     mailbox_lock(m);
     if (converted && !m->video.error && m->video.width && m->video.height) {
         /* A ready slot being drawn or already drawn is not discarded. */
         if (m->published_slot >= 0 && m->published_slot != m->reader_slot &&
-            m->rgb[m->published_slot].generation > m->last_draw_frame) ++m->publication_superseded;
+            m->rgb[m->published_slot].generation > m->last_draw_frame) {
+            ++m->publication_superseded; superseded = m->rgb[m->published_slot].generation;
+        }
         RgbSlot *rgb = &m->rgb[slot];
         rgb->width = m->video.width; rgb->height = m->video.height;
         rgb->generation = ++m->publication_generation;
         rgb->completed_us = m->video.last_picture_time_us;
+        rgb->native_output = m->video.trace_converted_output;
+        generation = rgb->generation; output_id = rgb->native_output;
         m->published_slot = slot;
     }
     m->writer_slot = -1;
     commit_worker_view(m, &s);
     mailbox_unlock(m);
+    if (superseded) x4_trace_record(m->trace, MT_SUPERSEDE, 0, superseded, generation);
+    if (generation) x4_trace_record(m->trace, MT_PUBLISH, 0, generation, output_id);
 }
 static void reset_worker_maxima(X4LiveMedia *m)
 {
@@ -528,8 +656,9 @@ static void video_batch(X4LiveMedia *m)
         m->video.error = X4_LIVE_ERR_DECODER; finish_rgb(m, slot, false); return;
     }
     uint64_t begin = sceKernelGetProcessTime(), decode_begin = m->video.decode_calls;
+    m->trace_budget_reason = X4_TRACE_R_NONE;
     uint64_t frame_begin = m->video.frames;
-    if (atomic_exchange(&m->ingress_gap, false)) reset_au(m, true);
+    if (atomic_exchange(&m->ingress_gap, false)) reset_au(m, true, RESET_INGRESS, 0);
     /* Consume available old packets before ingress, without expiring a time
      * gap whose missing packet may still be queued after the previous yield.
      * Depth-based gap abandonment remains bounded by the reorder policy. */
@@ -539,16 +668,28 @@ static void video_batch(X4LiveMedia *m)
     for (unsigned n = 0; n < 512; ++n) {
         if (tick_budget(m, begin, decode_begin)) break;
         uint64_t arrival = 0;
-        size_t size = ring_pop_at(&m->ring, packet, &arrival); if (!size) break;
+        unsigned pop_reason = 0;
+        size_t size = ring_pop_at(&m->ring, packet, &arrival, &pop_reason);
+        if (!size) {
+            if (pop_reason == 2) x4_trace_record(m->trace, MT_POP_CONTENDED,
+                X4_TRACE_REASON(X4_TRACE_R_POP_CONTENDED), atomic_load_explicit(&m->ring.depth, memory_order_relaxed), 0);
+            break;
+        }
         ++m->tick_packets;
         uint64_t popped = sceKernelGetProcessTime(), age = arrival && popped >= arrival ? popped - arrival : 0;
         m->queue_age_us += age; if (age > m->queue_age_max_us) m->queue_age_max_us = age;
         X4LiveRtp r; if (x4_live_rtp_parse(packet, size, &r) < 0) continue;
+        x4_trace_record(m->trace, MT_POP, r.marker ? X4_TRACE_F_MARKER : 0u,
+            ((uint64_t)r.sequence << 32) | size, age);
         bool locked = m->track.locked;
         int track = x4_live_track_accept(&m->track, &r);
-        if (track < 0) { atomic_fetch_add(&m->dropped, 1); continue; }
+        if (track < 0) {
+            x4_trace_record(m->trace, MT_FOREIGN, X4_TRACE_REASON(X4_TRACE_R_FOREIGN), r.sequence, 0);
+            atomic_fetch_add(&m->dropped, 1); continue;
+        }
         if (track == X4_LIVE_TRACK_NEW) {
-            reset_au(m, true); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
+            x4_trace_record(m->trace, MT_TRACK, locked ? 1u : 0u, ++m->trace_track_epoch, r.sequence);
+            reset_au(m, true, RESET_TRACK, locked ? 1u : 0u); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
             if (locked) {
                 int rc = x4_live_video_stop(&m->video); if (rc < 0) goto finish;
                 retire_video_counters(m);
@@ -556,9 +697,12 @@ static void video_batch(X4LiveMedia *m)
                 decode_begin = frame_begin = 0;
             }
         }
+        uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
         int rc = x4_live_reorder_insert(&m->reorder, packet, size, r.sequence, sceKernelGetProcessTime());
+        x4_trace_record(m->trace, MT_REORDER_INSERT, (uint16_t)rc,
+            ((uint64_t)expected << 32) | r.sequence, buffered);
         if (rc == X4_LIVE_REORDER_LATE) atomic_fetch_add(&m->dropped, 1);
-        else if (rc == X4_LIVE_REORDER_JUMP) { ++m->lost; reset_au(m, true); }
+        else if (rc == X4_LIVE_REORDER_JUMP) { ++m->lost; reset_au(m, true, RESET_JUMP, 0); }
         /* Consume continuously so high packet rates do not fill the reorder window. */
         drain_reordered(m, begin, decode_begin,
             atomic_load_explicit(&m->ring.depth, memory_order_relaxed) == 0);
@@ -572,11 +716,15 @@ finish:
     uint64_t now = sceKernelGetProcessTime(), elapsed = now - begin;
     ++m->tick_calls; m->tick_us += elapsed;
     if (elapsed > m->tick_max_us) m->tick_max_us = elapsed;
+    x4_trace_record(m->trace, MT_YIELD, X4_TRACE_REASON(m->trace_budget_reason),
+        m->video.decode_calls - decode_begin, elapsed);
     finish_rgb(m, slot, m->video.frames > frame_begin);
 }
 static void *video_worker(void *context)
 {
     X4LiveMedia *m = context;
+    x4_trace_record(m->trace, MT_WORKER_START, 0, 2, WORKER_BUDGET_US);
+    x4_trace_record(m->trace, MT_WAIT_BEGIN, 0x8000u, 0, 0);
     int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT);
     publish_worker_view(m);
     atomic_store(&m->start_result, rc);
@@ -584,6 +732,7 @@ static void *video_worker(void *context)
     if (rc >= 0) printf("XCloud4: video owner ready rgb_slots=%u budget_us=%u decode_limit=%u\n",
         RGB_SLOTS, WORKER_BUDGET_US, WORKER_DECODE_LIMIT);
     while (rc >= 0 && !atomic_load(&m->stop)) {
+        x4_trace_poll(m->trace);
         reset_worker_maxima(m);
         if (atomic_load_explicit(&m->started, memory_order_acquire) && !m->video.error &&
             (atomic_load_explicit(&m->ring.depth, memory_order_relaxed) || m->reorder.buffered)) video_batch(m);
@@ -596,6 +745,13 @@ static void *video_worker(void *context)
         }
     }
     m->worker_close_result = x4_live_video_stop(&m->video);
+    for (unsigned i = 0; i < RESET_COUNT; ++i) {
+        x4_trace_record(m->trace, MT_RESET_TOTAL, 0, i, m->reset_counts[i]);
+        x4_trace_record(m->trace, MT_RESET_TOTAL, 1, i, m->discard_counts[i]);
+    }
+    for (unsigned i = 0; i < 13; ++i)
+        x4_trace_record(m->trace, MT_DAMAGE_TOTAL, 0, i, m->damage_counts[i]);
+    x4_trace_record(m->trace, MT_WORKER_STOP, 0, 0, (uint32_t)m->worker_close_result);
     publish_worker_view(m);
     return NULL;
 }
@@ -611,6 +767,21 @@ bool x4_live_media_has_new_picture(X4LiveMedia *m)
     mailbox_unlock(m);
     return fresh;
 }
+X4Trace *x4_live_media_trace(X4LiveMedia *m) { return m ? m->trace : NULL; }
+bool x4_live_media_drawn(X4LiveMedia *m, uint64_t *generation, uint64_t *output, bool *fresh)
+{
+    if (generation) *generation = 0;
+    if (output) *output = 0;
+    if (fresh) *fresh = false;
+    if (!m) return false;
+    mailbox_lock(m);
+    uint64_t g = m->last_draw_frame;
+    if (generation) *generation = g;
+    if (output) *output = m->last_draw_output;
+    if (fresh) *fresh = g > m->last_presented_frame;
+    mailbox_unlock(m);
+    return g != 0;
+}
 int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
 {
     if (!m || !p) return 0;
@@ -621,7 +792,11 @@ int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
     const uint32_t *pixels = m->rgb[slot].pixels;
     unsigned w = m->rgb[slot].width, h = m->rgb[slot].height;
     uint64_t generation = m->rgb[slot].generation;
+    uint64_t native_output = m->rgb[slot].native_output;
+    bool fresh = generation > m->last_presented_frame;
     mailbox_unlock(m);
+    x4_trace_record(m->trace, X4_TRACE_DRAW_BEGIN, fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT,
+        generation, native_output);
     /* Reader ownership survives publication of another slot. The gate is
      * never held during scaling or framebuffer writes. */
     unsigned out_w = X4_WIDTH, out_h = X4_HEIGHT;
@@ -649,10 +824,13 @@ int x4_live_media_draw(X4LiveMedia *m, uint32_t *p)
     mailbox_lock(m);
     if (m->last_draw_frame != generation) { ++m->draw_new; m->last_draw_frame = generation; }
     else ++m->draw_repeat;
+    m->last_draw_output = native_output;
     m->reader_slot = -1;
     mailbox_unlock(m);
     uint64_t elapsed = sceKernelGetProcessTime() - begin;
     m->draw_us += elapsed; if (elapsed > m->draw_max_us) m->draw_max_us = elapsed;
+    x4_trace_record(m->trace, X4_TRACE_DRAW_END, fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT,
+        generation, native_output);
     return 1;
 }
 void x4_live_media_note_present(X4LiveMedia *m, uint64_t elapsed)
@@ -699,11 +877,13 @@ bool x4_live_media_take_keyframe_request(X4LiveMedia *m)
 {
     if (!m || !atomic_exchange(&m->keyframe, false)) return false;
     atomic_fetch_add(&m->requests, 1);
+    x4_trace_record(m->trace, MT_KEY_REQUEST, 0, atomic_load(&m->requests), 0);
     return true;
 }
 int x4_live_media_close(X4LiveMedia *m)
 {
     if (!m) return 0;
+    x4_trace_set_active(m->trace, false);
     atomic_store_explicit(&m->started, false, memory_order_release);
     atomic_store(&m->stop, true);
     if (m->running) {
@@ -717,6 +897,25 @@ int x4_live_media_close(X4LiveMedia *m)
      * after their owning thread exited, even if its native teardown failed. */
     if (m->worker_close_result < 0) return m->worker_close_result;
     if (rc < 0) return rc;
+    /* Closed-session totals are independent of trace-window admission/caps. */
+    for (unsigned i = 0; i < RESET_COUNT; ++i)
+        printf("XCloud4: trace reset reason=%u calls=%llu discarded_open_au=%llu\n", i,
+            (unsigned long long)m->reset_counts[i], (unsigned long long)m->discard_counts[i]);
+    for (unsigned i = 0; i < 13; ++i)
+        printf("XCloud4: trace damage bit=%u discarded_open_au=%llu\n", i,
+            (unsigned long long)m->damage_counts[i]);
+    /* Existing transport/auth close precondition, plus successful joins and
+     * native teardown above, makes all trace producers quiescent. */
+    x4_trace_end_session(m->trace);
+    char path[96];
+    snprintf(path, sizeof(path), "/data/xcloud4-trace-0726-%llu.bin", (unsigned long long)m->trace_session);
+    int dump = x4_trace_dump_file(m->trace, path);
+    printf("XCloud4: numeric trace dump rc=%d\n", dump);
+    bool trace_released = x4_trace_free(m->trace);
+    if (!trace_released) printf("XCloud4: numeric trace retained=1\n");
+    /* Export/optional trace-storage errors never alter playback close rc. */
+    m->trace = NULL;
+    m->video.trace = NULL;
     for (unsigned i = 0; i < RGB_SLOTS; ++i) free(m->rgb[i].pixels);
     x4_live_ring_free(&m->ring); x4_live_reorder_free(&m->reorder); free(m->au); free(m); return 0;
 }

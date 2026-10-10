@@ -12,6 +12,12 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Latest diagnostic checkpoint: 0.7.26
+
+Product **0.7.26**, PS4 **APP_VER 00.96**, adds bounded numeric capture around intervals greater than **100 ms between actual NEW-picture flip matches**. It keeps the existing two readers, copy routines, recovery and playback settings. Independent AU and native-output identities preserve the decoder ABI's lack of returned PTS. The capture records exact reset reasons and keyframe-wait transitions, with explicit limits when events are missing or windows fill. It measures local observations, not end-to-end latency.
+
+The [diagnostic specification and offline analyzer](docs/PAUSE_TRACE_0.7.26.md) and [release evidence](docs/RELEASE_NOTES_0.7.26.md) describe the next owner capture. Native compilation, matching retrieved artifacts and the 70 frozen build inputs are verified. Actual Claude Opus 5.5 completed the integrated source review and a fresh review of its corrections without finding a material defect. Console installation, exclusive trace export and the owner capture remain pending. First capture the two-reader reference; the four-reader comparison is deferred to 0.7.27. No new fluency improvement or pause cause is claimed.
+
 ## Latest tested experimental checkpoint: 0.7.25
 
 Product **0.7.25**, PS4 **APP_VER 00.95**, adds one persistent CPU copy helper alongside the existing video owner. Two bounded, disjoint spans copy the same leased NV12 picture into cached staging. The first valid picture is compared once against the serial routine; mismatch or unavailable checking keeps that decoder start serial. The **16 ms / four Decode** policy, conversion, completed-image mailbox, presentation, audio, input and provider protocol remain unchanged. No Better xCloud option is integrated. See the [isolated experiment](docs/PARALLEL_COPY_EXPERIMENT_0.7.25.md) and [delivery evidence](docs/RELEASE_NOTES_0.7.25.md).
