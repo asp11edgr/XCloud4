@@ -26,9 +26,9 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
 #ifdef X4_INGRESS_BASELINE
-    x4_text(p, 1310, 110, 3, "VERSION 0.7.31 BASE", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.32 BASE", MUTED);
 #else
-    x4_text(p, 1310, 110, 3, "VERSION 0.7.31", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.32", MUTED);
 #endif
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);

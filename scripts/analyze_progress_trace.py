@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Read-only X4PROG1 secondary monitor analysis; no console or playback I/O.
+"""Read-only X4PROG1/v1 and X4PROG2/v2 monitor analysis; no playback I/O.
 
 JSON output is PRIVATE evidence: it contains local numeric source identities.
 Each counter is an observation, not provider frame age or a packet-loss claim.
@@ -20,6 +20,7 @@ U64 = (1 << 64) - 1
 HEADER = struct.Struct('<128Q')
 RECORD = struct.Struct('<QQQIHH')
 MAGIC = b'X4PROG1\0'
+MAGIC2 = b'X4PROG2\0'
 CAPS = {10: 12000, 12: 65536, 14: 8192, 16: 8, 89: 64}
 FIXED = {1: 1, 2: 1024, 9: 100000, 34: 12000, 35: 65536,
          36: 8192, 37: 8, 38: 4096, 39: 512, 40: 64, 41: 16,
@@ -82,6 +83,37 @@ for base, words in (
     (0x610, 'SAMPLER_START SAMPLER_SAMPLE MON_GAP_BEGIN MON_GAP_END EPOCH ACTIVE SAMPLER_STOP WINDOW_CLOSE DISABLED PHASE_CHANGE RX_OBSERVATION'),
 ):
     EVENTS.update((base + i, name) for i, name in enumerate(words.split()))
+EVENTS.update({0x608: 'AU_STRUCTURAL_COMPLETE', 0x609: 'AU_FILTER_REJECT'})
+TRANSPORT = ('DATAGRAM ICE_DELIVER DTLS_QUEUE_ACCEPT DTLS_QUEUE_POP SRTP_INPUT '
+    'SRTP_VALID PEER_DISPATCH TRACK_INCOMING TRACK_QUEUE_ATTEMPT TRACK_DELIVERED '
+    'APP_CALLBACK RTX_NORMALIZED TCP_FRAMED PEER_HANDLER_OUT RTCP_VALID TURN_DECAP').split()
+CRITICAL = ('UNKNOWN SEQUENCE_GAP LATE_POSITION REJECT RECOVERY_BEGIN RECOVERY_END '
+    'PLI_LOCAL PLI_ATTEMPT PLI_RESULT AU_FILTER IDR_SEEN AU_PARAMETERS '
+    'PRESENT_GAP_BEGIN PRESENT_GAP_END SEQUENCE_AMBIGUOUS AU_DISCARD '
+    'TRANSPORT_DELAY RTC_SETTING').split()
+T_COUNTER = ('packet_observations bytes last_us RTP_header_metadata_observations '
+    'other_or_invalid_metadata_observations gap_events forward_skipped_positions '
+    'backward_observations duplicate_observations sequence_gate_omitted '
+    'source_slot_omitted range_evictions later_missing_position_observations '
+    'half_wrap_ambiguities known_previous_clock_observations max_observed_delay_us').split()
+T_SOURCE = ('key packet_observations bytes last_us first_us high_water_sequence_encoded '
+    'sequence_us forward_skipped_positions gap_events backward_observations '
+    'duplicate_observations sequence_gate_omitted later_missing_position_observations '
+    'range_evictions half_wrap_ambiguities dirty_after_omission next_range_slot '
+    'retained_range_count extended_high_water_sequence').split()
+REJECT_REASON = ('UNKNOWN SOCKET_ERROR EMPTY_DATAGRAM SOCKET_POLL_ERROR ICE_INACTIVE '
+    'STUN_PARSE ICE_UNKNOWN_SOURCE ICE_UNEXPECTED DTLS_QUEUE_FULL_OR_STOPPING MEDIA_SHORT '
+    'SRTP_ERROR SRTCP_ERROR DEMUX_UNKNOWN PEER_HANDLER_EXCEPTION NO_TRACK '
+    'TRACK_DIRECTION TRACK_HANDLER_EXCEPTION TRACK_QUEUE_FULL RTP_SHORT RTP_VERSION '
+    'RTP_PAYLOAD RTX_UNWRAP_UNAVAILABLE APP_INVALID APP_NO_SINK ICE_CALLBACK_EXCEPTION '
+    'SOCKET_WOULD_BLOCK SOCKET_FAIRNESS TURN_INVALID SRTP_AUTH_FAIL '
+    'SRTP_REPLAY_FAIL SRTP_REPLAY_OLD').split()
+# These enum slots have no emitting hook in the pinned 0.7.32 patch. The
+# allocated counter cells still exist; a raw zero is not a measured zero.
+UNINSTRUMENTED_REJECT = {
+    24: 'No hook in the existing IceTransport receive-callback exception branch.',
+    26: 'No hook in the existing UDP/TCP fairness-limit continuation branches.',
+}
 RESET = ('normal_submitted timestamp_change marker_incomplete waiting_recovery '
     'parameter_prefix_capacity feed_error coalesced_ingress_gap new_track '
     'reorder_jump reorder_hole').split()
@@ -141,16 +173,74 @@ class Reader:
                          self.unpack(RECORD))) for _ in range(count)]
 
 
+def parse_critical(r):
+    ch = r.words(32)
+    fixed = {0: int.from_bytes(b'X4CRIT2\0', 'little'), 1: 2, 2: 256, 3: 64,
+        4: 4096, 9: 16, 10: 16, 11: 24, 12: 32, 16: 32, 17: 16,
+        18: 512, 19: 3072, 20: 1024, 24: 16, 25: 10000, 26: 8}
+    if any(ch[i] != value for i, value in fixed.items()) or any(ch[27:]):
+        raise ValueError('Unsupported critical appendix layout')
+    if ch[5] > 4096:
+        raise ValueError('Critical count exceeds capacity')
+    attempted, omitted = r.words(32), r.words(32)
+    stages = [r.words(16) for _ in range(16)]
+    rejected = [r.words(32) for _ in range(16)]
+    delay_omitted, au_filter_reasons = r.words(16), r.words(8)
+    sources = [[r.words(24) for _ in range(16)] for _ in range(16)]
+    records = []
+    for _ in range(ch[5]):
+        t, identity, encoded, source, a, b, c, ordinal = r.words(8)
+        event, stage, provenance = encoded & 65535, (encoded >> 16) & 65535, encoded >> 32
+        if event >= 32 or (stage >= 16 and stage != 65535):
+            raise ValueError('Invalid critical type/stage')
+        records.append(dict(t_us=t, identity=identity, event=event, stage=stage,
+            flags=provenance, source=source, a=a, b=b, c=c, ordinal=ordinal))
+    if sum(attempted) & U64 != ch[6] or sum(omitted) & U64 != (ch[7]+ch[8]) & U64:
+        raise ValueError('Critical independent counter sums disagree')
+    if (ch[5]+ch[7]+ch[8]) & U64 != ch[6] or (ch[5]+ch[8]) & U64 != ch[23]:
+        raise ValueError('Critical retained/omitted ordinals disagree')
+    if any(b > a for a, b in zip(attempted, omitted)):
+        raise ValueError('Critical omissions exceed attempts')
+    first_ordinal = ch[23]-ch[5]+1
+    if any(row['ordinal'] != first_ordinal+i for i, row in enumerate(records)):
+        raise ValueError('Noncontiguous critical ring ordinals')
+    retained_by_type = Counter(row['event'] for row in records)
+    if any(retained_by_type[i] != a-b for i, (a, b) in enumerate(zip(attempted, omitted))):
+        raise ValueError('Critical per-event retained counters disagree')
+    for stage_sources in sources:
+        keys = []
+        for row in stage_sources:
+            if any(row[19:]):
+                raise ValueError('Nonzero transport source reserved words')
+            if not row[0]:
+                if any(row):
+                    raise ValueError('Nonzero unused transport source')
+                continue
+            if not row[0] & (1 << 63) or row[0] & ~((1 << 63) | (127 << 32) | 0xffffffff) or row[5] > 0x1ffff or row[15] > 1 or row[17] > 16:
+                raise ValueError('Invalid transport source identity/state')
+            keys.append(row[0])
+        if len(keys) != len(set(keys)):
+            raise ValueError('Duplicate transport source key')
+    for row in records:
+        if row['event'] == 1 and (not 0 < row['c'] < 32768 or
+                row['b'] < row['a'] or row['b']-row['a'] != row['c']):
+            raise ValueError('Invalid modular missing range')
+    return dict(header=ch, attempted=attempted, omitted=omitted, stages=stages,
+        rejected=rejected, delay_omitted=delay_omitted, sources=sources,
+        au_filter_reasons=au_filter_reasons, records=records)
+
+
 def parse(data):
-    """Accept only this bounded v1 ABI. Never repair or rewrite input bytes."""
+    """Accept only the bounded versioned ABI. Never repair input bytes."""
     if len(data) > MAX_BYTES:
         raise ValueError('Progress trace exceeds 12 MiB read bound')
     r = Reader(data)
     h = r.words(128)
-    if data[:8] != MAGIC:
+    version = 2 if data[:8] == MAGIC2 else 1
+    if data[:8] not in (MAGIC, MAGIC2):
         raise ValueError('Unsupported progress magic')
     for index, value in FIXED.items():
-        if h[index] != value:
+        if h[index] != (version if index == 1 else value):
             raise ValueError('Unsupported layout at header word %d' % index)
     if any(h[i] > cap for i, cap in CAPS.items()):
         raise ValueError('Header count exceeds capacity')
@@ -195,13 +285,14 @@ def parse(data):
         w = dict(zip(WINDOW, r.words(16)))
         if w['record_count'] > 4096 or w['pre_records'] > w['record_count']:
             raise ValueError('Invalid window record count')
-        if w['reserved14'] or w['reserved15']:
+        if (version == 1 and w['reserved14']) or w['reserved15']:
             raise ValueError('Nonzero reserved window words')
         if w['window_id'] != index+1:
             raise ValueError('Invalid window identity')
         if w['freeze_reason'] not in (1, 2, 3, 4):
             raise ValueError('Unknown window freeze reason')
         windows.append({'header': w, 'records': r.records(w['record_count'])})
+    critical = parse_critical(r) if version == 2 else None
     if r.at != len(data):
         raise ValueError('Unexpected trailing bytes')
     if any(any(row[10:]) for row in rx):
@@ -224,7 +315,8 @@ def parse(data):
             for i, name in H_NAMES.items()}, 'identity': strings, 'config': config,
             'event_attempts': attempted, 'event_drops': dropped, 'reset_primary': resets,
             'histogram': histogram, 'exposure': exposure, 'phase_ledger': phases, 'rx': rx,
-            'samples': samples, 'cadence': cadence, 'history': history, 'windows': windows}
+            'samples': samples, 'cadence': cadence, 'history': history, 'windows': windows,
+            'critical': critical}
 
 
 def event_slot(event):
@@ -257,7 +349,9 @@ def durations(records, begin, end, actor_flags=False):
             ambiguous.clear()
         if row['event'] not in (begin, end):
             continue
-        key = (row['a'], row['flags'] & 255) if actor_flags else row['a']
+        # The producer stores the helper index in the upper flag byte; the
+        # lower byte is the operation/result flag, not an actor identity.
+        key = (row['a'], (row['flags'] >> 8) & 255) if actor_flags else row['a']
         if row['event'] == begin:
             if key in starts:
                 ambiguous.add(key)
@@ -417,6 +511,190 @@ def gap_chronology(cadence, records, sampled, incomplete):
     return out
 
 
+def critical_analysis(p):
+    cr = p['critical']
+    if cr is None:
+        return {'available': False, 'reason': 'v1 contains no upstream critical ledger'}
+    h = cr['header']
+    timeline = []
+    for row in cr['records']:
+        item = dict(row, name=CRITICAL[row['event']] if row['event'] < len(CRITICAL)
+                    else 'UNKNOWN_%d' % row['event'],
+                    stage_name=TRANSPORT[row['stage']] if row['stage'] < 16 else 'PIPELINE',
+                    ssrc=row['source'] & 0xffffffff, payload_type=(row['source'] >> 32) & 127)
+        if row['event'] == 1:
+            item.update(expected=row['a'] & 65535, received=row['b'] & 65535,
+                expected_extended=row['a'], received_extended=row['b'], skipped_positions=row['c'],
+                range_end=(row['b']-1) & 65535, wraps=(row['a'] & 65535) > ((row['b']-1) & 65535),
+                header_authenticated=bool(row['flags'] & 2))
+        elif row['event'] == 2:
+            item.update(sequence=row['a'] & 65535, expected=row['b'] & 65535,
+                sequence_extended=row['a'], expected_extended=row['b'], gap_created_us=row['c'],
+                repeated_later_observation=bool(row['flags'] & (1 << 30)),
+                uniqueness_unavailable=bool(row['flags'] & (1 << 31)))
+        elif row['event'] == 3:
+            item.update(reason=REJECT_REASON[row['a']] if row['a'] < len(REJECT_REASON)
+                        else 'UNKNOWN_%d' % row['a'], local_result=signed(row['b'], 32),
+                        metadata_available=bool(row['flags'] & 1),
+                        sequence=row['c'] if row['c'] <= 65535 else None,
+                        stage_is_branch_location=True,
+                        packet_discard_not_established_by_record_name=True)
+            if row['a'] in UNINSTRUMENTED_REJECT:
+                item.update(reason_hook_available=False,
+                            measurement_interpretation=UNINSTRUMENTED_REJECT[row['a']])
+            elif row['a'] == 8:
+                item['queue_full_vs_stopping_distinguished'] = False
+            elif row['a'] == 21:
+                item.update(existing_branch_continues=True,
+                            same_packet_PEER_HANDLER_OUT_observations_may_repeat=True)
+            elif row['a'] == 12:
+                item['preceding_SRTP_INPUT_observation_established'] = False
+        elif row['event'] == 16:
+            item.update(previous_stage_us=row['b'], measured_delay_us=row['c'])
+        timeline.append(item)
+    # Exact modular range identities only. Overlapping but nonidentical ranges
+    # are not silently equated; RTX PT/SSRC remain separate unless a recorded
+    # normalization explicitly relates them. Ordinals are retention order,
+    # while monotonic times order observations from concurrent producers.
+    gaps = [r for r in timeline if r['event'] == 1]
+    by_identity = {}
+    for row in gaps:
+        by_identity.setdefault((row['ssrc'], row['payload_type'], row['a'], row['b'], row['c']), []).append(row)
+    groups, group_ids = [], {}
+    for key, matches in by_identity.items():
+        group_ids[key] = len(groups)+1
+        groups.append({'candidate_group_id': len(groups)+1,
+            'ssrc': key[0], 'payload_type': key[1], 'expected_extended': key[2],
+            'received_extended': key[3], 'skipped_positions': key[4],
+            'stage_local_extension_epochs_aligned': False,
+            'observations': [{key: r[key] for key in ('stage_name', 'stage', 't_us', 'identity', 'flags')}
+                             for r in sorted(matches, key=lambda r: r['t_us'])]})
+    late = {}
+    for row in timeline:
+        if row['event'] == 2:
+            late.setdefault((row['stage'], row['identity']), []).append(row)
+    rejects = [r for r in timeline if r['event'] == 3 and r['metadata_available']]
+    chronology = []
+    for row in gaps:
+        direct_rejects = [r for r in rejects if r['ssrc'] == row['ssrc'] and
+            r['sequence'] is not None and ((r['sequence']-row['a']) & 65535) < row['c'] and
+            # Bound the time search to the observed gap episode. Different
+            # sequence wraps over a long run must not match by sequence alone.
+            row['t_us']-2000000 <= r['t_us'] <= row['t_us']+2000000]
+        chronology.append(dict(row,
+            exact_range_candidate_group_id=group_ids[(row['ssrc'], row['payload_type'], row['a'], row['b'], row['c'])],
+            later_positions=late.get((row['stage'], row['identity']), [])[:16],
+            later_position_detail_expansion_omitted=max(0, len(late.get((row['stage'], row['identity']), []))-16),
+            nearby_explicit_reject_candidates=direct_rejects[:16],
+            reject_candidate_detail_expansion_omitted=max(0, len(direct_rejects)-16),
+            first_missing_stage_established=False,
+            bounded_interpretation=('Discontinuity is observed at the datagram boundary; absence before socket '
+                'delivery is unobserved, and a forward gap may be reordered later.' if row['stage'] == 0 else
+                'Discontinuity observed at this stage; missing packet-specific earlier delivery evidence '
+                'cannot establish the first stage that discarded it.'),
+            packet_identity_correspondence_established=False,
+            stage_local_extension_epochs_aligned=False,
+            physical_network_loss_established=False))
+    stages = []
+    for stage, counts in enumerate(cr['stages']):
+        sources = []
+        for row in cr['sources'][stage]:
+            if row[0]:
+                sources.append(dict(zip(T_SOURCE, row[:19]), ssrc=row[0] & 0xffffffff,
+                    payload_type=(row[0] >> 32) & 127, high_water_sequence=row[5] & 65535,
+                    sequence_initialized=bool(row[5] & 65536),
+                    gap_positions_are_physical_loss=False))
+        stages.append(dict(zip(T_COUNTER, counts), stage=stage, name=TRANSPORT[stage],
+            source_rows=sources, max_delay_CAS_omitted=cr['delay_omitted'][stage],
+            maximum_is_lower_bound=bool(cr['delay_omitted'][stage]),
+            branch_counters={REJECT_REASON[i] if i < len(REJECT_REASON) else 'UNKNOWN_%d' % i: n
+                             for i, n in enumerate(cr['rejected'][stage]) if n},
+            branch_counters_are_branch_observations=True,
+            unavailable_branch_counter_slots={REJECT_REASON[i]: {
+                'reason_id': i, 'raw_count': cr['rejected'][stage][i],
+                'measurement_available': False, 'measured_outcomes': None,
+                'interpretation': meaning}
+                for i, meaning in UNINSTRUMENTED_REJECT.items()}))
+    au = {name: p['event_attempts'][event_slot(event)] for name, event in
+          (('structurally_complete_before_recovery_filter', 0x608),
+           ('rejected_by_recovery_filter', 0x609), ('accepted_for_Decode_feed', 0x600))}
+    au['filter_flag_histogram'] = {str(i): {'count': n,
+        'missing': [name for bit, name in ((1, 'IDR'), (2, 'SPS'), (4, 'PPS')) if i & bit]}
+        for i, n in enumerate(cr['au_filter_reasons']) if n}
+    settings = []
+    for r in timeline:
+        if r['event'] != 17:
+            continue
+        item = dict(t_us=r['t_us'], kind=r['identity'], a=r['a'], b=r['b'], c=r['c'])
+        if r['identity'] in (10, 11, 12, 13):
+            item.update(scope='local_offer' if r['a'] >> 32 == 0 else
+                        'accepted_answer' if r['a'] >> 32 == 1 else 'unknown',
+                        media_index=(r['a'] >> 16) & 65535, payload_type=r['a'] & 65535)
+        elif r['identity'] == 19:
+            item.update(scope='local_offer' if r['a'] == 0 else
+                        'accepted_answer' if r['a'] == 1 else 'unknown',
+                        summary_records=r['b'], summary_capped=bool(r['c']))
+        if r['identity'] == 10:
+            item['codec'] = {1: 'H264', 2: 'Opus', 3: 'RTX'}.get(r['b'], 'other')
+        elif r['identity'] == 11:
+            item['primary_apt'] = r['b']
+        elif r['identity'] == 13:
+            item['feedback_announced'] = [name for bit, name in
+                ((1, 'nack'), (2, 'nack_pli'), (4, 'ccm_fir'), (8, 'goog_remb')) if r['b'] & bit]
+        elif r['identity'] == 3:
+            item['wire_RTX'] = {'ssrc': r['a'] >> 32, 'pt': (r['a'] >> 16) & 127, 'seq': r['a'] & 65535}
+            item['normalized_original'] = {'ssrc': r['b'] >> 32, 'pt': (r['b'] >> 16) & 127, 'seq': r['b'] & 65535}
+        elif r['identity'] == 4:
+            item.update(track_handle=r['a'], handler_RTX_enabled=bool(r['b'] & 1),
+                        handler_FIR_enabled=bool(r['b'] & 2), primary_ssrc=r['c'])
+        elif r['identity'] == 20:
+            item.update(receiving_handler_installed=bool(r['a']),
+                        receiver_NACK_generator_installed=bool(r['b']),
+                        sender_NACK_responder_installed=bool(r['c']))
+        elif r['identity'] == 22:
+            item.update(thread_slot_omissions_process_total=r['a'],
+                        thread_slots_used=r['b'],
+                        snapshot_phase='attach' if r['c'] == 0 else 'detach' if r['c'] == 1 else 'unknown')
+        elif r['identity'] == 23:
+            item.update(process_trace_bindings=r['a'], process_global_sink=bool(r['b']),
+                        transport_owner_epoch_association_available=bool(r['c']))
+        settings.append(item)
+    return {'available': True, 'schema': 'X4CRIT2/v2', 'stages': stages,
+        'coverage': {'retained_records': h[5], 'critical_attempts': h[6],
+            'gate_omitted': h[7], 'ring_overwrites': h[8], 'source_slot_omitted': h[13],
+            'sequence_gate_omitted': h[14], 'gap_id_counter': h[15],
+            'first_retained_ordinal': timeline[0]['ordinal'] if timeline else None,
+            'last_retained_ordinal': timeline[-1]['ordinal'] if timeline else None,
+            'retained_time_min_us': min((r['t_us'] for r in timeline), default=None),
+            'retained_time_max_us': max((r['t_us'] for r in timeline), default=None),
+            'detail_complete': not (h[7] or h[8]),
+            'sequence_observation_complete': not (h[13] or h[14]),
+            'event_counts': {CRITICAL[i] if i < len(CRITICAL) else 'UNKNOWN_%d' % i:
+                {'attempts': a, 'omitted': b, 'retained': a-b}
+                for i, (a, b) in enumerate(zip(cr['attempted'], cr['omitted'])) if a or b},
+            'packet_payloads_retained': False, 'per_packet_history_complete': False},
+        'retention': {'prehistory_cap': h[18], 'body_cap_including_prehistory': h[19],
+            'reserved_end_capacity': h[20], 'duplicate_window_open_attempts': h[21],
+            'context_retention_omissions': h[22]},
+        'AU_stage_totals': au,
+        'retained_negotiation_and_RTX_settings': settings,
+        'exact_range_candidate_groups': groups,
+        'retained_gap_chronology': sorted(chronology, key=lambda r: (r['t_us'], r['ordinal'])),
+        'retained_critical_timeline': timeline,
+        'limitations': ['Unauthenticated clear RTP headers are candidate identities, not trusted media.',
+            'Datagram, direct ICE and TURN-decapsulated observations have different populations.',
+            'REJECT and branch counters describe branch observations, not universal packet-discard counts.',
+            'DTLS_QUEUE_FULL_OR_STOPPING does not distinguish a full queue from a stopping queue.',
+            'ICE_CALLBACK_EXCEPTION and SOCKET_FAIRNESS have no hooks; their raw zero counters are unmeasured.',
+            'RTX_UNWRAP_UNAVAILABLE preserves the continuing upstream branch and can repeat the same wire RTX at PEER_HANDLER_OUT.',
+            'DEMUX_UNKNOWN uses a branch-location label; it does not establish a preceding SRTP_INPUT packet observation.',
+            'A later position can be reordered traffic or retransmission; flags/negotiated mapping are needed.',
+            'Sparse gap records and cumulative totals do not retain every individual packet at every stage.',
+            'Nearby explicit rejects are candidates, not proven payload identities across wraps or PT mappings.',
+            'Successful PLI API results establish only the local API outcome.',
+            'There is no native-output PTS association with the last Decode input.']}
+
+
 def analyze(data):
     p = parse(data)
     h, raw = p['header'], p['header_words']
@@ -486,12 +764,14 @@ def analyze(data):
         ('conversion', 0x20c, 0x20d, False), ('draw', 0x300, 0x301, False),
         ('helper_span', 0x222, 0x223, True), ('helper_wait', 0x224, 0x225, False))}
     record_counts = Counter(EVENTS.get(r['event'], 'UNKNOWN_%04x' % r['event']) for r in records)
-    negative_complete = (not h['coverage_flags'] and not h['event_drops'] and
+    context_omissions = bool(p['critical'] and (p['critical']['header'][22] or
+        any(w['header']['reserved14'] for w in p['windows'])))
+    negative_complete = (not context_omissions and not h['coverage_flags'] and not h['event_drops'] and
                          not h['sample_omitted'] and not h['history_overwrites'] and
                          not h['sampler_detail_gate_omitted'] and
                          not ordinal_conflicts and not counter_wraps)
     sampled = sample_analysis(p['samples'])
-    return {'schema': 'X4PROG1/v1 analysis', 'input_sha256': hashlib.sha256(data).hexdigest(),
+    return {'schema': 'X4PROG%d/v%d analysis' % (raw[1], raw[1]), 'input_sha256': hashlib.sha256(data).hexdigest(),
         'input_bytes': len(data), 'private_numeric_evidence': True,
         'identity': p['identity'], 'header': h, 'requested_config': p['config'],
         'delivered_geometry_observations': [{'t_us': r['t_us'], 'native_output_id': r['a'],
@@ -519,6 +799,7 @@ def analyze(data):
         'manual_phase_ledger': marks, 'rx_sources': rx, 'sampler': sampled, 'retained_operation_spans': spans,
         'closed_gap_chronology': gap_chronology(cadence, records, sampled, not negative_complete),
         'retained_recovery': recovery(records), 'retained_PLI_local_results': pli,
+        'upstream_diagnostics': critical_analysis(p),
         'retained_event_counts': dict(record_counts), 'retained_timeline': [dict(r, name=EVENTS.get(r['event'], 'UNKNOWN_%04x' % r['event'])) for r in records],
         'retained_RX_observations': [{'t_us': r['t_us'], 'kind': r['flags'] & 255,
             'valid': bool(r['flags'] & 256), 'ssrc': r['a'] >> 32 if r['flags'] & 256 else None,

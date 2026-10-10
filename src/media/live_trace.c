@@ -9,6 +9,7 @@
 enum { HISTORY = 8192, WINDOWS = 12, WINDOW_RECORDS = 16384, STAGES = 8,
        EVENTS = 512, RESET_REASONS = 64 };
 enum { GAP_US = 100000, PRE_US = 500000, POST_US = 500000, WINDOW_US = 2000000 };
+enum { PRE_RECORD_LIMIT = 2048 };
 enum {
     W_ID, W_COUNT, W_FLAGS, W_PRE_START, W_MIN_TIME, W_MAX_TIME,
     W_FIRST_GAP, W_LAST_GAP, W_GAP_START, W_OPENED, W_LAST_CLOSED,
@@ -43,7 +44,8 @@ struct X4Trace {
     bool main_active;
     /* Remaining non-atomic fields are gate-owned, or quiescent-only. */
     uint64_t local_session, total_records, history_overwrites, coverage;
-    uint64_t seen_closed, seen_closed_id, observed_open_id, open_gap_id, ongoing;
+    uint64_t seen_closed, seen_closed_id, observed_open_id, open_gap_id, ongoing,
+        last_attempted_gap;
     uint64_t retained_closed, late_closed, missing_details, storage_exhausted;
     uint64_t event_caps, time_caps, open_at_stop, detection_excess;
     unsigned configured_readers, history_head, history_count, window_count;
@@ -181,6 +183,11 @@ static bool append_admitted_locked(X4Trace *t, uint64_t time, uint16_t event,
 static bool open_window_locked(X4Trace *t, uint64_t id, uint64_t start, uint64_t now)
 {
     if (t->current_window >= 0) return true;
+    /* A frozen/saturated context is never reopened for the same pause. */
+    for(unsigned i=0;i<t->window_count;++i)
+        if(id>=t->windows[i].h[W_FIRST_GAP] && id<=t->windows[i].h[W_LAST_GAP])return false;
+    if(t->last_attempted_gap==id)return false;
+    t->last_attempted_gap=id;
     if (t->window_count == WINDOWS) {
         ++t->storage_exhausted; t->coverage |= X4_TRACE_C_STORAGE_CAP; return false;
     }
@@ -195,10 +202,18 @@ static bool open_window_locked(X4Trace *t, uint64_t id, uint64_t start, uint64_t
     w->h[W_PRE_US] = PRE_US; w->h[W_POST_US] = POST_US;
     uint64_t earliest = UINT64_MAX;
     unsigned oldest = (t->history_head + HISTORY - t->history_count) % HISTORY;
+    unsigned matching=0;
+    for(unsigned n=0;n<t->history_count;++n){
+        const X4TraceRecord*r=&t->history[(oldest+n)%HISTORY];
+        if(r->t_us>=w->h[W_PRE_START] && r->t_us<=now)++matching;
+    }
+    unsigned omit=matching>PRE_RECORD_LIMIT?matching-PRE_RECORD_LIMIT:0;
+    w->h[W_OMITTED]=omit;
     for (unsigned n = 0; n < t->history_count; ++n) {
         const X4TraceRecord *r = &t->history[(oldest + n) % HISTORY];
         if (r->t_us < earliest) earliest = r->t_us;
         if (r->t_us < w->h[W_PRE_START] || r->t_us > now) continue;
+        if(omit){--omit;continue;}
         w->records[w->h[W_COUNT]++] = *r;
         if (!w->h[W_MIN_TIME] || r->t_us < w->h[W_MIN_TIME]) w->h[W_MIN_TIME] = r->t_us;
         if (r->t_us > w->h[W_MAX_TIME]) w->h[W_MAX_TIME] = r->t_us;
@@ -206,7 +221,7 @@ static bool open_window_locked(X4Trace *t, uint64_t id, uint64_t start, uint64_t
         w->h[W_LAST_ORDINAL] = r->ordinal;
     }
     w->h[W_PRE_RECORDS] = w->h[W_COUNT];
-    if (earliest == UINT64_MAX || earliest > w->h[W_PRE_START]) w->h[W_FLAGS] |= X4_TRACE_C_SHORT_PRE;
+    if (earliest == UINT64_MAX || earliest > w->h[W_PRE_START] || w->h[W_OMITTED]) w->h[W_FLAGS] |= X4_TRACE_C_SHORT_PRE;
     if (w->h[W_DROPS_OPEN]) w->h[W_FLAGS] |= X4_TRACE_C_RECORD_DROP;
     t->current_window = (int)index;
     append_locked(t, now, X4_TRACE_WINDOW_OPEN, 0, index + 1, id);
@@ -463,6 +478,19 @@ int x4_trace_monitor_dump(X4Trace *t, const char *path)
 { return x4_monitor_dump(t ? t->monitor : NULL, path); }
 void x4_trace_monitor_rx(X4Trace *t, unsigned k, bool v, uint32_t s, uint16_t q, size_t b, uint64_t time)
 { x4_monitor_rx(t ? t->monitor : NULL, k, v, s, q, b, time); }
+void x4_trace_monitor_transport_packet(X4Trace *t, unsigned stage, bool valid,
+    uint32_t ssrc, uint16_t seq, unsigned pt, size_t bytes, uint64_t time,
+    uint64_t prior, uint32_t flags)
+{ x4_monitor_transport_packet(t ? t->monitor : NULL, stage, valid, ssrc, seq,
+    pt, bytes, time, prior, flags); }
+void x4_trace_monitor_transport_reject(X4Trace *t, unsigned stage, unsigned reason,
+    int rc, bool valid, uint32_t ssrc, uint16_t seq, uint64_t time)
+{ x4_monitor_transport_reject(t ? t->monitor : NULL, stage, reason, rc,
+    valid, ssrc, seq, time); }
+void x4_trace_monitor_critical(X4Trace *t, uint64_t time, unsigned event,
+    unsigned stage, uint32_t flags, uint64_t identity, uint64_t source,
+    uint64_t a, uint64_t b, uint64_t c)
+{ x4_monitor_critical(t ? t->monitor : NULL,time,event,stage,flags,identity,source,a,b,c); }
 void x4_trace_monitor_queue(X4Trace *t, uint32_t d, uint64_t o, bool v)
 { x4_monitor_queue(t ? t->monitor : NULL, d, o, v); }
 void x4_trace_monitor_state(X4Trace *t, unsigned a, unsigned p, uint64_t b)

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "rtc_transport.h"
 #include "rtc_native.h"
+#include "rtc_receive_diag.h"
 #include "../media/live_trace.h"
 #include "../auth/json.h"
 #include <rtc/rtc.h>
@@ -268,6 +269,76 @@ static void sdp_shape_log(const char *sdp, size_t length)
     }
 }
 
+/* Rare, bounded numeric session metadata. The original SDP stays in memory;
+ * credentials, candidates, fingerprints, names and opaque text are excluded. */
+static void sdp_receive_shape(const char *sdp, size_t length, unsigned scope)
+{
+    unsigned media = 0, records = 0;
+    bool have_media = false;
+    printf("XCloud4: SDP receive scope=%u (0=offer,1=accepted answer)\n", scope);
+    for (size_t offset = 0; offset < length;) {
+        size_t end = offset;
+        while (end < length && sdp[end] != '\n') ++end;
+        size_t line_end = end;
+        if (line_end > offset && sdp[line_end-1] == '\r') --line_end;
+        SdpSpan line = {sdp + offset, line_end - offset};
+        offset = end < length ? end + 1 : end;
+        if (sdp_prefix(line, "m=")) {
+            if (have_media) ++media;
+            have_media = true;
+            continue;
+        }
+        if (!have_media || media >= 8 || records >= 128) continue;
+        uint64_t key = ((uint64_t)scope << 32) | ((uint64_t)media << 16);
+        unsigned pt, number;
+        if (sdp_prefix(line, "a=rtpmap:")) {
+            SdpSpan rest = sdp_after(line, 9), type = sdp_token(&rest), codec = sdp_token(&rest);
+            if (!sdp_number(type, 127, &pt)) continue;
+            unsigned kind = sdp_equal(codec, "H264/90000") ? 1 :
+                sdp_equal(codec, "opus/48000/2") ? 2 :
+                (sdp_equal(codec, "rtx/90000") || sdp_equal(codec, "RTX/90000")) ? 3 : 0;
+            x4_rtc_receive_setting(10, key | pt, kind, 0);
+            printf("XCloud4: SDP receive payload scope=%u media=%u pt=%u codec=%u\n",scope,media,pt,kind);
+            ++records;
+        } else if (sdp_prefix(line, "a=rtcp-fb:")) {
+            SdpSpan rest = sdp_after(line, 10), target = sdp_token(&rest);
+            if (sdp_equal(target, "*")) pt = 128;
+            else if (!sdp_number(target, 127, &pt)) continue;
+            while (rest.n && (rest.p[0]==' ' || rest.p[0]=='\t')) rest = sdp_after(rest,1);
+            unsigned mask = sdp_equal(rest,"nack") ? 1 : sdp_equal(rest,"nack pli") ? 2 :
+                sdp_equal(rest,"ccm fir") ? 4 : sdp_equal(rest,"goog-remb") ? 8 : 0;
+            x4_rtc_receive_setting(13, key | pt, mask, 0);
+            printf("XCloud4: SDP receive feedback scope=%u media=%u pt=%u mask=%u\n",scope,media,pt,mask);
+            ++records;
+        } else if (sdp_prefix(line, "a=fmtp:")) {
+            SdpSpan rest = sdp_after(line,7), target = sdp_token(&rest);
+            if (!sdp_number(target,127,&pt)) continue;
+            while (rest.n && records < 128) {
+                while (rest.n && (rest.p[0]==' ' || rest.p[0]=='\t' || rest.p[0]==';')) rest=sdp_after(rest,1);
+                size_t n=0; while (n<rest.n && rest.p[n]!=';') ++n;
+                SdpSpan parameter={rest.p,n};
+                rest=sdp_after(rest,n);
+                if (sdp_prefix(parameter,"apt=") && sdp_number(sdp_after(parameter,4),127,&number)) {
+                    x4_rtc_receive_setting(11,key|pt,number,0);
+                    printf("XCloud4: SDP receive apt scope=%u media=%u rtx_pt=%u primary_pt=%u\n",scope,media,pt,number);
+                    ++records;
+                }
+            }
+        } else if (sdp_prefix(line,"a=ssrc-group:FID ")) {
+            SdpSpan rest=sdp_after(line,17);
+            unsigned primary, retransmission;
+            if (sdp_number(sdp_token(&rest),UINT32_MAX,&primary) &&
+                sdp_number(sdp_token(&rest),UINT32_MAX,&retransmission)) {
+                x4_rtc_receive_setting(12,key,primary,retransmission);
+                /* SSRCs stay in the private numeric trace, not text logs. */
+                printf("XCloud4: SDP receive FID scope=%u media=%u present=1\n",scope,media);
+                ++records;
+            }
+        }
+    }
+    x4_rtc_receive_setting(19,scope,records,records>=128);
+}
+
 static void description_callback(int pc, const char *sdp, const char *type, void *pointer)
 {
     (void)pc;
@@ -333,6 +404,8 @@ static void rtp_callback(int track, const char *packet, int size, void *pointer)
     if (!rtc) return;
     /* RtcpReceivingSession consumes control packets and leaves RTP intact. */
     if (size >= 12 && packet && (((const uint8_t *)packet)[0] >> 6) == 2) {
+        x4_rtc_receive_packet(X4_RD_APP, packet, (size_t)size,
+            x4_rtc_receive_delivery_time(), X4_RD_AUTHENTICATED);
         int kind = track == rtc->video ? X4_RTC_VIDEO : X4_RTC_AUDIO;
         if (kind == X4_RTC_VIDEO) atomic_fetch_add(&rtc->video_packets, 1);
         else atomic_fetch_add(&rtc->audio_packets, 1);
@@ -341,6 +414,10 @@ static void rtp_callback(int track, const char *packet, int size, void *pointer)
         void *user = rtc->media_user;
         unlock(&rtc->data_gate);
         if (callback) callback(user, kind, (const uint8_t *)packet, (size_t)size);
+        else x4_rtc_receive_reject(X4_RD_APP, X4_RD_APP_NO_SINK, 0, packet, (size_t)size);
+    } else {
+        x4_rtc_receive_reject(X4_RD_APP, X4_RD_APP_INVALID, size, packet,
+            size > 0 ? (size_t)size : 0);
     }
     leave(pointer);
 }
@@ -617,7 +694,16 @@ void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user
 }
 void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
 {
-    if (rtc) rtc->diagnostic_trace = trace;
+    if (rtc) {
+        rtc->diagnostic_trace = trace;
+        x4_rtc_receive_attach(trace);
+        /* ReceivingSession chained; no receiver NACK generator or sender
+         * NackResponder is configured by XCloud4. The vendor getter observes
+         * existing handler state without changing it. */
+        x4_rtc_receive_setting(20, 1, 0, 0);
+        (void)x4_rtc_receive_track_config(rtc->audio);
+        (void)x4_rtc_receive_track_config(rtc->video);
+    }
 }
 int x4_rtc_set_gamepad_source(X4Rtc *rtc,X4GamepadSource source,void *user)
 {
@@ -659,7 +745,10 @@ int x4_rtc_local_description(X4Rtc *rtc,char *sdp,size_t capacity)
         memset(sdp,0,capacity);
         return rc<0?rc:-40;
     }
-    if(!atomic_exchange(&rtc->offer_logged,true))sdp_shape_log(sdp,(size_t)rc-1);
+    if(!atomic_exchange(&rtc->offer_logged,true)) {
+        sdp_shape_log(sdp,(size_t)rc-1);
+        sdp_receive_shape(sdp,(size_t)rc-1,0);
+    }
     return 1;
 }
 int x4_rtc_next_local_candidate(X4Rtc *rtc,char *candidate,size_t capacity,char *mid,size_t mid_capacity)
@@ -678,7 +767,14 @@ int x4_rtc_next_local_candidate(X4Rtc *rtc,char *candidate,size_t capacity,char 
 int x4_rtc_set_remote_description(X4Rtc *rtc,const char *sdp)
 {
     if(!rtc||!sdp||strnlen(sdp,SDP_CAP)>=SDP_CAP)return -1;
-    int rc=rtcSetRemoteDescription(rtc->pc,sdp,"answer");if(rc<0)fail(rtc,rc);return rc;
+    int rc=rtcSetRemoteDescription(rtc->pc,sdp,"answer");
+    if(rc<0) fail(rtc,rc);
+    else {
+        sdp_receive_shape(sdp,strlen(sdp),1);
+        (void)x4_rtc_receive_track_config(rtc->audio);
+        (void)x4_rtc_receive_track_config(rtc->video);
+    }
+    return rc;
 }
 int x4_rtc_add_remote_candidate(X4Rtc *rtc,const char *candidate,const char *mid)
 {
@@ -739,6 +835,7 @@ int x4_rtc_close(X4Rtc *rtc)
     if(rtc->audio>=0) {rtcSetMessageCallback(rtc->audio,NULL);rtcDeleteTrack(rtc->audio);}
     if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
+    x4_rtc_receive_detach(rtc->diagnostic_trace);
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);
     return 0;

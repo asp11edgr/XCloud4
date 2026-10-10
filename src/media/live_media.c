@@ -341,11 +341,20 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
     if (m->fu || m->damaged || !m->au_size) {
         reset_au(m, true, RESET_MARKER, (m->fu ? 1u : 0u) | (m->damaged ? 2u : 0u) | (!m->au_size ? 4u : 0u)); return;
     }
+    /* Structural completion precedes recovery filtering. A complete P-frame
+     * discarded while waiting for IDR is not a depacketization failure. */
+    x4_trace_record(m->trace, X4_TRACE_AU_STRUCTURAL,
+        (m->idr ? 1u : 0u) | (m->waiting_keyframe ? 2u : 0u) |
+        (m->sps_size || m->au_sps_size ? 4u : 0u) |
+        (m->pps_size || m->au_pps_size ? 8u : 0u), m->trace_au, m->au_size);
     /* Parameter sets are committed only after the complete AU is valid.
      * A damaged STAP-A/FU-A cannot poison a later keyframe's cache. */
     if (m->au_sps_size) { memcpy(m->sps, m->au_sps, m->au_sps_size); m->sps_size = m->au_sps_size; }
     if (m->au_pps_size) { memcpy(m->pps, m->au_pps, m->au_pps_size); m->pps_size = m->au_pps_size; }
     if (m->waiting_keyframe && (!m->idr || !m->sps_size || !m->pps_size)) {
+        x4_trace_record(m->trace, X4_TRACE_AU_FILTER_REJECT,
+            (!m->idr ? 1u : 0u) | (!m->sps_size ? 2u : 0u) |
+            (!m->pps_size ? 4u : 0u), m->trace_au, m->au_size);
         reset_au(m, true, RESET_WAIT, (!m->idr ? 1u : 0u) | (!m->sps_size ? 2u : 0u) | (!m->pps_size ? 4u : 0u)); return;
     }
     if (m->waiting_keyframe) {

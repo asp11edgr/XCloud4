@@ -50,6 +50,37 @@ enum {
     X4_MON_SAMPLE_WORDS = 80, X4_MON_WINDOW_HEADER_WORDS = 16,
     X4_MON_RX_WORDS = 16, X4_MON_CONFIG_WORDS = 16, X4_MON_EPOCH_CAP = 64
 };
+/* Stage names describe observations, not proof of arrival/delivery over the
+ * network. The bridge may leave inaccessible stages entirely unobserved. */
+enum {
+    X4_MON_T_DATAGRAM, X4_MON_T_ICE_DELIVER, X4_MON_T_DTLS_QUEUE_ACCEPT,
+    X4_MON_T_DTLS_QUEUE_POP, X4_MON_T_SRTP_INPUT, X4_MON_T_SRTP_VALID,
+    X4_MON_T_PEER_DISPATCH, X4_MON_T_TRACK_INCOMING, X4_MON_T_TRACK_QUEUED,
+    X4_MON_T_TRACK_DELIVERED, X4_MON_T_APP_CALLBACK, X4_MON_T_RTX_NORMALIZED,
+    X4_MON_T_TCP_FRAMED, X4_MON_T_PEER_HANDLER_OUT, X4_MON_T_RTCP_VALID,
+    X4_MON_T_TURN_DECAP, X4_MON_T_STAGES,
+    X4_MON_T_RESERVED = X4_MON_T_TURN_DECAP,
+    X4_MON_T_TRACK_QUEUE_ATTEMPT = X4_MON_T_TRACK_QUEUED
+};
+enum {
+    X4_MON_CR_SEQUENCE_GAP = 1, X4_MON_CR_LATE_POSITION, X4_MON_CR_REJECT,
+    X4_MON_CR_RECOVERY_BEGIN, X4_MON_CR_RECOVERY_END, X4_MON_CR_PLI_LOCAL,
+    X4_MON_CR_PLI_ATTEMPT, X4_MON_CR_PLI_RESULT, X4_MON_CR_AU_FILTER,
+    X4_MON_CR_IDR_SEEN, X4_MON_CR_AU_PARAMETERS, X4_MON_CR_PRESENT_GAP_BEGIN,
+    X4_MON_CR_PRESENT_GAP_END, X4_MON_CR_SEQUENCE_AMBIGUOUS,
+    X4_MON_CR_AU_DISCARD, X4_MON_CR_TRANSPORT_DELAY, X4_MON_CR_RTC_SETTING
+};
+enum {
+    X4_MON_CR_CAP = 4096, X4_MON_CR_EVENT_CAP = 32,
+    X4_MON_T_SOURCE_CAP = 16, X4_MON_T_SOURCE_WORDS = 24,
+    X4_MON_T_COUNTER_WORDS = 16, X4_MON_CR_HEADER_WORDS = 32,
+    X4_MON_T_RANGE_CAP = 16, X4_MON_WINDOW_PRE_CAP = 512,
+    X4_MON_WINDOW_BODY_CAP = 3072, X4_MON_WINDOW_END_CAP = 1024
+};
+/* Numeric only: time, identity, type/stage/flags, source metadata, three
+ * event-specific numeric fields, and independent critical ordinal. */
+typedef struct { uint64_t w[8]; } X4MonitorCritical;
+_Static_assert(sizeof(X4MonitorCritical) == 64, "critical diagnostic ABI");
 typedef struct {
     uint64_t t_us, a, b;
     uint32_t ordinal;
@@ -84,6 +115,17 @@ void x4_monitor_record(X4Monitor *, uint64_t time, uint16_t event,
     uint16_t flags, uint64_t a, uint64_t b);
 void x4_monitor_rx(X4Monitor *, unsigned kind, bool valid, uint32_t ssrc,
     uint16_t seq, size_t bytes, uint64_t time);
+/* Bounded try-only observations; no allocation, wait or I/O. A zero preceding
+ * timestamp means inter-stage scheduling delay is unavailable. Flags are
+ * provenance metadata only and never control RTP/RTX processing. */
+void x4_monitor_transport_packet(X4Monitor *, unsigned stage, bool metadata_valid,
+    uint32_t ssrc, uint16_t seq, unsigned payload_type, size_t bytes,
+    uint64_t time, uint64_t prior_stage_time, uint32_t flags);
+void x4_monitor_transport_reject(X4Monitor *, unsigned stage, unsigned reason,
+    int result, bool metadata_valid, uint32_t ssrc, uint16_t seq, uint64_t time);
+void x4_monitor_critical(X4Monitor *, uint64_t time, unsigned event,
+    unsigned stage, uint32_t flags, uint64_t identity, uint64_t source,
+    uint64_t a, uint64_t b, uint64_t c);
 /* Optional supplied tuple is explicitly independent, not a coherent queue
  * snapshot. Direct binding is preferred; sample flags expose its witnesses. */
 void x4_monitor_queue(X4Monitor *, uint32_t depth, uint64_t oldest_us, bool valid);

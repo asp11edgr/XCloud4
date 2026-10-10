@@ -12,6 +12,12 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Reception diagnostic experiment: 0.7.32
+
+The [next reception test](docs/RECEPTION_DIAGNOSTICS_0.7.32.md) instruments the existing UDP/ICE/Mbed TLS/SRTP/Track path to locate the sequence discontinuities already visible at the application callback. It also retains one bounded context per pause and separates structural AU completion from recovery rejection. The MPSC queue, four readers, media settings, reorder and recovery remain unchanged. NACK feedback is announced but receiver NACK generation is absent in the current handler; this checkpoint observes accepted settings and RTX without changing negotiation.
+
+Use a fresh application launch and one game session for the 10–15 minute comparable pass. Transport attribution across successive sessions remains limited by asynchronous library teardown. [Release notes](docs/RELEASE_NOTES_0.7.32.md) state the test scope; the new console chronology and any subsequent functional correction remain pending. The [original 0.7.31 evidence](docs/RECEPTION_EVIDENCE_0.7.31.md) is preserved separately.
+
 ## Console-exercised residual-pause diagnostics: 0.7.31
 
 The [first long console report](docs/CONSOLE_REPORT_0.7.31.md) preserves **27.11 manually stable minutes / 30 intervals >100 ms (1.107/min)**, complete cadence and phase populations, **1280 × 720** delivered geometry, zero MPSC rejections and verified original exports. The owner reports fewer pauses and completed catalog return/close. Sixteen first sampled stall leads show continued packet admission without valid AU progress; one shows no callback progress and thirteen are indeterminate. Detailed storage saturated, so no complete causal repair or instrumentation overhead claim follows. A dedicated bounded sequence-hole/recovery ledger is the next proposed diagnostic experiment; runtime and existing release assets are unchanged. Two independent reviews and actual Claude Opus 5.5 agree on the limits.

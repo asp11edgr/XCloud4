@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 TITLE='XCloud4'
 TITLE_ID='XCLD00001'
 CONTENT_ID='IV0000-XCLD00001_00-XCLOUD4APP000000'
-VERSION='01.01'
-PACKAGE_VERSION='0.7.31'
+VERSION='01.02'
+PACKAGE_VERSION='0.7.32'
 PACKAGE_SUFFIX=${X4_PACKAGE_SUFFIX:-}
 case "$PACKAGE_SUFFIX" in ''|'-baseline') ;; *) echo 'Invalid package suffix' >&2; exit 1 ;; esac
 TOOLS="$OO_PS4_TOOLCHAIN/bin/linux"

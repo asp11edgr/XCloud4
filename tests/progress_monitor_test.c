@@ -200,7 +200,7 @@ void x4_ingress_test_hook(X4VideoIngress *q, unsigned event, uint64_t position)
     CHECK(pthread_mutex_unlock(&ingress_hold.mutex) == 0);
 }
 
-typedef struct { uint8_t *data; size_t size; uint64_t h[128]; } Dump;
+typedef struct { uint8_t *data; size_t size, critical_offset; uint64_t h[128], ch[32]; } Dump;
 static uint64_t le64(const uint8_t *p)
 {
     uint64_t value = 0;
@@ -253,9 +253,9 @@ static Dump export_dump(X4Monitor *m)
     Dump d = { .size = (size_t)length, .data = malloc((size_t)length) };
     CHECK(d.data != NULL && fread(d.data, 1, d.size, f) == d.size);
     CHECK(fclose(f) == 0);
-    CHECK(memcmp(d.data, "X4PROG1\0", 8) == 0);
+    CHECK(memcmp(d.data, "X4PROG2\0", 8) == 0);
     for (unsigned i = 0; i < 128; ++i) d.h[i] = word(&d, i * 8);
-    CHECK(d.h[1] == 1 && d.h[2] == 1024);
+    CHECK(d.h[1] == 2 && d.h[2] == 1024);
     CHECK(d.h[10] <= X4_MON_SAMPLE_CAP && d.h[12] <= X4_MON_CADENCE_CAP);
     CHECK(d.h[14] <= X4_MON_HISTORY_CAP && d.h[16] <= X4_MON_WINDOW_CAP);
     CHECK(d.h[34] == X4_MON_SAMPLE_CAP && d.h[43] == sizeof(X4MonitorSample));
@@ -270,6 +270,13 @@ static Dump export_dump(X4Monitor *m)
         cursor += 128 + records * 32;
         CHECK(cursor <= d.size);
     }
+    d.critical_offset=cursor;
+    CHECK(cursor+256<=d.size && memcmp(d.data+cursor,"X4CRIT2\0",8)==0);
+    for(unsigned i=0;i<32;++i)d.ch[i]=word(&d,cursor+i*8);
+    CHECK(d.ch[1]==2 && d.ch[2]==256 && d.ch[3]==64 && d.ch[4]==4096 && d.ch[5]<=4096);
+    CHECK(d.ch[9]==16 && d.ch[10]==16 && d.ch[11]==24 && d.ch[12]==32);
+    CHECK(d.ch[16]==32 && d.ch[17]==16 && d.ch[24]==16 && d.ch[26]==8);
+    cursor+=256+2*32*8+16*16*8+16*32*8+16*8+8*8+16*16*24*8+d.ch[5]*64;
     CHECK(cursor == d.size); /* No undocumented trailing data. */
     CHECK(x4_monitor_dump(m, base) != 0); /* Existing export must survive. */
     f = fopen(path, "rb"); CHECK(f != NULL);
@@ -439,6 +446,12 @@ static void *write_events(void *context)
             w->writer, n);
         x4_monitor_rx(w->m, X4_MON_RX_VIDEO, true, 100 + w->writer,
             (uint16_t)n, 64, now);
+        /* Same transport source has concurrent observers: sequence trygate
+         * omissions/ambiguity remain explicit and no writer can wait. */
+        x4_monitor_transport_packet(w->m,X4_MON_T_APP_CALLBACK,true,777,
+            (uint16_t)n,102,64,now,0,2);
+        if(n%97==0)x4_monitor_critical(w->m,now,X4_MON_CR_REJECT,
+            X4_MON_T_SRTP_INPUT,0,w->writer,777,w->writer,n,7);
         /* Each tested actor has exactly one owning writer. */
         x4_monitor_state(w->m, X4_MON_ACTOR_HELPER0 + w->writer,
             X4_MON_PHASE_COPY, now);
@@ -465,6 +478,12 @@ static void test_concurrent_counters(void)
         CHECK(b <= a); attempts += a; drops += b;
     }
     CHECK(attempts == d.h[18] && drops == d.h[19]);
+    size_t transport=d.critical_offset+256+2*32*8+X4_MON_T_APP_CALLBACK*16*8;
+    CHECK(word(&d,transport)==WRITERS*WRITER_CALLS);
+    CHECK(word(&d,transport+8)==(uint64_t)WRITERS*WRITER_CALLS*64);
+    CHECK(word(&d,d.critical_offset+256+X4_MON_CR_REJECT*8)==
+        WRITERS*((WRITER_CALLS-1)/97+1));
+    CHECK(d.ch[6]==d.ch[5]+d.ch[7]+d.ch[8]);
     for (unsigned i = 0; i < WRITERS; ++i)
         CHECK(word(&d, ATTEMPT_OFFSET + event_index(0x230 + i) * 8) == WRITER_CALLS);
     size_t history = SAMPLE_OFFSET + d.h[10] * sizeof(X4MonitorSample) + d.h[12] * 32;
@@ -658,18 +677,96 @@ static void test_second_gap_during_post_window(void)
     advance_sample(1800000); /* Still open, after the obsolete deadline. */
     CHECK(stop_monitor(m) == 0); x4_monitor_end(m);
     Dump d = export_dump(m);
-    CHECK(d.h[25] == 1 && d.h[16] == 1 && d.h[69] == 1);
+    CHECK(d.h[25] == 1 && d.h[16] == 2 && d.h[69] == 1);
     size_t window = SAMPLE_OFFSET + d.h[10] * sizeof(X4MonitorSample) +
         d.h[12] * sizeof(X4MonitorCadence) + d.h[14] * sizeof(X4MonitorRecord);
+    CHECK(word(&d,window+3*8)==2); /* First pause retained once. */
+    window+=128+word(&d,window+8)*32;
+    CHECK(word(&d,window+3*8)==3); /* Separate second-pause identity. */
     CHECK(word(&d, window + 6 * 8) == 0); /* No completed second gap. */
     CHECK(word(&d, window + 8 * 8) == 4); /* Frozen by stop, not old POST. */
     CHECK(word(&d, window + 12 * 8) == 3);
-    CHECK(word(&d, window + 13 * 8) == 1); /* Only first gap actually closed. */
+    CHECK(word(&d, window + 13 * 8) == 0); /* Only first gap actually closed. */
     CHECK(word(&d, window + 2 * 8) & 8192u);
     free(d.data); CHECK(x4_monitor_free(m));
-    puts("PASS second ongoing gap cancels prior POST deadline and marks open at stop");
+    puts("PASS each pause has one context and an ongoing second pause remains open");
 }
 
+static size_t critical_records_offset(const Dump*d)
+{return d->critical_offset+256+2*32*8+16*16*8+16*32*8+16*8+8*8+16*16*24*8;}
+static void test_transport_wrap_and_late(void)
+{
+    clock_reset();X4Monitor*m=x4_monitor_create(12,4);CHECK(m!=NULL);
+    unsigned stage=X4_MON_T_SRTP_VALID;
+    x4_monitor_transport_packet(m,stage,true,42,65534,102,1200,1000000,999000,2);
+    x4_monitor_transport_packet(m,stage,true,42,2,102,1200,1000001,0,2);
+    x4_monitor_transport_packet(m,stage,true,42,0,102,1200,1000002,0,2);
+    x4_monitor_transport_packet(m,stage,true,42,0,102,1200,1000003,0,2);
+    x4_monitor_transport_packet(m,stage,true,42,3,102,1200,1000004,0,2);
+    x4_monitor_transport_packet(m,stage,true,42,3,102,1200,1000005,0,2);
+    /* RTX on another payload type is an independent sequence namespace. */
+    x4_monitor_transport_packet(m,stage,true,42,999,104,1200,1000006,0,4);
+    x4_monitor_transport_packet(m,stage,true,42,32771,102,1200,1000007,0,2);
+    x4_monitor_transport_packet(m,stage,true,42,32772,102,1200,1000008,0,2);
+    x4_monitor_transport_reject(m,X4_MON_T_DATAGRAM,25,-11,false,0,0,1000010);
+    x4_monitor_transport_reject(m,stage,7,7,true,42,4,1000011);
+    finish_unstarted(m);Dump d=export_dump(m);
+    size_t counters=d.critical_offset+256+2*32*8+stage*16*8;
+    CHECK(word(&d,counters)==9 && word(&d,counters+5*8)==1 && word(&d,counters+6*8)==3);
+    CHECK(word(&d,counters+7*8)==2 && word(&d,counters+8*8)==1);
+    CHECK(word(&d,counters+12*8)==2 && word(&d,counters+13*8)==1);
+    CHECK(d.ch[15]==1 && d.ch[5]==5); /* gap, late twice, ambiguous, auth reject */
+    size_t records=critical_records_offset(&d);
+    CHECK((word(&d,records+2*8)&0xffffu)==X4_MON_CR_SEQUENCE_GAP);
+    CHECK(word(&d,records+4*8)==65535 && word(&d,records+5*8)==65538 && word(&d,records+6*8)==3);
+    CHECK((word(&d,records+64+2*8)&0xffffu)==X4_MON_CR_LATE_POSITION);
+    CHECK(word(&d,records+64+8)==word(&d,records+8));
+    CHECK(word(&d,records+128+2*8)&(UINT64_C(1)<<62)); /* repeated late position */
+    size_t sources=d.critical_offset+256+2*32*8+16*16*8+16*32*8+16*8+8*8+stage*16*24*8;
+    CHECK(word(&d,sources+7*8)==3 && word(&d,sources+8*8)==1);
+    CHECK((word(&d,sources+5*8)&0xffffu)==32772);
+    CHECK(word(&d,sources+24*8)!=word(&d,sources));
+    free(d.data);CHECK(x4_monitor_free(m));
+    puts("PASS modulo sequence gaps, late reappearance, RTX namespace and counter-only drain");
+}
+static void test_critical_ring_and_au_separation(void)
+{
+    clock_reset();X4Monitor*m=x4_monitor_create(13,4);CHECK(m!=NULL);
+    for(unsigned i=0;i<X4_MON_CR_CAP+17;++i)
+        x4_monitor_critical(m,1000000+i,X4_MON_CR_REJECT,5,0,i,42,7,7,i);
+    x4_monitor_record(m,2000000,X4_TRACE_AU_STRUCTURAL,2,100,1000);
+    x4_monitor_record(m,2000000,X4_TRACE_AU_FILTER_REJECT,5,100,1000);
+    x4_monitor_record(m,2000001,X4_TRACE_AU_STRUCTURAL,1,101,1000);
+    x4_monitor_record(m,2000001,X4_TRACE_AU_VALID,2,101,1200);
+    finish_unstarted(m);Dump d=export_dump(m);
+    CHECK(d.ch[5]==4096 && d.ch[8]==18 && d.ch[23]==4114);
+    CHECK(word(&d,ATTEMPT_OFFSET+event_index(X4_TRACE_AU_STRUCTURAL)*8)==2);
+    CHECK(word(&d,ATTEMPT_OFFSET+event_index(X4_TRACE_AU_FILTER_REJECT)*8)==1);
+    CHECK(word(&d,ATTEMPT_OFFSET+event_index(X4_TRACE_AU_VALID)*8)==1);
+    size_t filter=d.critical_offset+256+2*32*8+16*16*8+16*32*8+16*8;
+    CHECK(word(&d,filter+5*8)==1);
+    size_t records=critical_records_offset(&d);
+    CHECK(word(&d,records+7*8)==19);
+    CHECK(word(&d,records+(4096-1)*64+7*8)==4114);
+    free(d.data);CHECK(x4_monitor_free(m));
+    puts("PASS independent bounded critical ring and structural/filter/Decode admission totals");
+}
+static void test_window_pre_reservation_and_duplicate(void)
+{
+    clock_reset();X4Monitor*m=x4_monitor_create(14,4);CHECK(m!=NULL);
+    x4_monitor_active(m,true,1000000);x4_monitor_present(m,1,true,1000000);
+    for(unsigned i=0;i<6000;++i)x4_monitor_record(m,1000000,0x230,0,i,0);
+    CHECK(x4_monitor_start(m)==0);await_sleep();advance_sample(1200000);
+    advance_sample(3400000); /* original window freezes at its time bound */
+    atomic_store(&host.now,3500000);x4_monitor_present(m,2,true,3500000);
+    CHECK(stop_monitor(m)==0);x4_monitor_end(m);Dump d=export_dump(m);
+    CHECK(d.h[16]==1 && d.ch[21]==1); /* end never reopens the same pause */
+    size_t window=SAMPLE_OFFSET+d.h[10]*640+d.h[12]*32+d.h[14]*32;
+    CHECK(word(&d,window+11*8)<=512 && word(&d,window+11*8)>0);
+    CHECK(word(&d,window+14*8)>0 && word(&d,window+8)<=4096);
+    free(d.data);CHECK(x4_monitor_free(m));
+    puts("PASS bounded prehistory reserves episode capacity and prevents duplicate windows");
+}
 static void test_disabled_and_lifetime(void)
 {
     clock_reset();
@@ -721,6 +818,9 @@ int main(void)
     test_epoch_ledger();
     test_window_caps();
     test_second_gap_during_post_window();
+    test_transport_wrap_and_late();
+    test_critical_ring_and_au_separation();
+    test_window_pre_reservation_and_duplicate();
     test_disabled_and_lifetime();
     alarm(0);
     puts("PASS progress-monitor host campaign; native scheduling/overhead unverified");

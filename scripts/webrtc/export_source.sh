@@ -130,8 +130,10 @@ for current, dirs, files in os.walk(opus):
         source = pathlib.Path(current) / name
         add(source, 'vendor/opus-1.5.2/' + source.relative_to(opus).as_posix())
 
-for name in ('prepare_port.py', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
-    add(rtc / name, 'scripts/webrtc/' + name)
+for name in ('prepare_port.py', 'prepare_receive_diagnostics.py', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
+    # build_native invokes the scripts in the project, not unrelated copies in
+    # RTC_ROOT. Preserve those exact reproducible inputs in the source export.
+    add(project / 'scripts/webrtc' / name, 'scripts/webrtc/' + name)
 add(exporter, 'scripts/webrtc/export_source.sh')
 for source in sorted((rtc / 'overlay').rglob('*')):
     if source.is_file() or source.is_symlink():

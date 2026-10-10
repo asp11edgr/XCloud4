@@ -68,7 +68,7 @@ reopen_interface:;
     }
     x4_controller_init(&controller);
 #ifdef X4_INGRESS_BASELINE
-    printf("XCloud4 0.7.31 BASE: solo para referencia, no es la prueba autorizada\n");
+    printf("XCloud4 0.7.32 BASE: solo para referencia, no es la prueba autorizada\n");
 #else
     printf("XCloud4 %s: progreso independiente, base MPSC\n", X4_PRODUCT_VERSION);
 #endif

@@ -102,6 +102,219 @@ def sample(target, actual, **values):
     return row
 
 
+def fixture_v2(*, critical=(), omitted=None, stage_sources=(), stages=None,
+               critical_header=None, au_filter=None, rejected=None, **kwargs):
+    """Independent literal v2 ABI; no producer/reader constants imported."""
+    base = bytearray(fixture(**kwargs))
+    base[:8] = b'X4PROG2\0'
+    struct.pack_into('<Q', base, 8, 2)
+    attempts, drops = [0]*32, omitted or [0]*32
+    for row in critical:
+        attempts[row[2] & 65535] += 1
+    attempts = [a+b for a, b in zip(attempts, drops)]
+    h = [0]*32
+    for i, value in {0: int.from_bytes(b'X4CRIT2\0', 'little'), 1: 2, 2: 256,
+        3: 64, 4: 4096, 5: len(critical), 6: sum(attempts), 7: sum(drops),
+        9: 16, 10: 16, 11: 24, 12: 32, 16: 32, 17: 16, 18: 512,
+        19: 3072, 20: 1024, 23: len(critical), 24: 16, 25: 10000, 26: 8}.items():
+        h[i] = value
+    if critical_header:
+        h = [critical_header.get(i, n) for i, n in enumerate(h)]
+    def words(values):
+        base.extend(struct.pack('<%dQ' % len(values), *values))
+    words(h); words(attempts); words(drops)
+    for row in stages or [[0]*16 for _ in range(16)]:
+        words(row)
+    words([n for row in rejected or [[0]*32 for _ in range(16)] for n in row])
+    words([0]*16); words(au_filter or [0]*8)
+    sources = [[0]*24 for _ in range(256)]
+    for stage, slot, row in stage_sources:
+        sources[stage*16+slot] = row
+    for row in sources:
+        words(row)
+    for row in critical:
+        words(row)
+    return bytes(base)
+
+
+def critical_record(event, stage=10, *, t=100000, identity=1, ssrc=42, pt=102,
+                    a=0, b=0, c=0, flags=2, ordinal=1):
+    return (t, identity, event | (stage << 16) | (flags << 32),
+            ssrc | (pt << 32), a, b, c, ordinal)
+
+
+class V2ProgressReaderTests(unittest.TestCase):
+    def test_empty_appendix_and_v1_compatibility(self):
+        result = p.analyze(fixture_v2())
+        self.assertEqual(result['schema'], 'X4PROG2/v2 analysis')
+        self.assertTrue(result['upstream_diagnostics']['coverage']['detail_complete'])
+        self.assertFalse(p.analyze(fixture())['upstream_diagnostics']['available'])
+
+    def test_gap_wrap_later_position_and_stage_correlation(self):
+        rows = [critical_record(1, 0, a=65534, b=65538, c=4, flags=1),
+                critical_record(1, 10, t=100020, a=65534, b=65538, c=4, identity=2, ordinal=2),
+                critical_record(2, 10, t=100030, a=65536, b=65539, c=100020, identity=2, ordinal=3)]
+        out = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']
+        gap = out['retained_gap_chronology'][1]
+        self.assertTrue(gap['wraps'])
+        self.assertEqual(gap['range_end'], 1)
+        group = out['exact_range_candidate_groups'][gap['exact_range_candidate_group_id']-1]
+        self.assertEqual(len(group['observations']), 2)
+        self.assertEqual(gap['later_positions'][0]['sequence'], 0)
+        self.assertFalse(gap['first_missing_stage_established'])
+        self.assertFalse(gap['physical_network_loss_established'])
+
+    def test_original_and_RTX_sources_are_not_equated(self):
+        rows = [critical_record(1, a=9, b=11, c=2),
+                critical_record(1, 11, a=9, b=11, c=2, pt=103, ordinal=2)]
+        out = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']
+        self.assertEqual([len(g['observations']) for g in out['exact_range_candidate_groups']], [1, 1])
+
+    def test_omissions_survive_no_retained_gap(self):
+        drops = [0]*32; drops[1] = 3
+        out = p.analyze(fixture_v2(omitted=drops))['upstream_diagnostics']['coverage']
+        self.assertEqual(out['event_counts']['SEQUENCE_GAP']['omitted'], 3)
+        self.assertFalse(out['detail_complete'])
+
+    def test_AU_stages_do_not_confuse_recovery_and_assembly(self):
+        attempted = [0]*512
+        attempted[6*64+8], attempted[6*64+9], attempted[6*64] = 10, 3, 7
+        au = p.analyze(fixture_v2(attempts=attempted,
+            au_filter=[0, 1, 0, 2, 0, 0, 0, 0]))['upstream_diagnostics']['AU_stage_totals']
+        self.assertEqual(au['structurally_complete_before_recovery_filter'], 10)
+        self.assertEqual(au['rejected_by_recovery_filter'], 3)
+        self.assertEqual(au['accepted_for_Decode_feed'], 7)
+        self.assertEqual(au['filter_flag_histogram']['3']['missing'], ['IDR', 'SPS'])
+
+    def test_context_omissions_field_is_versioned(self):
+        wh = [1, 0, 0, 7, 100000, 200000, 300000, 800000, 1, 0, 0, 0, 7, 1, 99, 0]
+        self.assertEqual(p.analyze(fixture_v2(windows=[(wh, [])]))['upstream_diagnostics']['retention']['prehistory_cap'], 512)
+        self.assertFalse(p.analyze(fixture_v2(windows=[(wh, [])]))['coverage']['negative_detail_evidence_complete'])
+        with self.assertRaises(ValueError):
+            p.parse(fixture(windows=[(wh, [])]))
+
+    def test_bounded_reserved_and_counter_checks(self):
+        for overrides in ({5: 4097}, {6: 2}, {27: 1}, {9: 17}, {26: 0}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                p.parse(fixture_v2(critical_header=overrides))
+        with self.assertRaises(ValueError):
+            p.parse(fixture_v2()[:-1])
+        with self.assertRaises(ValueError):
+            p.parse(fixture_v2()+b'\0')
+
+    def test_bad_range_and_noncontiguous_ordinal_rejected(self):
+        for row in (critical_record(1, a=4, b=6, c=1),
+                    critical_record(1, a=4, b=6, c=2, ordinal=2)):
+            with self.assertRaises(ValueError):
+                p.parse(fixture_v2(critical=[row]))
+
+    def test_extended_cycles_do_not_share_gap_identity(self):
+        rows = [critical_record(1, a=9, b=11, c=2),
+                critical_record(1, t=3000000, a=65545, b=65547, c=2, ordinal=2)]
+        out = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']
+        gaps = out['retained_gap_chronology']
+        self.assertEqual([len(g['observations']) for g in out['exact_range_candidate_groups']], [1, 1])
+        self.assertEqual(gaps[1]['expected'], 9)
+        self.assertFalse(gaps[1]['stage_local_extension_epochs_aligned'])
+
+    def test_source_extended_highwater_is_defined_not_reserved(self):
+        row = [0]*24; row[0] = (1 << 63)|(102 << 32)|42
+        row[5], row[18] = 65536|3, 65539
+        source = p.analyze(fixture_v2(stage_sources=[(10, 0, row)]))['upstream_diagnostics']['stages'][10]['source_rows'][0]
+        self.assertEqual(source['extended_high_water_sequence'], 65539)
+        row[19] = 1
+        with self.assertRaises(ValueError):
+            p.parse(fixture_v2(stage_sources=[(10, 0, row)]))
+
+    def test_per_event_totals_cannot_swap_record_types(self):
+        data = bytearray(fixture_v2(critical=[critical_record(1, a=9, b=11, c=2)]))
+        # Keep the global sum unchanged while falsifying the per-type summary.
+        append_offset = len(fixture())
+        attempts_offset = append_offset+256
+        struct.pack_into('<Q', data, attempts_offset+8, 0)
+        struct.pack_into('<Q', data, attempts_offset+16, 1)
+        with self.assertRaises(ValueError):
+            p.parse(data)
+
+    def test_announced_NACK_and_observed_RTX_remain_separate(self):
+        rows = [critical_record(17, 65535, identity=13, a=(1 << 32)|(2 << 16)|102, b=3),
+                critical_record(17, 65535, identity=20, a=1, b=0, c=0, ordinal=2),
+                critical_record(17, 65535, identity=3, a=(43 << 32)|(103 << 16)|5,
+                                b=(42 << 32)|(102 << 16)|9, ordinal=3)]
+        settings = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']['retained_negotiation_and_RTX_settings']
+        self.assertEqual(settings[0]['scope'], 'accepted_answer')
+        self.assertEqual(settings[0]['feedback_announced'], ['nack', 'nack_pli'])
+        self.assertFalse(settings[1]['receiver_NACK_generator_installed'])
+        self.assertEqual(settings[2]['wire_RTX']['seq'], 5)
+        self.assertEqual(settings[2]['normalized_original']['seq'], 9)
+
+    def test_SDP_summary_scope_uses_distinct_numeric_layout(self):
+        rows = [critical_record(17, 65535, identity=19, a=1, b=24, c=0)]
+        item = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']['retained_negotiation_and_RTX_settings'][0]
+        self.assertEqual(item['scope'], 'accepted_answer')
+        self.assertEqual(item['summary_records'], 24)
+        self.assertFalse(item['summary_capped'])
+        self.assertNotIn('payload_type', item)
+
+    def test_full_critical_ring_uses_shared_candidate_groups(self):
+        rows = [critical_record(1, a=9, b=11, c=2, ordinal=i+1) for i in range(4096)]
+        out = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']
+        self.assertEqual(len(out['exact_range_candidate_groups']), 1)
+        self.assertEqual(len(out['exact_range_candidate_groups'][0]['observations']), 4096)
+        self.assertEqual(len(out['retained_gap_chronology']), 4096)
+        self.assertNotIn('exact_range_observations', out['retained_gap_chronology'][0])
+
+    def test_auth_replay_and_binding_limits_have_distinct_fields(self):
+        rows = [critical_record(3, 4, a=28, b=7, c=9, flags=1),
+                critical_record(3, 4, a=29, b=9, c=10, flags=1, ordinal=2),
+                critical_record(3, 4, a=30, b=10, c=11, flags=1, ordinal=3),
+                critical_record(17, 65535, identity=22, a=3, b=32, c=1, ordinal=4),
+                critical_record(17, 65535, identity=23, a=2, b=1, c=0, ordinal=5)]
+        out = p.analyze(fixture_v2(critical=rows))['upstream_diagnostics']
+        self.assertEqual([r['reason'] for r in out['retained_critical_timeline'][:3]],
+                         ['SRTP_AUTH_FAIL', 'SRTP_REPLAY_FAIL', 'SRTP_REPLAY_OLD'])
+        settings = out['retained_negotiation_and_RTX_settings']
+        self.assertEqual(settings[0]['snapshot_phase'], 'detach')
+        self.assertEqual(settings[0]['thread_slot_omissions_process_total'], 3)
+        self.assertEqual(settings[1]['process_trace_bindings'], 2)
+        self.assertFalse(settings[1]['transport_owner_epoch_association_available'])
+
+    def test_uninstrumented_branch_slots_preserve_raw_zero_as_unknown(self):
+        out = p.analyze(fixture_v2())['upstream_diagnostics']
+        for stage in out['stages']:
+            for name, reason in (('ICE_CALLBACK_EXCEPTION', 24), ('SOCKET_FAIRNESS', 26)):
+                item = stage['unavailable_branch_counter_slots'][name]
+                self.assertEqual(item['reason_id'], reason)
+                self.assertEqual(item['raw_count'], 0)
+                self.assertFalse(item['measurement_available'])
+                self.assertIsNone(item['measured_outcomes'])
+        rejected = [[0]*32 for _ in range(16)]
+        rejected[1][24], rejected[0][26] = 7, 3
+        stages = p.analyze(fixture_v2(rejected=rejected))['upstream_diagnostics']['stages']
+        self.assertEqual(stages[1]['unavailable_branch_counter_slots']['ICE_CALLBACK_EXCEPTION']['raw_count'], 7)
+        self.assertIsNone(stages[1]['unavailable_branch_counter_slots']['ICE_CALLBACK_EXCEPTION']['measured_outcomes'])
+        self.assertEqual(stages[0]['branch_counters']['SOCKET_FAIRNESS'], 3)
+
+    def test_branch_labels_do_not_invent_discard_full_queue_or_prior_SRTP_input(self):
+        rows = [critical_record(3, 2, a=8, flags=1),
+                critical_record(3, 13, a=21, flags=1, ordinal=2),
+                critical_record(3, 4, a=12, flags=0, ordinal=3)]
+        rejected = [[0]*32 for _ in range(16)]
+        rejected[2][8] = rejected[13][21] = rejected[4][12] = 1
+        out = p.analyze(fixture_v2(critical=rows, rejected=rejected))['upstream_diagnostics']
+        queue, rtx, demux = out['retained_critical_timeline']
+        self.assertEqual(queue['reason'], 'DTLS_QUEUE_FULL_OR_STOPPING')
+        self.assertFalse(queue['queue_full_vs_stopping_distinguished'])
+        self.assertEqual(out['stages'][2]['branch_counters']['DTLS_QUEUE_FULL_OR_STOPPING'], 1)
+        self.assertTrue(rtx['existing_branch_continues'])
+        self.assertTrue(rtx['same_packet_PEER_HANDLER_OUT_observations_may_repeat'])
+        self.assertFalse(demux['preceding_SRTP_INPUT_observation_established'])
+        self.assertEqual(out['stages'][4]['packet_observations'], 0)
+        for row in (queue, rtx, demux):
+            self.assertTrue(row['stage_is_branch_location'])
+            self.assertTrue(row['packet_discard_not_established_by_record_name'])
+
+
 class SyntheticProgressReaderTests(unittest.TestCase):
     def test_valid_empty_bounded_file(self):
         data = fixture()
@@ -427,6 +640,27 @@ class SyntheticProgressReaderTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(missing.exists())
             self.assertEqual(malformed.read_bytes(), b'bad')
+
+
+class HelperIdentityTests(unittest.TestCase):
+    def test_parallel_helpers_share_copy_id_but_not_identity(self):
+        rows = [record(100+i, 0x222, a=19, ordinal=10+i, flags=i << 8)
+                for i in range(3)]
+        rows += [record(110+i, 0x223, a=19, ordinal=20+i,
+                        flags=(i << 8) | 1) for i in range(3)]
+        result = p.durations(rows, 0x222, 0x223, True)
+        self.assertEqual(result['count'], 3)
+        self.assertEqual(result['p50_us'], 10)
+        self.assertEqual(result['unmatched_or_ambiguous'], 0)
+
+    def test_missing_helper_start_is_not_reassigned_to_another_helper(self):
+        rows = [record(100, 0x222, a=19, ordinal=1, flags=0),
+                record(110, 0x223, a=19, ordinal=2, flags=1 << 8),
+                record(120, 0x223, a=19, ordinal=3, flags=0)]
+        result = p.durations(rows, 0x222, 0x223, True)
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['max_us'], 20)
+        self.assertEqual(result['unmatched_or_ambiguous'], 1)
 
 
 if __name__ == '__main__':

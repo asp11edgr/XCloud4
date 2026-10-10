@@ -44,7 +44,8 @@ enum {
     X4_TRACE_AU_VALID = 0x600, X4_TRACE_REORDER_STATE,
     X4_TRACE_REORDER_WINDOW_JUMP, X4_TRACE_RGB_CONSUME,
     X4_TRACE_FLIP_CALL_BEGIN, X4_TRACE_PLI_ATTEMPT,
-    X4_TRACE_PLI_RESULT, X4_TRACE_SESSION_PHASE
+    X4_TRACE_PLI_RESULT, X4_TRACE_SESSION_PHASE,
+    X4_TRACE_AU_STRUCTURAL, X4_TRACE_AU_FILTER_REJECT
 };
 
 enum {
@@ -120,6 +121,14 @@ int x4_trace_monitor_stop(X4Trace *);
 int x4_trace_monitor_dump(X4Trace *, const char *legacy_base_path);
 void x4_trace_monitor_rx(X4Trace *, unsigned kind, bool valid, uint32_t ssrc,
     uint16_t sequence, size_t bytes, uint64_t time_us);
+void x4_trace_monitor_transport_packet(X4Trace *, unsigned stage, bool metadata_valid,
+    uint32_t ssrc, uint16_t sequence, unsigned payload_type, size_t bytes,
+    uint64_t time_us, uint64_t prior_stage_us, uint32_t flags);
+void x4_trace_monitor_transport_reject(X4Trace *, unsigned stage, unsigned reason,
+    int result, bool metadata_valid, uint32_t ssrc, uint16_t sequence, uint64_t time_us);
+void x4_trace_monitor_critical(X4Trace *, uint64_t time_us, unsigned event,
+    unsigned stage, uint32_t flags, uint64_t identity, uint64_t source,
+    uint64_t a, uint64_t b, uint64_t c);
 void x4_trace_monitor_queue(X4Trace *, uint32_t depth, uint64_t oldest_us, bool valid);
 void x4_trace_monitor_state(X4Trace *, unsigned actor, unsigned phase, uint64_t begin_us);
 void x4_trace_monitor_epoch(X4Trace *, unsigned actor, unsigned epoch);

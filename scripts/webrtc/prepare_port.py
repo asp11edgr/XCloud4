@@ -700,4 +700,6 @@ checked_patch(source, [
      '\t\tthrow std::runtime_error("SCTP transport initialization failed");'),
 ], 'X4_ICE_EXCEPTION_EVENT(95, 2);', exact=True)
 
+from prepare_receive_diagnostics import apply as apply_receive_diagnostics
+apply_receive_diagnostics(base)
 print('OpenOrbis dependency overlay prepared:', overlay)
