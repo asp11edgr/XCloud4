@@ -12,9 +12,13 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Catalog search candidate: 0.7.29
+## Prepared video ingress experiment: 0.7.30
 
-Product **0.7.29**, PS4 **APP_VER 00.99**, adds a local controller keyboard, case-insensitive substring matching on available names/IDs, and all/confirmed/unconfirmed access groups. Filtered selections map back to the original title index; query/group persist on return and refresh. Actual Claude Opus 5.5 and independent selected-source reviews, native build, matching artifacts/72 frozen inputs, selected linked inspection and installer transfer/readback are verified; owner console search/filter/game-return results are pending. Store naming remains limited to 32 retained titles, so name-only words cannot match an unavailable name. No cover images or network-quality test are implemented. See the [search contract](docs/CATALOG_SEARCH_0.7.29.md), [release notes](docs/RELEASE_NOTES_0.7.29.md) and [network-quality plan](docs/NETWORK_QUALITY_PLAN.md).
+Product **0.7.30**, PS4 **APP_VER 01.00**, prepares a video-only queue correction for locally rejected RTP packets. The candidate removes the consumer's queue gate; an instrumented try-gate baseline supports a four-reader **A/B/A** comparison. Capacity, reorder, recovery, audio and codec settings remain unchanged. Both variants passed the explicitly requested normal host tests, ASan/UBSan/leak checks and TSan; console improvement is pending. See the [experiment and original evidence](docs/VIDEO_INGRESS_0.7.30.md) and [release notes](docs/RELEASE_NOTES_0.7.30.md).
+
+## Tested catalog search: 0.7.29
+
+Product **0.7.29**, PS4 **APP_VER 00.99**, adds a local controller keyboard, case-insensitive substring matching on available names/IDs, and all/confirmed/unconfirmed access groups. Filtered selections map back to the original title index; query/group persist on return and refresh. Actual Claude Opus 5.5 and independent selected-source reviews, native build, matching artifacts/72 frozen inputs, selected linked inspection and installer transfer/readback are verified; the owner confirms the requested search/filter/selected-game/return interaction worked correctly. Store naming remains limited to 32 retained titles, so name-only words cannot match an unavailable name. No cover images or network-quality test are implemented. See the [owner checkpoint](docs/CONSOLE_REPORT_0.7.29.md), [search contract](docs/CATALOG_SEARCH_0.7.29.md), [release notes](docs/RELEASE_NOTES_0.7.29.md) and [network-quality plan](docs/NETWORK_QUALITY_PLAN.md).
 
 ## Tested catalog and playback interface: 0.7.28
 

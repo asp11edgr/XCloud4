@@ -1,5 +1,7 @@
 # XCloud4 0.7.29 — catalog search candidate
 
+**Subsequent owner checkpoint:** the requested search/filter/selected-title/return interaction worked correctly. See the [owner report](CONSOLE_REPORT_0.7.29.md). The preparation-time evidence and limits below remain preserved; their pending owner status has been superseded for that specific interaction, without an exhaustive catalog or video benchmark.
+
 Product **0.7.29**, PS4 **APP_VER 00.99**, title identifier **XCLD00001**. Final selected-source reviews, native compilation, selected linked inspection, artifact correspondence and installer transfer/readback are verified. Owner console search/filter/game-return results remain pending. GitHub documentation is English; the PS4 interface remains Spanish.
 
 ## Changes

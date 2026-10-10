@@ -24,3 +24,5 @@ runtime/
 *.bundle
 .claude/settings.local.json
 /work/
+__pycache__/
+*.pyc

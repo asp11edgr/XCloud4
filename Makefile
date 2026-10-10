@@ -11,6 +11,13 @@ CC := clang
 CXX := clang++
 LD := ld.lld
 CFLAGS := --target=x86_64-pc-freebsd12-elf -std=c23 -fPIC -funwind-tables -O2 -g -Wall -Wextra -MMD -MP -c -isysroot $(SDK) -I$(X4_WEBRTC_ROOT)/overlay -I$(X4_WEBRTC_PREFIX)/include -isystem $(SDK)/include -D_BSD_SOURCE -DX4_OPENORBIS
+# Instrumented try-gate baseline for the owner-requested A/B/A trial.
+X4_INGRESS_MODE ?= mpsc
+ifeq ($(X4_INGRESS_MODE),baseline)
+CFLAGS += -DX4_INGRESS_BASELINE
+else ifneq ($(X4_INGRESS_MODE),mpsc)
+$(error X4_INGRESS_MODE must be mpsc or baseline)
+endif
 CXXFLAGS := $(filter-out -std=c23,$(CFLAGS)) -std=c++17 -nostdinc++ -isystem $(SDK)/include/c++/v1
 LDFLAGS := -m elf_x86_64 -pie --script $(SDK)/link.x --eh-frame-hdr -L$(SDK)/lib
 RTC_LIBS := $(X4_WEBRTC_ROOT)/build-datachannel/libdatachannel-static.a \

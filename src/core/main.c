@@ -60,7 +60,11 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.29: buscador de catalogo y grupos por acceso\n");
+#ifdef X4_INGRESS_BASELINE
+    printf("XCloud4 0.7.30 BASE: cola de video de referencia instrumentada\n");
+#else
+    printf("XCloud4 0.7.30: ingreso de video sin bloqueo del consumidor\n");
+#endif
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();

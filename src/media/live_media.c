@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_media.h"
+#include "video_ingress.h"
 #include "../video/live_h264.h"
 #include "../video/display.h"
 #include "../audio/live_audio.h"
@@ -182,7 +183,12 @@ struct X4LiveMedia {
     uint32_t damage_bits, first_damage;
     unsigned trace_budget_reason;
     uint64_t reset_counts[RESET_COUNT], discard_counts[RESET_COUNT], damage_counts[13];
-    X4LiveRing ring;
+    X4VideoIngress ingress; /* Video only; the original ring stays in audio. */
+    atomic_uint callback_active, callback_peak;
+    atomic_uint_fast64_t callback_calls, callback_overlap, callback_us, callback_max_us;
+    atomic_uint_fast64_t reserve_us, reserve_max_us, rx_invalid;
+    atomic_uint_fast64_t callback_hist[12];
+    uint64_t recovery_begin_us, recovery_episodes, recovery_completed, recovery_us;
     X4LiveReorder reorder;
     X4LiveTrack track;
     X4LiveVideo video;
@@ -251,8 +257,10 @@ static void reset_au(X4LiveMedia *m, bool gap, unsigned reason, unsigned detail)
     if (m->waiting_keyframe) flags |= 128u;
     x4_trace_record(m->trace, MT_AU_RESET, flags, m->trace_au,
         ((uint64_t)reason << 48) | ((uint64_t)(detail & 0xffffu) << 32) | m->damage_bits);
-    if (!waiting_before && m->waiting_keyframe)
+    if (!waiting_before && m->waiting_keyframe) {
+        ++m->recovery_episodes; m->recovery_begin_us = sceKernelGetProcessTime();
         x4_trace_record(m->trace, MT_WAIT_BEGIN, (uint16_t)reason, m->trace_au, 0);
+    }
     m->au_size = 0; m->fu = m->au_open = m->idr = m->damaged = false;
     m->damage_bits = m->first_damage = 0;
     m->au_sps_size = m->au_pps_size = 0;
@@ -350,7 +358,14 @@ static void depacketize(X4LiveMedia *m, const X4LiveRtp *r)
     x4_trace_record(m->trace, MT_SUBMIT_END, 0, m->trace_au, (uint32_t)rc);
     if (rc < 0) reset_au(m, true, RESET_FEED, 0);
     else {
-        if (m->waiting_keyframe) x4_trace_record(m->trace, MT_WAIT_END, 0, m->trace_au, 0);
+        if (m->waiting_keyframe) {
+            x4_trace_record(m->trace, MT_WAIT_END, 0, m->trace_au, 0);
+            if (m->recovery_begin_us) {
+                ++m->recovery_completed;
+                m->recovery_us += sceKernelGetProcessTime() - m->recovery_begin_us;
+                m->recovery_begin_us = 0;
+            }
+        }
         m->waiting_keyframe = false; reset_au(m, false, RESET_SUBMITTED, 0);
     }
 }
@@ -363,14 +378,19 @@ X4LiveMedia *x4_live_media_create(int *error)
     atomic_init(&m->packets, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
     atomic_init(&m->started, false); atomic_init(&m->stop, false); atomic_init(&m->start_complete, false);
     atomic_init(&m->reset_maxima, false); atomic_init(&m->start_result, X4_LIVE_ERR_THREAD);
+    atomic_init(&m->callback_active, 0); atomic_init(&m->callback_peak, 0);
+    atomic_init(&m->callback_calls, 0); atomic_init(&m->callback_overlap, 0);
+    atomic_init(&m->callback_us, 0); atomic_init(&m->callback_max_us, 0);
+    atomic_init(&m->reserve_us, 0); atomic_init(&m->reserve_max_us, 0);
+    atomic_init(&m->rx_invalid, 0);
+    for (unsigned i = 0; i < 12; ++i) atomic_init(&m->callback_hist[i], 0);
     atomic_flag_clear(&m->mailbox_gate);
     m->published_slot = m->reader_slot = m->writer_slot = -1;
     m->audio_payload_type = -1;
     m->waiting_keyframe = true; x4_live_track_init(&m->track, -1);
-    m->au = malloc(X4_LIVE_AU_MAX); if (!m->au) goto fail;
-    rc = x4_live_ring_init(&m->ring, 256); if (rc < 0) goto fail;
-    m->ring.arrivals = calloc(m->ring.capacity, sizeof(*m->ring.arrivals));
-    if (!m->ring.arrivals) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
+    rc = x4_video_ingress_init(&m->ingress, 256);
+    if (rc < 0) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
+    m->au = malloc(X4_LIVE_AU_MAX); if (!m->au) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     rc = x4_live_reorder_init(&m->reorder, 128, 32, 25000); if (rc < 0) goto fail;
     for (unsigned i = 0; i < RGB_SLOTS; ++i) {
         m->rgb[i].pixels = calloc((size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT, sizeof(uint32_t));
@@ -406,31 +426,69 @@ int x4_live_media_set_payload_type(X4LiveMedia *m, int kind, int pt)
     else return -1;
     return 0;
 }
+/* Bounded best observed maxima; a missed simultaneous larger update is
+ * possible under an unsupported extreme caller count. No waiting loop. */
+static void callback_max(atomic_uint_fast64_t *counter, uint64_t value)
+{
+    uint_fast64_t old = atomic_load_explicit(counter, memory_order_relaxed);
+    for (unsigned n = 0; n < 16 && old < value; ++n)
+        if (atomic_compare_exchange_strong_explicit(counter, &old, value,
+            memory_order_relaxed, memory_order_relaxed)) break;
+}
 void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t size)
 {
     X4LiveMedia *m = context; if (!m || !atomic_load_explicit(&m->started, memory_order_acquire) || atomic_load(&m->stop)) return;
     if (kind == X4_LIVE_KIND_AUDIO) { x4_live_audio_receive(m->audio, p, size); return; }
     if (kind != X4_LIVE_KIND_VIDEO) return;
+    uint64_t callback_begin = sceKernelGetProcessTime();
+    unsigned active = atomic_fetch_add_explicit(&m->callback_active, 1, memory_order_relaxed) + 1;
+    unsigned peak = atomic_load_explicit(&m->callback_peak, memory_order_relaxed);
+    for (unsigned n = 0; n < 16 && peak < active; ++n)
+        if (atomic_compare_exchange_strong_explicit(&m->callback_peak, &peak, active,
+            memory_order_relaxed, memory_order_relaxed)) break;
+    if (active > 1) atomic_fetch_add_explicit(&m->callback_overlap, 1, memory_order_relaxed);
     X4LiveRtp r;
     unsigned parse_reason = 0;
     int parsed = rtp_parse_reason(p, size, &r, &parse_reason);
-    unsigned reason = 0;
-    bool pushed = parsed >= 0 && ring_push_reason(&m->ring, p, size, &reason);
+    X4IngressResult result = { .reason = X4_INGRESS_INVALID };
+    bool pushed = parsed >= 0 && x4_video_ingress_push(&m->ingress, p, size, callback_begin, &result);
+    if (parsed < 0) atomic_fetch_add_explicit(&m->rx_invalid, 1, memory_order_relaxed);
     if (parsed < 0 || !pushed) {
         atomic_fetch_add(&m->dropped, 1); atomic_store(&m->ingress_gap, true); atomic_store(&m->keyframe, true);
     }
     else atomic_fetch_add(&m->packets, 1);
-    /* Exact push branch, not a racy difference of queue counters. Queue gate
-     * has already been released. seq16 alone is not proof of packet loss. */
+    /* Exact reservation branch, not a racy difference of queue counters.
+     * No video consumer lock exists. seq16 alone is not proof of loss. */
     if (parsed < 0) x4_trace_record(m->trace, MT_RX_REJECT, X4_TRACE_REASON(X4_TRACE_R_RTP_INVALID), size, parse_reason);
     else {
         x4_trace_record(m->trace, MT_RTP, (r.marker ? X4_TRACE_F_MARKER : 0u) |
             (pushed ? X4_TRACE_F_OBSERVED_METADATA : 0u), r.sequence, size);
         if (!pushed) x4_trace_record(m->trace, MT_QUEUE_REJECT,
-            X4_TRACE_REASON(reason == 2 ? X4_TRACE_R_PUSH_CONTENDED : reason == 3 ? X4_TRACE_R_QUEUE_FULL : X4_TRACE_R_SIZE),
-            r.sequence, atomic_load_explicit(&m->ring.depth, memory_order_relaxed));
+            X4_TRACE_REASON(result.reason == X4_INGRESS_CONTENDED ? X4_TRACE_R_PUSH_CONTENDED :
+                result.reason == X4_INGRESS_FULL ? X4_TRACE_R_QUEUE_FULL :
+                result.reason == X4_INGRESS_STOPPED ? X4_TRACE_R_USER_STOP : X4_TRACE_R_SIZE),
+            r.sequence, ((uint64_t)result.owner_sample << 32) | x4_video_ingress_depth(&m->ingress));
     }
     x4_trace_poll(m->trace);
+    uint64_t elapsed = sceKernelGetProcessTime() - callback_begin;
+    atomic_fetch_add_explicit(&m->callback_calls, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&m->callback_us, elapsed, memory_order_relaxed);
+    callback_max(&m->callback_max_us, elapsed);
+    atomic_fetch_add_explicit(&m->reserve_us, result.reserve_us, memory_order_relaxed);
+    callback_max(&m->reserve_max_us, result.reserve_us);
+    unsigned bucket = 0;
+    while (bucket < 11 && elapsed > (2ull << bucket)) ++bucket;
+    atomic_fetch_add_explicit(&m->callback_hist[bucket], 1, memory_order_relaxed);
+    /* One bounded numeric record; no payload/SSRC/PTS or per-packet print.
+     * Durations saturate at UINT32_MAX. Reservation time is monotonic
+     * elapsed, including scheduling; no intentional sleep is added to the
+     * callback. The final diagnostic append is outside elapsed. */
+    uint64_t cb32 = elapsed > UINT32_MAX ? UINT32_MAX : elapsed;
+    uint64_t reserve32 = result.reserve_us > UINT32_MAX ? UINT32_MAX : result.reserve_us;
+    x4_trace_record(m->trace, X4_TRACE_RX_CALLBACK,
+        (uint16_t)(result.retries | (pushed ? 64u : 0u) | (parsed < 0 ? 128u : 0u)),
+        ((uint64_t)active << 32) | (parsed >= 0 ? r.sequence : 0u), (cb32 << 32) | reserve32);
+    atomic_fetch_sub_explicit(&m->callback_active, 1, memory_order_relaxed);
 }
 static bool tick_budget(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin)
 {
@@ -514,6 +572,9 @@ static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
     s.video_picture_gap_max_us = v->picture_gap_max_us > t->picture_gap_max_us ? v->picture_gap_max_us : t->picture_gap_max_us;
     s.video_au_submitted = m->au_submitted; s.video_worker_idle_yields = m->worker_idle_yields;
     s.video_queue_age_us = m->queue_age_us; s.video_queue_age_max_us = m->queue_age_max_us;
+    s.video_ingress_resets = m->reset_counts[RESET_INGRESS];
+    s.video_recovery_episodes = m->recovery_episodes;
+    s.video_recovery_completed = m->recovery_completed; s.video_recovery_us = m->recovery_us;
     *out = s;
 }
 /* Gate held: geometry/generation and their snapshot commit are indivisible. */
@@ -578,6 +639,58 @@ static void reset_worker_maxima(X4LiveMedia *m)
     m->video.decode_max_us = m->video.copy_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
     m->video_totals.decode_max_us = m->video_totals.copy_max_us = m->video_totals.convert_max_us = m->video_totals.picture_gap_max_us = 0;
     m->video.copy_wait_max_us = m->video_totals.copy_wait_max_us = 0;
+}
+static void report_ingress(const X4LiveMediaSnapshot *s, const X4LiveMediaSnapshot *p, bool final)
+{
+#ifdef X4_INGRESS_BASELINE
+    const char *mode = "baseline";
+    uint64_t consumer_drops = s->video_lock_owner[2] - p->video_lock_owner[2];
+#else
+    const char *mode = "mpsc";
+    uint64_t consumer_drops = 0;
+#endif
+    printf("XCloud4: video ingress final=%u mode=%s capacity=256 callback=%llu overlap=%llu active=%u peak=%u "
+        "callback_us=%llu callback_max_us=%llu reserve_us=%llu reserve_max_us=%llu retries=%llu "
+        "consumer_lock_drop=%llu contended=%llu full=%llu other=%llu invalid_rtp=%llu "
+        "ingress_resets=%llu recovery_episodes=%llu recovery_completed=%llu recovery_us=%llu\n",
+        final ? 1u : 0u, mode,
+        (unsigned long long)(s->video_callback_calls - p->video_callback_calls),
+        (unsigned long long)(s->video_callback_overlap - p->video_callback_overlap),
+        s->video_callback_active, s->video_callback_peak,
+        (unsigned long long)(s->video_callback_us - p->video_callback_us),
+        (unsigned long long)s->video_callback_max_us,
+        (unsigned long long)(s->video_reserve_us - p->video_reserve_us),
+        (unsigned long long)s->video_reserve_max_us,
+        (unsigned long long)(s->video_reserve_retries - p->video_reserve_retries),
+        (unsigned long long)consumer_drops,
+        (unsigned long long)(s->video_queue_push_contended - p->video_queue_push_contended),
+        (unsigned long long)(s->video_queue_full - p->video_queue_full),
+        (unsigned long long)(s->video_queue_other - p->video_queue_other),
+        (unsigned long long)(s->video_rx_invalid - p->video_rx_invalid),
+        (unsigned long long)(s->video_ingress_resets - p->video_ingress_resets),
+        (unsigned long long)(s->video_recovery_episodes - p->video_recovery_episodes),
+        (unsigned long long)(s->video_recovery_completed - p->video_recovery_completed),
+        (unsigned long long)(s->video_recovery_us - p->video_recovery_us));
+    printf("XCloud4: video gate samples final=%u unknown=%llu producer=%llu consumer=%llu\n",
+        final ? 1u : 0u,
+        (unsigned long long)(s->video_lock_owner[0] - p->video_lock_owner[0]),
+        (unsigned long long)(s->video_lock_owner[1] - p->video_lock_owner[1]),
+        (unsigned long long)(s->video_lock_owner[2] - p->video_lock_owner[2]));
+    printf("XCloud4: video callback histogram final=%u le2=%llu le4=%llu le8=%llu le16=%llu le32=%llu "
+        "le64=%llu le128=%llu le256=%llu le512=%llu le1024=%llu le2048=%llu gt2048=%llu\n",
+        final ? 1u : 0u,
+        (unsigned long long)(s->video_callback_hist[0] - p->video_callback_hist[0]),
+        (unsigned long long)(s->video_callback_hist[1] - p->video_callback_hist[1]),
+        (unsigned long long)(s->video_callback_hist[2] - p->video_callback_hist[2]),
+        (unsigned long long)(s->video_callback_hist[3] - p->video_callback_hist[3]),
+        (unsigned long long)(s->video_callback_hist[4] - p->video_callback_hist[4]),
+        (unsigned long long)(s->video_callback_hist[5] - p->video_callback_hist[5]),
+        (unsigned long long)(s->video_callback_hist[6] - p->video_callback_hist[6]),
+        (unsigned long long)(s->video_callback_hist[7] - p->video_callback_hist[7]),
+        (unsigned long long)(s->video_callback_hist[8] - p->video_callback_hist[8]),
+        (unsigned long long)(s->video_callback_hist[9] - p->video_callback_hist[9]),
+        (unsigned long long)(s->video_callback_hist[10] - p->video_callback_hist[10]),
+        (unsigned long long)(s->video_callback_hist[11] - p->video_callback_hist[11]));
 }
 static void report_performance(X4LiveMedia *m, uint64_t now)
 {
@@ -645,6 +758,7 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.video_copy_check_bytes - p->video_copy_check_bytes),
         (unsigned long long)(s.video_copy_check_us - p->video_copy_check_us),
         s.video_copy_check_attempts != p->video_copy_check_attempts ? 1u : 0u);
+    report_ingress(&s, p, false);
     m->report_previous = s; m->report_time = now;
     m->draw_max_us = m->present_max_us = 0;
     atomic_store(&m->reset_maxima, true);
@@ -669,11 +783,17 @@ static void video_batch(X4LiveMedia *m)
     for (unsigned n = 0; n < 512; ++n) {
         if (tick_budget(m, begin, decode_begin)) break;
         uint64_t arrival = 0;
-        unsigned pop_reason = 0;
-        size_t size = ring_pop_at(&m->ring, packet, &arrival, &pop_reason);
+        uint64_t pop_before = atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed);
+        size_t size = x4_video_ingress_pop(&m->ingress, packet, &arrival);
         if (!size) {
-            if (pop_reason == 2) x4_trace_record(m->trace, MT_POP_CONTENDED,
-                X4_TRACE_REASON(X4_TRACE_R_POP_CONTENDED), atomic_load_explicit(&m->ring.depth, memory_order_relaxed), 0);
+            if (atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed) != pop_before)
+                x4_trace_record(m->trace, MT_POP_CONTENDED, X4_TRACE_REASON(X4_TRACE_R_POP_CONTENDED),
+                    x4_video_ingress_depth(&m->ingress), 0);
+            /* A reserved, unpublished head preserves FIFO. Yield instead
+             * of spinning while a producer finishes its bounded copy. */
+#ifndef X4_INGRESS_BASELINE
+            if (x4_video_ingress_depth(&m->ingress)) sceKernelUsleep(50);
+#endif
             break;
         }
         ++m->tick_packets;
@@ -706,12 +826,12 @@ static void video_batch(X4LiveMedia *m)
         else if (rc == X4_LIVE_REORDER_JUMP) { ++m->lost; reset_au(m, true, RESET_JUMP, 0); }
         /* Consume continuously so high packet rates do not fill the reorder window. */
         drain_reordered(m, begin, decode_begin,
-            atomic_load_explicit(&m->ring.depth, memory_order_relaxed) == 0);
+            x4_video_ingress_depth(&m->ingress) == 0);
         if (m->video.error) goto finish;
     }
     /* A last hole must expire even when no subsequent RTP arrives this frame. */
     drain_reordered(m, begin, decode_begin,
-        atomic_load_explicit(&m->ring.depth, memory_order_relaxed) == 0);
+        x4_video_ingress_depth(&m->ingress) == 0);
 finish:
     x4_live_video_convert_pending(&m->video);
     uint64_t now = sceKernelGetProcessTime(), elapsed = now - begin;
@@ -736,12 +856,12 @@ static void *video_worker(void *context)
         x4_trace_poll(m->trace);
         reset_worker_maxima(m);
         if (atomic_load_explicit(&m->started, memory_order_acquire) && !m->video.error &&
-            (atomic_load_explicit(&m->ring.depth, memory_order_relaxed) || m->reorder.buffered)) video_batch(m);
+            (x4_video_ingress_depth(&m->ingress) || m->reorder.buffered)) video_batch(m);
         else { ++m->worker_idle_yields; sceKernelUsleep(1000); }
         publish_worker_view(m);
         /* A missing sequence with no new ingress needs its timeout checked,
          * without a busy spin while waiting for the next packet. */
-        if (!atomic_load_explicit(&m->ring.depth, memory_order_relaxed) && m->reorder.buffered) {
+        if (!x4_video_ingress_depth(&m->ingress) && m->reorder.buffered) {
             ++m->worker_idle_yields; sceKernelUsleep(1000);
         }
     }
@@ -864,13 +984,29 @@ void x4_live_media_snapshot(const X4LiveMedia *m, X4LiveMediaSnapshot *s)
     s->video_present_calls = m->present_calls; s->video_present_us = m->present_us; s->video_present_max_us = m->present_max_us;
     uint64_t now = sceKernelGetProcessTime();
     s->video_picture_age_us = completed && now >= completed ? now - completed : 0;
-    s->video_queue_depth = atomic_load_explicit(&m->ring.depth, memory_order_relaxed);
-    s->video_queue_highwater = atomic_load_explicit(&m->ring.highwater, memory_order_relaxed);
-    s->video_queue_full = atomic_load_explicit(&m->ring.full, memory_order_relaxed);
-    s->video_queue_push_contended = atomic_load_explicit(&m->ring.push_contended, memory_order_relaxed);
-    s->video_queue_pop_contended = atomic_load_explicit(&m->ring.pop_contended, memory_order_relaxed);
-    /* Approximate independently sampled age; snapshot adds no queue lock. */
-    uint64_t arrival = atomic_load_explicit(&m->ring.oldest_arrival, memory_order_relaxed);
+    s->video_queue_depth = x4_video_ingress_depth(&m->ingress);
+    s->video_queue_highwater = atomic_load_explicit(&m->ingress.highwater, memory_order_relaxed);
+    s->video_queue_full = atomic_load_explicit(&m->ingress.full, memory_order_relaxed);
+    s->video_queue_push_contended = atomic_load_explicit(&m->ingress.contended, memory_order_relaxed);
+    s->video_queue_pop_contended = atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed);
+    s->video_queue_other = atomic_load_explicit(&m->ingress.invalid, memory_order_relaxed) +
+        atomic_load_explicit(&m->ingress.stopped, memory_order_relaxed);
+    s->video_reserve_retries = atomic_load_explicit(&m->ingress.retries, memory_order_relaxed);
+    s->video_callback_active = atomic_load_explicit(&m->callback_active, memory_order_relaxed);
+    s->video_callback_peak = atomic_load_explicit(&m->callback_peak, memory_order_relaxed);
+    s->video_callback_calls = atomic_load_explicit(&m->callback_calls, memory_order_relaxed);
+    s->video_callback_overlap = atomic_load_explicit(&m->callback_overlap, memory_order_relaxed);
+    s->video_callback_us = atomic_load_explicit(&m->callback_us, memory_order_relaxed);
+    s->video_callback_max_us = atomic_load_explicit(&m->callback_max_us, memory_order_relaxed);
+    s->video_reserve_us = atomic_load_explicit(&m->reserve_us, memory_order_relaxed);
+    s->video_reserve_max_us = atomic_load_explicit(&m->reserve_max_us, memory_order_relaxed);
+    s->video_rx_invalid = atomic_load_explicit(&m->rx_invalid, memory_order_relaxed);
+    for (unsigned i = 0; i < 12; ++i)
+        s->video_callback_hist[i] = atomic_load_explicit(&m->callback_hist[i], memory_order_relaxed);
+    for (unsigned i = 0; i < 3; ++i)
+        s->video_lock_owner[i] = atomic_load_explicit(&m->ingress.contended_owner[i], memory_order_relaxed);
+    /* Approximate atomic metadata sample; snapshot adds no queue lock. */
+    uint64_t arrival = x4_video_ingress_oldest(&m->ingress);
     s->video_queue_oldest_age_us = arrival && now >= arrival ? now - arrival : 0;
 }
 void x4_live_media_set_muted(X4LiveMedia *m, bool mute) { if (m) x4_live_audio_mute(m->audio, mute); }
@@ -887,6 +1023,7 @@ int x4_live_media_close(X4LiveMedia *m)
     x4_trace_set_active(m->trace, false);
     atomic_store_explicit(&m->started, false, memory_order_release);
     atomic_store(&m->stop, true);
+    x4_video_ingress_stop(&m->ingress);
     if (m->running) {
         int rc = scePthreadJoin(m->thread, NULL);
         if (rc) return rc < 0 ? rc : -rc;
@@ -898,6 +1035,11 @@ int x4_live_media_close(X4LiveMedia *m)
      * after their owning thread exited, even if its native teardown failed. */
     if (m->worker_close_result < 0) return m->worker_close_result;
     if (rc < 0) return rc;
+    if (atomic_load_explicit(&m->callback_active, memory_order_relaxed)) return X4_LIVE_ERR_STATE;
+    X4LiveMediaSnapshot final_ingress, zero = {0};
+    x4_live_media_snapshot(m, &final_ingress);
+    report_ingress(&final_ingress, &zero, true);
+    if (!x4_video_ingress_free(&m->ingress)) return X4_LIVE_ERR_STATE;
     /* Closed-session totals are independent of trace-window admission/caps. */
     for (unsigned i = 0; i < RESET_COUNT; ++i)
         printf("XCloud4: trace reset reason=%u calls=%llu discarded_open_au=%llu\n", i,
@@ -909,7 +1051,13 @@ int x4_live_media_close(X4LiveMedia *m)
      * native teardown above, makes all trace producers quiescent. */
     x4_trace_end_session(m->trace);
     char path[96];
-    snprintf(path, sizeof(path), "/data/xcloud4-trace-0729-%llu.bin", (unsigned long long)m->trace_session);
+#ifdef X4_INGRESS_BASELINE
+    const unsigned ingress_variant = 0;
+#else
+    const unsigned ingress_variant = 1;
+#endif
+    snprintf(path, sizeof(path), "/data/xcloud4-trace-0730-%u-%llu.bin", ingress_variant,
+        (unsigned long long)m->trace_session);
     int dump = x4_trace_dump_file(m->trace, path);
     printf("XCloud4: numeric trace dump rc=%d\n", dump);
     bool trace_released = x4_trace_free(m->trace);
@@ -918,5 +1066,5 @@ int x4_live_media_close(X4LiveMedia *m)
     m->trace = NULL;
     m->video.trace = NULL;
     for (unsigned i = 0; i < RGB_SLOTS; ++i) free(m->rgb[i].pixels);
-    x4_live_ring_free(&m->ring); x4_live_reorder_free(&m->reorder); free(m->au); free(m); return 0;
+    x4_live_reorder_free(&m->reorder); free(m->au); free(m); return 0;
 }

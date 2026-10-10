@@ -52,7 +52,7 @@ for base, names in (
      'COPY_WAIT_ELAPSED COPY_CHECK CONVERT_BEGIN CONVERT_END RGB_PUBLICATION RGB_SUPERSEDED'),
     (0x300, 'DRAW_BEGIN DRAW_END DRAW_SKIP FLIP_SUBMIT GNM_DONE FLIP_MATCH '
      'PRESENT_NEW PRESENT_REPEAT FLIP_FAIL'),
-    (0x400, 'RX_VALID RX_REJECT'),
+    (0x400, 'RX_VALID RX_REJECT RX_CALLBACK'),
     (0x500, 'SESSION_START ACTIVE_CHANGE GAP_BEGIN GAP_CLOSED WINDOW_OPEN WINDOW_FROZEN SESSION_END'),
     (0x120, 'DAMAGE_FIRST IDR_SEEN SUBMIT_BEGIN SUBMIT_END RESET_TOTAL DAMAGE_TOTAL '
      'WAIT_BEGIN WAIT_END POP_CONTENDED'),
@@ -244,6 +244,12 @@ def timings(records, wrapped):
                                      0x222, 0x223, 'copy_helper', 'copy_helper')
         for index in helper_indices}
     result['queue_arrival_to_pop'] = distribution([r['b'] for r in records if r['event'] == 0x107])
+    callbacks = [r for r in records if r['event'] == 0x402]
+    if callbacks:
+        result['callback_elapsed_excludes_final_record'] = distribution([r['b'] >> 32 for r in callbacks])
+        result['ingress_reservation_monotonic_elapsed'] = distribution([r['b'] & 0xffffffff for r in callbacks])
+        result['callback_concurrency_retained_max'] = max(r['a'] >> 32 for r in callbacks)
+        result['reservation_retries_retained'] = sum(r['flags'] & 31 for r in callbacks)
     result['helper_wait_reported'] = distribution([r['b'] for r in records if r['event'] == 0x225])
     result['copy_wall_reported_excludes_reference_check'] = distribution(
         [r['b'] for r in records if r['event'] == 0x207])

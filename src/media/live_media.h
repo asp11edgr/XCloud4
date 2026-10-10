@@ -49,6 +49,13 @@ typedef struct {
     /* Sum/max ingress dwell of popped packets, and current oldest sample. */
     uint64_t video_queue_age_us, video_queue_age_max_us, video_queue_oldest_age_us;
     uint64_t video_queue_full, video_queue_push_contended, video_queue_pop_contended;
+    uint64_t video_callback_calls, video_callback_overlap, video_callback_us, video_callback_max_us;
+    uint64_t video_reserve_us, video_reserve_max_us, video_reserve_retries;
+    uint64_t video_queue_other, video_rx_invalid;
+    uint64_t video_lock_owner[3]; /* baseline contention samples only */
+    uint64_t video_callback_hist[12]; /* <=2,4,...2048 us, then >2048 us */
+    uint64_t video_ingress_resets, video_recovery_episodes, video_recovery_completed, video_recovery_us;
+    uint32_t video_callback_active, video_callback_peak;
     uint32_t video_queue_depth, video_queue_highwater;
     uint32_t width, height;                /* last decoded picture, 0 until real video */
     int video_error, audio_error;          /* last failure, 0 when none */
@@ -65,6 +72,9 @@ typedef struct {
  *   waits for all completions before conversion or decoder-output reuse.
  * - receive may run on any transport thread; it copies at most
  *   X4_LIVE_RTP_MAX bytes into a bounded queue and never retains `rtp`.
+ *   Video uses its own MPSC reservation/publication queue. Audio keeps the
+ *   original guarded ring. Pinned libdatachannel currently serializes one
+ *   Track's message callbacks; video still supports concurrent callers.
  * - close may only be called after the transport callbacks have stopped
  *   (x4_rtc_close returned) and any auth worker using the context was
  *   joined. No callback may run after close. */
