@@ -30,6 +30,7 @@ int main(void)
     X4Auth *auth = x4_auth_create();
     X4AuthSnapshot account = {0};
     static X4CatalogSnapshot catalog;
+    static X4CatalogBrowser catalog_browser;
     X4AuthCatalogCursor catalog_cursor = {0};
     X4SessionSnapshot session = {0};
     unsigned catalog_selected = 0;
@@ -47,6 +48,7 @@ int main(void)
     uint64_t input_previous = 0, input_report_at = 0;
     uint64_t input_intervals = 0, input_interval_us = 0, input_interval_max_us = 0;
     uint64_t idle_present_skips = 0;
+    x4_catalog_browser_init(&catalog_browser);
     setvbuf(stdout, NULL, _IONBF, 0);
 reopen_interface:;
     int rc = x4_display_open(&display);
@@ -58,7 +60,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.28: catalogo ampliado y juego sin barra permanente\n");
+    printf("XCloud4 0.7.29: buscador de catalogo y grupos por acceso\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();
@@ -109,6 +111,10 @@ reopen_interface:;
         if (!closing) {
             uint32_t ui_pressed = controller.pressed;
             if (game_input) ui_pressed &= ~ORBIS_PAD_BUTTON_OPTIONS;
+            /* CIRCLE finishes keyboard editing before account navigation.
+             * OPTIONS still follows the global cleanup/exit path. */
+            if (screen.page == 5 && catalog_browser.editing)
+                ui_pressed &= ~ORBIS_PAD_BUTTON_CIRCLE;
             x4_screen_update(&screen, ui_pressed, controller.data.buttons);
             if (game_input && chord && (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS))
                 screen.exit_requested = 1;
@@ -145,7 +151,11 @@ reopen_interface:;
             }
         }
         x4_auth_snapshot(auth, &account);
-        x4_auth_catalog_snapshot_cached(auth, &catalog, &catalog_cursor);
+        bool catalog_copied = x4_auth_catalog_snapshot_cached(auth, &catalog, &catalog_cursor) != 0;
+        if (catalog_copied) {
+            x4_catalog_browser_rebuild(&catalog_browser, &catalog);
+            if (catalog.state != X4_CATALOG_READY) catalog_browser.editing = false;
+        }
         x4_auth_session_snapshot(auth, &session);
         if (!closing && screen.page == 6 && previous_page == 6) {
             if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || chord)) {
@@ -160,22 +170,61 @@ reopen_interface:;
             }
         }
         if (!closing && screen.page == 5 && previous_page == 5) {
-            if ((controller.pressed & ORBIS_PAD_BUTTON_SQUARE) && !x4_auth_busy(auth)) {
-                catalog_selected = 0;
+            uint32_t pressed = controller.pressed;
+            if (catalog_browser.editing) {
+                if (pressed & (ORBIS_PAD_BUTTON_R2 | ORBIS_PAD_BUTTON_CIRCLE)) {
+                    catalog_browser.editing = false;
+                } else {
+                    if (pressed & ORBIS_PAD_BUTTON_UP)
+                        x4_catalog_browser_keyboard_move(&catalog_browser, 0, -1);
+                    if (pressed & ORBIS_PAD_BUTTON_DOWN)
+                        x4_catalog_browser_keyboard_move(&catalog_browser, 0, 1);
+                    if (pressed & ORBIS_PAD_BUTTON_LEFT)
+                        x4_catalog_browser_keyboard_move(&catalog_browser, -1, 0);
+                    if (pressed & ORBIS_PAD_BUTTON_RIGHT)
+                        x4_catalog_browser_keyboard_move(&catalog_browser, 1, 0);
+                    if (pressed & ORBIS_PAD_BUTTON_TRIANGLE)
+                        x4_catalog_browser_query_clear(&catalog_browser);
+                    else if (pressed & ORBIS_PAD_BUTTON_SQUARE)
+                        x4_catalog_browser_query_delete(&catalog_browser);
+                    else if (pressed & ORBIS_PAD_BUTTON_R1)
+                        x4_catalog_browser_query_append(&catalog_browser, ' ');
+                    else if (pressed & ORBIS_PAD_BUTTON_CROSS)
+                        x4_catalog_browser_query_append(&catalog_browser,
+                            x4_catalog_browser_keyboard_char(&catalog_browser));
+                }
+                if (catalog_browser.criteria_dirty)
+                    x4_catalog_browser_rebuild(&catalog_browser, &catalog);
+            } else if ((pressed & ORBIS_PAD_BUTTON_TRIANGLE) &&
+                       catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth)) {
+                catalog_browser.editing = true;
+            } else if ((pressed & ORBIS_PAD_BUTTON_SQUARE) && !x4_auth_busy(auth)) {
                 x4_auth_start(auth, X4_AUTH_XBOX_CATALOG);
-            }
-            if (catalog.count) {
-                if (controller.pressed & ORBIS_PAD_BUTTON_UP)
-                    catalog_selected = catalog_selected ? catalog_selected - 1 : catalog.count - 1;
-                if (controller.pressed & ORBIS_PAD_BUTTON_DOWN)
-                    catalog_selected = (catalog_selected + 1) % catalog.count;
-                if (controller.pressed & ORBIS_PAD_BUTTON_L1)
-                    catalog_selected = catalog_selected >= 8 ? catalog_selected - 8 : 0;
-                if (controller.pressed & ORBIS_PAD_BUTTON_R1)
-                    catalog_selected = catalog_selected + 8 < catalog.count ? catalog_selected + 8 : catalog.count - 1;
-                if (catalog_selected >= catalog.count) catalog_selected = catalog.count - 1;
-                if ((controller.pressed & ORBIS_PAD_BUTTON_CROSS) &&
-                    catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth)) {
+            } else {
+                if (pressed & ORBIS_PAD_BUTTON_L2)
+                    x4_catalog_browser_cycle_filter(&catalog_browser, -1);
+                if (pressed & ORBIS_PAD_BUTTON_R2)
+                    x4_catalog_browser_cycle_filter(&catalog_browser, 1);
+                if (catalog_browser.criteria_dirty)
+                    x4_catalog_browser_rebuild(&catalog_browser, &catalog);
+                if (pressed & ORBIS_PAD_BUTTON_UP)
+                    x4_catalog_browser_move(&catalog_browser, &catalog, -1, false);
+                if (pressed & ORBIS_PAD_BUTTON_DOWN)
+                    x4_catalog_browser_move(&catalog_browser, &catalog, 1, false);
+                if (pressed & ORBIS_PAD_BUTTON_L1)
+                    x4_catalog_browser_move(&catalog_browser, &catalog, -8, true);
+                if (pressed & ORBIS_PAD_BUTTON_R1)
+                    x4_catalog_browser_move(&catalog_browser, &catalog, 8, true);
+                unsigned source_index;
+                /* A fresh response or a navigation/filter press can select a
+                 * row that has not been shown yet. Require a later X edge. */
+                bool selection_changing = (pressed & (ORBIS_PAD_BUTTON_UP | ORBIS_PAD_BUTTON_DOWN |
+                    ORBIS_PAD_BUTTON_L1 | ORBIS_PAD_BUTTON_R1 | ORBIS_PAD_BUTTON_L2 | ORBIS_PAD_BUTTON_R2)) != 0;
+                if ((pressed & ORBIS_PAD_BUTTON_CROSS) && !catalog_copied && !selection_changing &&
+                    !x4_auth_busy(auth) &&
+                    x4_catalog_browser_selected_index(&catalog_browser, &catalog, &source_index)) {
+                    /* The visible filtered ordinal is never a session index. */
+                    catalog_selected = source_index;
                     live_presented = false;
                     live_error = 0;
                     if (live) {
@@ -207,7 +256,7 @@ reopen_interface:;
                     if (rc == X4_AUTH_E_SIGNED_OUT) screen.page = 4;
                     if (rc) printf("XCloud4: solicitar sesion fallo 0x%08x\n", (unsigned)rc);
                 }
-            } else catalog_selected = 0;
+            }
         }
         if (live && !live_retained) {
             x4_live_media_tick(live);
@@ -304,7 +353,7 @@ reopen_interface:;
         else if (screen.page == 4 || closing)
             x4_auth_draw(&account, x4_auth_busy(auth), closing, x4_display_pixels(&display));
         else if (screen.page == 5)
-            x4_catalog_draw(&catalog, catalog_selected, x4_auth_busy(auth), x4_display_pixels(&display));
+            x4_catalog_draw(&catalog, &catalog_browser, x4_auth_busy(auth), x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         uint64_t present_begin = sceKernelGetProcessTime();
         rc = drew_live && trace_active ?
@@ -337,6 +386,7 @@ reopen_interface:;
     if (auth_rc >= 0) {
         auth = NULL;
         catalog_cursor = (X4AuthCatalogCursor){0};
+        x4_catalog_browser_init(&catalog_browser);
     }
     printf("XCloud4: cerrar audio\n");
     x4_audio_stop(&audio);

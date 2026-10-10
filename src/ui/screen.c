@@ -25,7 +25,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.7.28", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.29", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -189,47 +189,104 @@ void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
     x4_text(p, 84, 1004, 2, X4_AUTH_PROFILE_NOTE, MUTED);
 }
 
-void x4_catalog_draw(const X4CatalogSnapshot *c, unsigned selected, int busy, uint32_t *p)
+/* UI-only clipping: external names/IDs cannot create another rendered row.
+ * The validated catalog and its naming policy remain unchanged. */
+static void catalog_label(char *out, size_t capacity, const char *text, size_t source_capacity)
+{
+    size_t length = 0;
+    while (length + 1 < capacity && length < source_capacity && text[length]) {
+        unsigned char character = (unsigned char)text[length];
+        out[length] = character < ' ' || character == 127 ? ' ' : (char)character;
+        ++length;
+    }
+    out[length] = 0;
+}
+
+void x4_catalog_draw(const X4CatalogSnapshot *c, const X4CatalogBrowser *b, int busy, uint32_t *p)
 {
     x4_text(p, 84, 260, 5, "CATALOGO DE XBOX", WHITE);
     char line[160];
-    if (c->state != X4_CATALOG_READY) {
+    if (!c || c->state != X4_CATALOG_READY || c->count > X4_CATALOG_MAX || !b) {
         x4_rect(p, 84, 388, 1752, 452, PANEL);
-        const char *title = c->state == X4_CATALOG_LOADING ? "CONSULTANDO TU CATALOGO..." :
-            c->state == X4_CATALOG_ERROR ? "NO SE PUDO CARGAR EL CATALOGO" :
-            c->state == X4_CATALOG_CANCELLED ? "CONSULTA CANCELADA" : "AUTORIZA TU CUENTA EN CUENTA";
+        const char *title = c && c->state == X4_CATALOG_LOADING ? "CONSULTANDO TU CATALOGO..." :
+            c && c->state == X4_CATALOG_CANCELLED ? "CONSULTA CANCELADA" :
+            c && c->state == X4_CATALOG_IDLE ? "AUTORIZA TU CUENTA EN CUENTA" :
+            "NO SE PUDO CARGAR EL CATALOGO";
         x4_text(p, 126, 442, 4, title, busy ? GREEN : WHITE);
-        x4_text(p, 126, 525, 3, c->stage, MUTED);
-        if (c->error || c->http_status >= 400 || c->xerr) {
+        if (c) x4_text(p, 126, 525, 3, c->stage, MUTED);
+        if (c && (c->error || c->http_status >= 400 || c->xerr)) {
             snprintf(line, sizeof(line), "DETALLE 0X%08X   HTTP %d   XERR %u",
                 (unsigned)c->error, c->http_status, (unsigned)c->xerr);
             x4_text(p, 126, 604, 3, line, WHITE);
         }
         x4_text(p, 126, 727, 3, "CUADRADO REINTENTA. CIRCULO VUELVE A TU CUENTA.", MUTED);
+        x4_text(p, 84, 929, 2, "CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
     } else {
-        snprintf(line, sizeof(line), "%u TITULOS RECIBIDOS   %u EN ESTA LISTA%s",
-            c->total, c->count, c->truncated ? "   LIMITE LOCAL" : "");
-        x4_text(p, 84, 326, 3, line, MUTED);
-        unsigned start = selected / 8 * 8;
-        for (unsigned row = 0; row < 8 && start + row < c->count; ++row) {
-            unsigned index = start + row;
-            const X4CatalogTitle *title = &c->titles[index];
-            int y = 389 + (int)row * 60;
-            int active = index == selected;
-            x4_rect(p, 84, y, 1752, 52, active ? GREEN : PANEL);
-            char name[73];
-            snprintf(name, sizeof(name), "%.72s", title->name[0] ? title->name : title->id);
-            x4_text(p, 110, y + 15, 3, name, active ? BG : WHITE);
-            x4_text(p, 1490, y + 18, 2, title->entitled ? "CON ACCESO" : "POR CONFIRMAR", active ? BG : MUTED);
-        }
-        if (!c->count) x4_text(p, 126, 449, 4, "XBOX DEVOLVIO UNA LISTA VACIA", WHITE);
-        if (selected < c->count) {
-            const X4CatalogTitle *title = &c->titles[selected];
-            snprintf(line, sizeof(line), "%u/%u   ID: %.70s", selected + 1, c->count, title->id);
-            x4_text(p, 84, 880, 2, line, MUTED);
+        static const char *groups[X4_CATALOG_FILTER_COUNT] = {"TODOS", "CON ACCESO", "POR CONFIRMAR"};
+        bool valid = !b->criteria_dirty && b->filtered_count <= c->count &&
+            (unsigned)b->filter < X4_CATALOG_FILTER_COUNT;
+        snprintf(line, sizeof(line), "BUSCAR: %.48s", b->query[0] ? b->query : "SIN BUSQUEDA");
+        x4_text(p, 84, 322, 3, line, b->editing ? GREEN : WHITE);
+        snprintf(line, sizeof(line), "TODOS %u   CON ACCESO %u   POR CONFIRMAR %u   COINCIDEN %u",
+            b->group_counts[X4_CATALOG_FILTER_ALL], b->group_counts[X4_CATALOG_FILTER_CONFIRMED_ACCESS],
+            b->group_counts[X4_CATALOG_FILTER_UNCONFIRMED_ACCESS], valid ? b->filtered_count : 0);
+        x4_text(p, 84, 365, 2, line, MUTED);
+        snprintf(line, sizeof(line), "GRUPO: %s   %u TITULOS RECIBIDOS%s",
+            (unsigned)b->filter < X4_CATALOG_FILTER_COUNT ? groups[b->filter] : "NO DISPONIBLE",
+            c->total, c->truncated ? "   LIMITE LOCAL" : "");
+        x4_text(p, 84, 397, 2, line, GREEN);
+        if (b->editing) {
+            x4_rect(p, 84, 427, 708, 410, PANEL);
+            for (unsigned key = 0; key < X4_CATALOG_KEYBOARD_KEYS; ++key) {
+                int x = 126 + (int)(key % X4_CATALOG_KEYBOARD_COLUMNS) * 96;
+                int y = 445 + (int)(key / X4_CATALOG_KEYBOARD_COLUMNS) * 65;
+                int active = key == b->keyboard_cursor;
+                char character[2] = {key < 26 ? (char)('A' + key) : (char)('0' + key - 26), 0};
+                x4_rect(p, x, y, 76, 53, active ? GREEN : BG);
+                x4_text(p, x + 27, y + 13, 4, character, active ? BG : WHITE);
+            }
+            x4_text(p, 850, 451, 3, "CRUCETA ELIGE LA LETRA", WHITE);
+            x4_text(p, 850, 507, 3, "X ESCRIBIR", WHITE);
+            x4_text(p, 850, 563, 3, "CUADRADO BORRAR LA ULTIMA", WHITE);
+            x4_text(p, 850, 619, 3, "TRIANGULO LIMPIAR BUSQUEDA", WHITE);
+            x4_text(p, 850, 675, 3, "R1 ESPACIO", WHITE);
+            x4_text(p, 850, 731, 3, "R2 APLICAR Y VER RESULTADOS", GREEN);
+            x4_text(p, 850, 787, 3, "CIRCULO VOLVER A RESULTADOS", MUTED);
+            x4_text(p, 84, 862, 2, "HASTA 48 LETRAS, NUMEROS O ESPACIOS. BUSCA EN NOMBRES E IDENTIFICADORES.", MUTED);
+            x4_text(p, 84, 929, 2, "R2 APLICAR   CIRCULO RESULTADOS   OPTIONS SALIR", WHITE);
+        } else {
+            unsigned source_index = 0;
+            bool selected_valid = x4_catalog_browser_selected_index(b, c, &source_index);
+            unsigned start = selected_valid ? b->selected / 8 * 8 : 0;
+            for (unsigned row = 0; valid && row < 8 && start + row < b->filtered_count; ++row) {
+                unsigned visible = start + row;
+                unsigned index = b->indices[visible];
+                if (index >= c->count) continue;
+                const X4CatalogTitle *title = &c->titles[index];
+                int y = 440 + (int)row * 50;
+                int active = selected_valid && visible == b->selected;
+                x4_rect(p, 84, y, 1752, 42, active ? GREEN : PANEL);
+                char name[73];
+                catalog_label(name, sizeof(name), title->name[0] ? title->name : title->id,
+                    title->name[0] ? sizeof(title->name) : sizeof(title->id));
+                x4_text_literal(p, 110, y + 11, 3, name, active ? BG : WHITE);
+                x4_text(p, 1490, y + 14, 2, title->entitled ? "CON ACCESO" : "POR CONFIRMAR", active ? BG : MUTED);
+            }
+            if (!c->count) x4_text(p, 126, 500, 4, "XBOX DEVOLVIO UNA LISTA VACIA", WHITE);
+            else if (valid && !b->filtered_count) {
+                x4_text(p, 126, 500, 4, "NO HAY TITULOS QUE COINCIDAN", WHITE);
+                x4_text(p, 126, 567, 3, "CAMBIA LA BUSQUEDA O EL GRUPO DE ACCESO.", MUTED);
+            }
+            if (selected_valid) {
+                char id[71];
+                catalog_label(id, sizeof(id), c->titles[source_index].id, sizeof(c->titles[source_index].id));
+                snprintf(line, sizeof(line), "%u/%u   ID: %s", b->selected + 1, b->filtered_count, id);
+                x4_text_literal(p, 84, 850, 2, line, MUTED);
+            }
+            x4_text(p, 84, 898, 2, "TRIANGULO BUSCAR   L2/R2 GRUPOS   CRUCETA ELEGIR   L1/R1 PAGINAS", WHITE);
+            x4_text(p, 84, 929, 2, "X SESION   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
         }
     }
-    x4_text(p, 84, 929, 2, "X SESION   CRUCETA ELEGIR   L1/R1 PAGINAS   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
     x4_text(p, 84, 1004, 2, "CON ACCESO: PERMISO CONFIRMADO POR XBOX. POR CONFIRMAR: ACCESO SIN VERIFICAR.", MUTED);
 }
 

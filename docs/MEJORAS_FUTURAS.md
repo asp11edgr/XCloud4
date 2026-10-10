@@ -6,7 +6,7 @@ Owner request, October 8, 2026: add an option to search titles from the Xbox cat
 
 **Status: now authorized for the next catalog update.** On October 9, 2026, the owner replaced the earlier deferral: first show the complete available catalog, group confirmed access and titles needing purchase when explicitly established, and add working case-insensitive substring search so gear/forza return every match. Unconfirmed entitlement alone does not establish a purchase requirement. Cover images are a subsequent improvement.
 
-Version 0.7.28 prepares a bounded capacity of 4,096 distinct entries instead of 128, with cached snapshots and explicit truncation. Console verification remains pending. Search must distinguish the available catalog from retained or named entries, support DualShock 4 text entry and return to selection without losing the account session. Store name enrichment currently covers only the first 32 entries; identifiers remain available for others.
+Version 0.7.28 prepares a bounded capacity of 4,096 distinct entries instead of 128, with cached snapshots and explicit truncation. The owner confirms complete retention and the menu behavior; the console retains 2,734/2,734 titles. The 0.7.29 local search/filter candidate is prepared, with console behavior pending. Search must distinguish the available catalog from retained or named entries, support DualShock 4 text entry and return to selection without losing the account session. Store name enrichment currently covers only the first 32 entries; identifiers remain available for others.
 
 Live audio/video and controller input now work in the owner's trials. The current priorities are remaining pauses, complete catalog/search/access groups, and unobstructed playback.
 

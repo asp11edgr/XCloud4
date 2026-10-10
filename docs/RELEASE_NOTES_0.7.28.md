@@ -1,6 +1,6 @@
 # XCloud4 0.7.28 — catalog and playback interface candidate
 
-Product **0.7.28**, PS4 **APP_VER 00.98**, title identifier **XCLD00001**. Final selected-source reviews, native build, linked inspection, matching VM/PC artifacts and console installer transfer/readback are verified. Owner installation and visual/catalog results remain pending. Repository documentation is English; the PS4 interface stays Spanish.
+Product **0.7.28**, PS4 **APP_VER 00.98**, title identifier **XCLD00001**. Final selected-source reviews, native build, linked inspection, matching VM/PC artifacts and console installer transfer/readback are verified. The owner subsequently confirmed the complete catalog and hidden/show/clear menu behavior; see the [console report](CONSOLE_REPORT_0.7.28.md). Repository documentation is English; the PS4 interface stays Spanish.
 
 ## Changes
 
@@ -22,9 +22,10 @@ Title search/access groups and a real-destination network check are now authoriz
 | Actual Claude Opus 5.5 review | Original catalog/cache/UI scope: 28 turns / 27 successful Reads; final UI followup: 20 turns / 19 successful Reads; no tool errors or out-of-scope reads |
 | Native build / compiled inspection | Verified native package/import/lifecycle inspection; selected six catalog/UI/main functions inspected, including cache hit bypass, 1,065,172-byte static catalog and final instruction coordinates |
 | VM/PC package and exact dependency-source correspondence | Matching package/ELF/OELF/eboot, 70 frozen host/VM inputs before/after, exact compressed VM archive and all 9,369 manifest payloads / 9,781 archive entries verified |
-| Public release | Prepared for publication; owner console results remain pending |
+| Public release | Published as dev-0.7.28; original tag and assets preserved |
 | PS4 transfer and readback | Matching 8,912,896-byte package and SHA-256 verified; only the exact previous 0.7.27 installer removed, PC rollback preserved |
-| Console catalog, full image, hint clearing, playback and closure | Pending |
+| Console catalog and menu | Owner confirms complete catalog and hidden/show/clear menu; console retains 2734/2734 titles, 578 with confirmed access |
+| Exhaustive playback/button/closure coverage | Not established by the catalog/menu feedback |
 
 The initial UI review is preserved with its superseded-source limitation. A proposed loading line overlapped the controller-status line; it was corrected to y=940 before the fresh actual final-UI review and final build. Current runtime correspondence combines the unchanged nine initial inputs with that final UI review. Source/compiled inspection does not establish physical console behavior. Main's compiled local stack reservation is 2,408 bytes; this is not a measurement of all native thread stacks or total memory use. The approximately 2.95 MiB catalog growth is a layout calculation, not a measured performance gain.
 
