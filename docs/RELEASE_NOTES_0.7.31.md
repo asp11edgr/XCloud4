@@ -1,8 +1,12 @@
 # XCloud4 0.7.31 — independent progress instrumentation
 
+## Subsequent console run
+
+The **2026-10-10 long console run** is documented in the [console report](CONSOLE_REPORT_0.7.31.md). The exact binary launched and exported both verified traces. During **27.11 minutes of manually stable gameplay**, cadence recorded **30 intervals >100 ms (1.107/min)**; delivered geometry remained **1280 × 720**. MPSC rejection totals remained zero. The owner reports fewer pauses and completed catalog return/close. Detailed recording saturated, so the full causal chain and instrumentation overhead remain unresolved; no new playback repair is claimed. Package/source assets and runtime remain unchanged. The original pre-console checkpoint below preserves what was known when this release was published.
+
 ## Verified pre-console checkpoint
 
-This version implements bounded diagnostics for residual pauses in the **NEW/MPSC** path established by the [0.7.30 console comparison](CONSOLE_COMPARISON_0.7.30.md). Synthetic host/parser checks, final-writer interoperability, selected source review, native build, retrieved artifacts and package transfer are verified. **Console installation/launch, overhead and the proposed 10–15 minute gameplay capture remain pending.** This note does not claim a performance repair or console PASS.
+At the original publication checkpoint, this version implemented bounded diagnostics for residual pauses in the **NEW/MPSC** path established by the [0.7.30 console comparison](CONSOLE_COMPARISON_0.7.30.md). Synthetic host/parser checks, final-writer interoperability, selected source review, native build, retrieved artifacts and package transfer were verified. **Console installation/launch, overhead and the proposed 10–15 minute gameplay capture were still pending at that checkpoint.** The later run above supplies launch/capture evidence with explicit limits; neither checkpoint claims a performance repair or universal console PASS.
 
 Functional settings remain unchanged: **four copy readers**, **16 ms / four Decode** checks, reorder **128 slots / depth 32 / 25 ms**, recovery, video conversion, audio/input and the requested **960 × 540 / maxFPS 30 / 5000 kbps**. Prior first native pictures were **1280 × 720**; the request does not establish delivered format.
 
