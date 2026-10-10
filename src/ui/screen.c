@@ -25,7 +25,7 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-    x4_text(p, 1310, 110, 3, "VERSION 0.7.27", MUTED);
+    x4_text(p, 1310, 110, 3, "VERSION 0.7.28", MUTED);
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);
     if (c->error) {
@@ -185,7 +185,7 @@ void x4_auth_draw(const X4AuthSnapshot *a, int busy, int closing, uint32_t *p)
         }
     }
     x4_text(p, 84, 853, 2, "X INICIAR   CUADRADO CONEXION   TRIANGULO BORRAR SESION   CIRCULO VOLVER   OPTIONS SALIR", WHITE);
-    x4_text(p, 84, 899, 2, "R1 CATALOGO DE XBOX. LA CONEXION A UN JUEGO SIGUE EN PREPARACION.", MUTED);
+    x4_text(p, 84, 899, 2, "R1 CATALOGO DE XBOX. ELIGE UN TITULO CON ACCESO PARA JUGAR.", MUTED);
     x4_text(p, 84, 1004, 2, X4_AUTH_PROFILE_NOTE, MUTED);
 }
 
@@ -230,7 +230,7 @@ void x4_catalog_draw(const X4CatalogSnapshot *c, unsigned selected, int busy, ui
         }
     }
     x4_text(p, 84, 929, 2, "X SESION   CRUCETA ELEGIR   L1/R1 PAGINAS   CUADRADO ACTUALIZAR   CIRCULO CUENTA   OPTIONS SALIR", WHITE);
-    x4_text(p, 84, 1004, 2, "SOLICITA UNA SESION A XBOX. LA IMAGEN Y EL SONIDO DEL JUEGO SIGUEN EN PREPARACION.", MUTED);
+    x4_text(p, 84, 1004, 2, "CON ACCESO: PERMISO CONFIRMADO POR XBOX. POR CONFIRMAR: ACCESO SIN VERIFICAR.", MUTED);
 }
 
 void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t *p)
@@ -284,7 +284,8 @@ void x4_session_draw(const X4SessionSnapshot *s, int busy, int closing, uint32_t
         x4_text(p, 126, 722, 3, line, WHITE);
     }
     x4_text(p, 84, 867, 3, "CIRCULO  CERRAR Y VOLVER AL CATALOGO     OPTIONS  SALIR", WHITE);
-    x4_text(p, 84, 1004, 2, "EL JUEGO APARECE AL DECODIFICAR LA PRIMERA IMAGEN. CIRCULO CIERRA LA SESION.", MUTED);
+    x4_text(p, 84, 940, 2, "EN EL JUEGO, MANTEN L1+R1 PARA MOSTRAR LOS ATAJOS.", MUTED);
+    x4_text(p, 84, 1004, 2, "CON L1+R1: CIRCULO CATALOGO / OPTIONS SALIR / CUADRADO AUDIO / PANEL GUIA.", MUTED);
 }
 
 void x4_live_status_draw(const X4LiveMediaSnapshot *m, int error, uint32_t *p)
@@ -300,18 +301,22 @@ void x4_live_status_draw(const X4LiveMediaSnapshot *m, int error, uint32_t *p)
         x4_text(p, 84, 922, 2, line, WHITE);
     }
 }
-void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted, uint32_t *p)
+void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted, int show_controls, uint32_t *p)
 {
-    char line[160];
-    x4_rect(p, 0, 1000, X4_WIDTH, 80, BG);
-    snprintf(line, sizeof(line), "%u X %u   IMAGENES %llu   OPUS %llu   AUDIO %s   CONTROL %s", m->width, m->height,
-        (unsigned long long)m->video_frames, (unsigned long long)m->audio_frames,
-        m->audio_error ? "ERROR" : muted ? "SILENCIADO" : m->audio_playing ? "ACTIVO" : "EN ESPERA",
-        s->input_error ? "ERROR" : s->input_ready ? "ENVIANDO" : "EN ESPERA");
-    x4_text(p, 36, 1015, 2, line, WHITE);
-    if (m->audio_error) {
-        snprintf(line, sizeof(line), "AUDIO 0X%08X", (unsigned)m->audio_error);
-        x4_text(p, 1500, 1015, 2, line, WHITE);
+    /* The game already fills the framebuffer. Do not reserve/crop any rows
+     * for normal playback; a fresh complete media draw also erases hints. */
+    if (show_controls) {
+        x4_rect(p, 0, X4_HEIGHT - 36, X4_WIDTH, 36, BG);
+        x4_text(p, 36, X4_HEIGHT - 27, 2,
+            "L1+R1: CUADRADO AUDIO / CIRCULO CATALOGO / OPTIONS SALIR / PANEL GUIA", MUTED);
     }
-    x4_text(p, 36, 1047, 2, "L1+R1: CUADRADO SONIDO / CIRCULO CATALOGO / OPTIONS SALIR / TOUCHPAD GUIA", MUTED);
+    if (m->audio_error || s->input_error || muted) {
+        char line[96];
+        const char *audio = m->audio_error ? "SONIDO NO DISPONIBLE" : muted ? "SONIDO SILENCIADO" : "";
+        snprintf(line, sizeof(line), "%s%s%s", audio,
+            audio[0] && s->input_error ? " / " : "",
+            s->input_error ? "CONTROL NO DISPONIBLE" : "");
+        x4_rect(p, 20, 20, 620, 36, BG);
+        x4_text(p, 32, 29, 2, line, WHITE);
+    }
 }

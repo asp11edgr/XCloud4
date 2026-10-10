@@ -82,6 +82,7 @@ struct X4Auth {
     atomic_flag lock;
     Shared shared;
     X4CatalogSnapshot catalog;
+    uint64_t catalog_revision; /* protected by lock with the catalog view */
     X4SessionSnapshot session;
     X4GamepadFrame gamepad;
     uint64_t gamepad_updated;
@@ -165,6 +166,13 @@ static void wipe_tokens(X4Auth *a)
     a->token_expiry = 0;
 }
 
+/* Called with lock held. Saturation is monotonic; the snapshot cache forces
+ * a fresh copy at UINT64_MAX so later changes can never become invisible. */
+static void catalog_changed_locked(X4Auth *a)
+{
+    if (a->catalog_revision != UINT64_MAX) ++a->catalog_revision;
+}
+
 /* Empty catalog view in one state. */
 static void reset_catalog(X4Auth *a, enum X4CatalogState state, int error, const char *stage)
 {
@@ -173,6 +181,7 @@ static void reset_catalog(X4Auth *a, enum X4CatalogState state, int error, const
     a->catalog.state = state;
     a->catalog.error = error;
     copy_text(a->catalog.stage, sizeof(a->catalog.stage), stage);
+    catalog_changed_locked(a);
     unlock(a);
 }
 
@@ -180,6 +189,7 @@ static void publish_catalog(X4Auth *a, const X4CatalogSnapshot *next)
 {
     lock(a);
     a->catalog = *next;
+    catalog_changed_locked(a);
     unlock(a);
 }
 
@@ -187,10 +197,18 @@ static void publish_catalog(X4Auth *a, const X4CatalogSnapshot *next)
 static void catalog_progress(void *context, const char *stage, const char *offering, const char *region)
 {
     X4Auth *a = context;
+    char next_stage[80] = {0}, next_offering[24] = {0}, next_region[80] = {0};
+    copy_text(next_stage, sizeof(next_stage), stage);
+    copy_text(next_offering, sizeof(next_offering), offering);
+    copy_text(next_region, sizeof(next_region), region);
     lock(a);
-    copy_text(a->catalog.stage, sizeof(a->catalog.stage), stage);
-    copy_text(a->catalog.offering, sizeof(a->catalog.offering), offering);
-    copy_text(a->catalog.region, sizeof(a->catalog.region), region);
+    if (strcmp(a->catalog.stage, next_stage) || strcmp(a->catalog.offering, next_offering) ||
+        strcmp(a->catalog.region, next_region)) {
+        copy_text(a->catalog.stage, sizeof(a->catalog.stage), next_stage);
+        copy_text(a->catalog.offering, sizeof(a->catalog.offering), next_offering);
+        copy_text(a->catalog.region, sizeof(a->catalog.region), next_region);
+        catalog_changed_locked(a);
+    }
     unlock(a);
 }
 
@@ -1054,23 +1072,42 @@ void x4_auth_snapshot(X4Auth *a, X4AuthSnapshot *out)
     }
 }
 
-void x4_auth_catalog_snapshot(X4Auth *a, X4CatalogSnapshot *out)
+int x4_auth_catalog_snapshot_cached(X4Auth *a, X4CatalogSnapshot *out,
+    X4AuthCatalogCursor *cursor)
 {
-    if (!out) return;
+    if (!out) return 0;
     if (!a) {
+        if (cursor && cursor->initialized && !cursor->source && !cursor->revision &&
+            !cursor->cancel_visible) return 0;
         memset(out, 0, sizeof(*out));
         out->state = X4_CATALOG_ERROR;
         out->error = X4_AUTH_E_ALLOCATION;
         copy_text(out->stage, sizeof(out->stage), "sin memoria para el acceso");
-        return;
+        if (cursor) *cursor = (X4AuthCatalogCursor){.initialized = 1};
+        return 1;
     }
     bool busy = x4_auth_busy(a);
     if (!busy) expire_tokens(a);
     lock(a);
+    int cancel_visible = busy && a->action == X4_AUTH_XBOX_CATALOG && atomic_load(&a->cancel);
+    if (cursor && cursor->initialized && cursor->source == a &&
+        cursor->revision == a->catalog_revision && a->catalog_revision != UINT64_MAX &&
+        cursor->cancel_visible == cancel_visible) {
+        unlock(a);
+        return 0;
+    }
     *out = a->catalog;
-    unlock(a);
-    if (busy && a->action == X4_AUTH_XBOX_CATALOG && atomic_load(&a->cancel))
+    if (cancel_visible)
         copy_text(out->stage, sizeof(out->stage), "cancelando...");
+    if (cursor) *cursor = (X4AuthCatalogCursor){.source = a, .revision = a->catalog_revision,
+        .initialized = 1, .cancel_visible = cancel_visible};
+    unlock(a);
+    return 1;
+}
+
+void x4_auth_catalog_snapshot(X4Auth *a, X4CatalogSnapshot *out)
+{
+    (void)x4_auth_catalog_snapshot_cached(a, out, NULL);
 }
 
 void x4_auth_session_snapshot(X4Auth *a, X4SessionSnapshot *out)

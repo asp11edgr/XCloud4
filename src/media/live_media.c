@@ -909,7 +909,7 @@ int x4_live_media_close(X4LiveMedia *m)
      * native teardown above, makes all trace producers quiescent. */
     x4_trace_end_session(m->trace);
     char path[96];
-    snprintf(path, sizeof(path), "/data/xcloud4-trace-0727-%llu.bin", (unsigned long long)m->trace_session);
+    snprintf(path, sizeof(path), "/data/xcloud4-trace-0728-%llu.bin", (unsigned long long)m->trace_session);
     int dump = x4_trace_dump_file(m->trace, path);
     printf("XCloud4: numeric trace dump rc=%d\n", dump);
     bool trace_released = x4_trace_free(m->trace);

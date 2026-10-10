@@ -61,8 +61,8 @@ typedef struct {
  *   copy/conversion and native teardown. A triple RGB mailbox transfers only
  *   completed pictures; draw claims a slot without holding the gate while
  *   reading pixels. Native output buffers never cross to the main thread.
- *   One optional helper copies a disjoint NV12 span only; the video owner
- *   waits for its completion before conversion or decoder-output reuse.
+ *   Three optional helpers copy disjoint NV12 spans only; the video owner
+ *   waits for all completions before conversion or decoder-output reuse.
  * - receive may run on any transport thread; it copies at most
  *   X4_LIVE_RTP_MAX bytes into a bounded queue and never retains `rtp`.
  * - close may only be called after the transport callbacks have stopped

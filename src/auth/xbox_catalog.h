@@ -2,7 +2,7 @@
 #pragma once
 #include <stdint.h>
 
-#define X4_CATALOG_MAX 128
+#define X4_CATALOG_MAX 4096
 enum X4CatalogState {
     X4_CATALOG_IDLE, X4_CATALOG_LOADING, X4_CATALOG_READY,
     X4_CATALOG_CANCELLED, X4_CATALOG_ERROR

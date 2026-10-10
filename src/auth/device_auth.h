@@ -33,6 +33,15 @@ enum {
 
 typedef struct X4Auth X4Auth;
 
+/* Main-owned cursor paired with one catalog output buffer. Zero-initialize
+ * it before first use and reset it when replacing the auth context or output
+ * storage. It contains no credential and must not be shared between callers. */
+typedef struct {
+    const X4Auth *source;
+    uint64_t revision;
+    int initialized, cancel_visible;
+} X4AuthCatalogCursor;
+
 enum X4AuthState {
     X4_AUTH_IDLE,
     X4_AUTH_CONNECTING,
@@ -84,6 +93,12 @@ int x4_auth_busy(X4Auth *auth);
 void x4_auth_snapshot(X4Auth *auth, X4AuthSnapshot *out);
 /* Copy of the last catalog view; it holds no token, user hash or body. */
 void x4_auth_catalog_snapshot(X4Auth *auth, X4CatalogSnapshot *out);
+/* Main only: returns 1 after copying a changed view, otherwise 0. The paired
+ * output remains valid when 0 is returned. Token expiry is still checked and
+ * immediate cancellation visibility is part of the cache key. A NULL cursor
+ * requests an unconditional copy, as the legacy snapshot above does. */
+int x4_auth_catalog_snapshot_cached(X4Auth *auth, X4CatalogSnapshot *out,
+    X4AuthCatalogCursor *cursor);
 /* Prepares an Xbox cloud session for catalog title catalog_index with the
  * catalog's offering and authorizes its connection (see xbox_session.h). A
  * registered receiver obtains actual RTP once WebRTC connects. Requires a READY catalog, a valid index, a

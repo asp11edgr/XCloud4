@@ -4,11 +4,15 @@
 
 Owner request, October 8, 2026: add an option to search titles from the Xbox catalog.
 
-**Status: recorded for a later update. Do not implement during the current stage.**
+**Status: now authorized for the next catalog update.** On October 9, 2026, the owner replaced the earlier deferral: first show the complete available catalog, group confirmed access and titles needing purchase when explicitly established, and add working case-insensitive substring search so gear/forza return every match. Unconfirmed entitlement alone does not establish a purchase requirement. Cover images are a subsequent improvement.
 
-Before implementation, agree on DualShock 4 text entry and how to query or navigate titles beyond the currently retained 128 entries. Search must distinguish the full catalog from the local list and allow returning to selection without losing the account session.
+Version 0.7.28 prepares a bounded capacity of 4,096 distinct entries instead of 128, with cached snapshots and explicit truncation. Console verification remains pending. Search must distinguish the available catalog from retained or named entries, support DualShock 4 text entry and return to selection without losing the account session. Store name enrichment currently covers only the first 32 entries; identifiers remain available for others.
 
-The current priority is game-session connection, WebRTC, actual video/audio and controller input.
+Live audio/video and controller input now work in the owner's trials. The current priorities are remaining pauses, complete catalog/search/access groups, and unobstructed playback.
+
+## Connection quality check
+
+Owner request, October 9, 2026: check whether the current network is suitable for cloud play, preferably against the real selected xCloud destination. Investigate the service-provided region/base URI and the actual session/ICE media destination; do not substitute a generic speed test or HTTPS duration for multimedia RTT, jitter or wire loss. State which target/protocol/stage each result measures and which quality dimensions remain unknown. No viability test or fixed quality threshold is implemented at this checkpoint.
 
 ## Extended cloud queues and waiting UI
 

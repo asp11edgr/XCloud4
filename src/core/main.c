@@ -30,6 +30,7 @@ int main(void)
     X4Auth *auth = x4_auth_create();
     X4AuthSnapshot account = {0};
     static X4CatalogSnapshot catalog;
+    X4AuthCatalogCursor catalog_cursor = {0};
     X4SessionSnapshot session = {0};
     unsigned catalog_selected = 0;
     int session_back = 0;
@@ -41,7 +42,7 @@ int main(void)
     int live_error = 0, live_muted = 0;
     int live_retained = 0;
     bool live_presented = false;
-    int overlay_key[10] = {0};
+    int overlay_key[11] = {0};
     uint64_t overlay_at = 0;
     uint64_t input_previous = 0, input_report_at = 0;
     uint64_t input_intervals = 0, input_interval_us = 0, input_interval_max_us = 0;
@@ -57,7 +58,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.27: comparacion con cuatro lectores NV12\n");
+    printf("XCloud4 0.7.28: catalogo ampliado y juego sin barra permanente\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();
@@ -144,7 +145,7 @@ reopen_interface:;
             }
         }
         x4_auth_snapshot(auth, &account);
-        x4_auth_catalog_snapshot(auth, &catalog);
+        x4_auth_catalog_snapshot_cached(auth, &catalog, &catalog_cursor);
         x4_auth_session_snapshot(auth, &session);
         if (!closing && screen.page == 6 && previous_page == 6) {
             if ((controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) && (!game_input || chord)) {
@@ -260,9 +261,9 @@ reopen_interface:;
         /* Runs before the idle continue too: a repeated/status-only refresh
          * must not conceal a gap in actual NEW live completions. */
         x4_trace_poll(live_trace);
-        int next_overlay_key[10] = {screen.page, live_muted, live_status.audio_error,
+        int next_overlay_key[11] = {screen.page, live_muted, live_status.audio_error,
             live_status.audio_playing, session.input_error, session.input_ready,
-            session.rtc_connected, session.state, screen.exit_error, controller.data.connected};
+            session.rtc_connected, session.state, screen.exit_error, controller.data.connected, chord};
         uint64_t draw_at = sceKernelGetProcessTime();
         bool overlay_changed = memcmp(overlay_key, next_overlay_key, sizeof(overlay_key)) != 0;
         if (live_visible && live_presented && !overlay_changed && draw_at - overlay_at < 500000 &&
@@ -283,7 +284,7 @@ reopen_interface:;
         if (screen.page == 3) x4_media_draw(&video, &audio, x4_display_pixels(&display));
         if (screen.page == 6) {
             if (drew_live)
-                x4_live_overlay(&live_status, &session, live_muted, x4_display_pixels(&display));
+                x4_live_overlay(&live_status, &session, live_muted, chord, x4_display_pixels(&display));
             else {
                 X4SessionSnapshot shown = session;
                 if (live_error && !x4_auth_busy(auth)) {
@@ -333,7 +334,10 @@ reopen_interface:;
     }
     printf("XCloud4: cerrar acceso Microsoft\n");
     int auth_rc = x4_auth_close(auth);
-    if (auth_rc >= 0) auth = NULL;
+    if (auth_rc >= 0) {
+        auth = NULL;
+        catalog_cursor = (X4AuthCatalogCursor){0};
+    }
     printf("XCloud4: cerrar audio\n");
     x4_audio_stop(&audio);
     printf("XCloud4: cerrar decoder\n");
