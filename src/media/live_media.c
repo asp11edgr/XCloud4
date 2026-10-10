@@ -348,9 +348,13 @@ static void retire_video_counters(X4LiveMedia *m)
 #define ADD(field) m->video_totals.field += m->video.field
     ADD(frames); ADD(decode_calls); ADD(decoded_frames); ADD(no_picture_calls); ADD(decode_us);
     ADD(convert_us); ADD(copy_calls); ADD(copy_us); ADD(copy_bytes);
+    ADD(copy_parallel_calls); ADD(copy_serial_calls); ADD(copy_owner_us); ADD(copy_helper_us);
+    ADD(copy_wait_us); ADD(forced_preserve_calls); ADD(copy_check_attempts); ADD(copy_check_pass);
+    ADD(copy_check_mismatch); ADD(copy_check_not_checked); ADD(copy_check_bytes); ADD(copy_check_us);
 #undef ADD
 #define MAXIMUM(field) if (m->video.field > m->video_totals.field) m->video_totals.field = m->video.field
     MAXIMUM(decode_max_us); MAXIMUM(convert_max_us); MAXIMUM(copy_max_us); MAXIMUM(picture_gap_max_us);
+    MAXIMUM(copy_wait_max_us);
 #undef MAXIMUM
 }
 static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
@@ -370,6 +374,19 @@ static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
     s.video_copy_calls = t->copy_calls + v->copy_calls; s.video_copy_us = t->copy_us + v->copy_us;
     s.video_copy_max_us = v->copy_max_us > t->copy_max_us ? v->copy_max_us : t->copy_max_us;
     s.video_copy_bytes = t->copy_bytes + v->copy_bytes;
+    s.video_copy_parallel_calls = t->copy_parallel_calls + v->copy_parallel_calls;
+    s.video_copy_serial_calls = t->copy_serial_calls + v->copy_serial_calls;
+    s.video_copy_owner_us = t->copy_owner_us + v->copy_owner_us;
+    s.video_copy_helper_us = t->copy_helper_us + v->copy_helper_us;
+    s.video_copy_wait_us = t->copy_wait_us + v->copy_wait_us;
+    s.video_copy_wait_max_us = v->copy_wait_max_us > t->copy_wait_max_us ? v->copy_wait_max_us : t->copy_wait_max_us;
+    s.video_forced_preserve_calls = t->forced_preserve_calls + v->forced_preserve_calls;
+    s.video_copy_check_attempts = t->copy_check_attempts + v->copy_check_attempts;
+    s.video_copy_check_pass = t->copy_check_pass + v->copy_check_pass;
+    s.video_copy_check_mismatch = t->copy_check_mismatch + v->copy_check_mismatch;
+    s.video_copy_check_not_checked = t->copy_check_not_checked + v->copy_check_not_checked;
+    s.video_copy_check_bytes = t->copy_check_bytes + v->copy_check_bytes;
+    s.video_copy_check_us = t->copy_check_us + v->copy_check_us;
     s.video_tick_calls = m->tick_calls; s.video_tick_us = m->tick_us;
     s.video_tick_max_us = m->tick_max_us; s.video_tick_packets = m->tick_packets;
     s.video_picture_gap_max_us = v->picture_gap_max_us > t->picture_gap_max_us ? v->picture_gap_max_us : t->picture_gap_max_us;
@@ -431,6 +448,7 @@ static void reset_worker_maxima(X4LiveMedia *m)
     m->tick_max_us = m->queue_age_max_us = 0;
     m->video.decode_max_us = m->video.copy_max_us = m->video.convert_max_us = m->video.picture_gap_max_us = 0;
     m->video_totals.decode_max_us = m->video_totals.copy_max_us = m->video_totals.convert_max_us = m->video_totals.picture_gap_max_us = 0;
+    m->video.copy_wait_max_us = m->video_totals.copy_wait_max_us = 0;
 }
 static void report_performance(X4LiveMedia *m, uint64_t now)
 {
@@ -482,6 +500,22 @@ static void report_performance(X4LiveMedia *m, uint64_t now)
         (unsigned long long)(s.video_queue_age_us - p->video_queue_age_us),
         (unsigned long long)s.video_queue_age_max_us, (unsigned long long)s.video_queue_oldest_age_us,
         WORKER_BUDGET_US, WORKER_DECODE_LIMIT);
+    printf("XCloud4: video copy parallel=%llu serial=%llu owner_us=%llu helper_us=%llu wait_us=%llu wait_max_us=%llu "
+        "forced_preserve=%llu check_attempts=%llu check_pass=%llu check_mismatch=%llu check_not_checked=%llu "
+        "check_bytes=%llu check_us=%llu check_window=%u\n",
+        (unsigned long long)(s.video_copy_parallel_calls - p->video_copy_parallel_calls),
+        (unsigned long long)(s.video_copy_serial_calls - p->video_copy_serial_calls),
+        (unsigned long long)(s.video_copy_owner_us - p->video_copy_owner_us),
+        (unsigned long long)(s.video_copy_helper_us - p->video_copy_helper_us),
+        (unsigned long long)(s.video_copy_wait_us - p->video_copy_wait_us), (unsigned long long)s.video_copy_wait_max_us,
+        (unsigned long long)(s.video_forced_preserve_calls - p->video_forced_preserve_calls),
+        (unsigned long long)(s.video_copy_check_attempts - p->video_copy_check_attempts),
+        (unsigned long long)(s.video_copy_check_pass - p->video_copy_check_pass),
+        (unsigned long long)(s.video_copy_check_mismatch - p->video_copy_check_mismatch),
+        (unsigned long long)(s.video_copy_check_not_checked - p->video_copy_check_not_checked),
+        (unsigned long long)(s.video_copy_check_bytes - p->video_copy_check_bytes),
+        (unsigned long long)(s.video_copy_check_us - p->video_copy_check_us),
+        s.video_copy_check_attempts != p->video_copy_check_attempts ? 1u : 0u);
     m->report_previous = s; m->report_time = now;
     m->draw_max_us = m->present_max_us = 0;
     atomic_store(&m->reset_maxima, true);

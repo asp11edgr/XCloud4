@@ -47,7 +47,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.24: video en trabajador y presentacion de imagen nueva\n");
+    printf("XCloud4 0.7.25: copia NV12 con dos lectores y verificacion inicial\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();

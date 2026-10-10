@@ -11,13 +11,21 @@ typedef struct {
     /* Video-owner cumulative timings in sceKernelGetProcessTime microseconds. */
     uint64_t decode_calls, decoded_frames, no_picture_calls, decode_us, decode_max_us;
     uint64_t convert_us, convert_max_us;
+    /* Selected-copy wall time includes dispatch/completion, but excludes the
+     * first-copy serial reference/compare. Reader times may overlap. */
     uint64_t copy_calls, copy_us, copy_max_us, copy_bytes;
+    uint64_t copy_parallel_calls, copy_serial_calls, copy_owner_us, copy_helper_us;
+    uint64_t copy_wait_us, copy_wait_max_us, forced_preserve_calls;
+    uint64_t copy_check_attempts, copy_check_pass, copy_check_mismatch, copy_check_not_checked;
+    uint64_t copy_check_bytes, copy_check_us;
     uint64_t last_picture_time_us, picture_gap_max_us;
     int error;
     char stage[48];
 } X4LiveVideo;
-/* All calls run on one video-owner thread. The caller retains the bounded
- * RGB destination until native teardown succeeds; the decoder never frees it. */
+/* All calls run on one video-owner thread. An optional CPU-only copy helper
+ * finishes its disjoint span before conversion, Decode or native teardown.
+ * The caller retains RGB storage until teardown succeeds. A failed helper
+ * join latches an error and retains native and staging storage. */
 int x4_live_video_start(X4LiveVideo *, uint32_t *pixels, size_t pixel_capacity);
 /* Select an unpublished destination before a batch. No reader may own it. */
 int x4_live_video_set_target(X4LiveVideo *, uint32_t *pixels, size_t pixel_capacity);

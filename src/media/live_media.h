@@ -35,6 +35,10 @@ typedef struct {
     uint64_t video_decode_calls, video_decoded_frames, video_no_picture_calls;
     uint64_t video_decode_us, video_decode_max_us, video_convert_us, video_convert_max_us;
     uint64_t video_copy_calls, video_copy_us, video_copy_max_us, video_copy_bytes;
+    uint64_t video_copy_parallel_calls, video_copy_serial_calls, video_copy_owner_us, video_copy_helper_us;
+    uint64_t video_copy_wait_us, video_copy_wait_max_us, video_forced_preserve_calls;
+    uint64_t video_copy_check_attempts, video_copy_check_pass, video_copy_check_mismatch, video_copy_check_not_checked;
+    uint64_t video_copy_check_bytes, video_copy_check_us;
     uint64_t video_tick_calls, video_tick_us, video_tick_max_us, video_tick_packets;
     uint64_t video_draw_calls, video_draw_new, video_draw_repeat, video_draw_us, video_draw_max_us;
     uint64_t video_present_calls, video_present_us, video_present_max_us;
@@ -56,6 +60,8 @@ typedef struct {
  *   copy/conversion and native teardown. A triple RGB mailbox transfers only
  *   completed pictures; draw claims a slot without holding the gate while
  *   reading pixels. Native output buffers never cross to the main thread.
+ *   One optional helper copies a disjoint NV12 span only; the video owner
+ *   waits for its completion before conversion or decoder-output reuse.
  * - receive may run on any transport thread; it copies at most
  *   X4_LIVE_RTP_MAX bytes into a bounded queue and never retains `rtp`.
  * - close may only be called after the transport callbacks have stopped

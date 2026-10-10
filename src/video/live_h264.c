@@ -5,6 +5,7 @@
 #include <orbis/libkernel.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cpuid.h>
@@ -13,6 +14,12 @@
 
 enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024 };
 typedef struct { void *p; off_t offset; size_t size; int allocated; } Memory;
+typedef struct {
+    const uint8_t *source;
+    uint8_t *destination;
+    size_t length;
+    bool streaming;
+} CopyJob;
 typedef struct {
     int32_t (*QueryComputeMemoryInfo)(OrbisVideodec2ComputeMemoryInfo *);
     int32_t (*AllocateComputeQueue)(const OrbisVideodec2ComputeConfigInfo *, const OrbisVideodec2ComputeMemoryInfo *, void **);
@@ -28,10 +35,22 @@ typedef struct {
     unsigned input_slot, slot;
     OrbisVideodec2OutputInfo pending;
     bool pending_valid;
+    void *staging_allocation;
     uint8_t *staging;
     size_t staging_size;
     bool streaming_copy;
+    OrbisPthread copy_thread;
+    bool copy_running, parallel_enabled, copy_check_done;
+    int copy_join_error;
+    atomic_bool copy_stop;
+    atomic_uint_fast64_t copy_submitted, copy_completed;
+    uint64_t copy_sequence;
+    CopyJob copy_job;
+    int copy_result;
+    uint64_t copy_elapsed_us;
 } VideoState;
+
+static void *copy_worker(void *context);
 
 static int stage(X4LiveVideo *v, const char *name, int rc)
 {
@@ -75,6 +94,19 @@ int x4_live_video_stop(X4LiveVideo *v)
 {
     VideoState *s = v->state;
     if (!s) return 0;
+    /* A failed join leaves the helper lifetime unknown. Never retry native
+     * deletion or release its source/staging while that lifetime is unknown. */
+    if (s->copy_join_error) return stage(v, "CERRAR COPIA CPU", s->copy_join_error);
+    if (s->copy_running) {
+        atomic_store_explicit(&s->copy_stop, true, memory_order_release);
+        int rc = scePthreadJoin(s->copy_thread, NULL);
+        printf("XCloud4: video copy helper join rc=0x%08x\n", (unsigned)rc);
+        if (rc) {
+            s->copy_join_error = rc < 0 ? rc : -rc;
+            return stage(v, "CERRAR COPIA CPU", s->copy_join_error);
+        }
+        s->copy_running = false;
+    }
     /* Do not free buffers still owned by the decoder if teardown fails. */
     if (s->decoder) {
         int rc = s->DeleteDecoder(s->decoder);
@@ -98,7 +130,7 @@ int x4_live_video_stop(X4LiveVideo *v)
     for (unsigned i = 0; i < sizeof(remaining) / sizeof(*remaining); ++i) {
         int rc = release(remaining[i]); if (rc < 0) return stage(v, "LIBERAR MEMORIA", rc);
     }
-    free(s->staging); s->staging = NULL;
+    free(s->staging_allocation); s->staging_allocation = NULL; s->staging = NULL;
     /* RGB mailbox storage belongs to media and survives teardown failure. */
     v->pixels = NULL;
     free(s); v->state = NULL;
@@ -112,6 +144,9 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     memset(v, 0, sizeof(*v));
     VideoState *s = calloc(1, sizeof(*s));
     if (!s) return stage(v, "MEMORIA", -5);
+    atomic_init(&s->copy_stop, false);
+    atomic_init(&s->copy_submitted, 0);
+    atomic_init(&s->copy_completed, 0);
     v->state = s;
     int handle = x4_module_open("libSceVideodec2"), rc = handle;
     if (stage(v, "MODULO H264", rc) < 0) goto fail;
@@ -168,8 +203,10 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     /* Keep the native decoder's WC output type. CPU color conversion reads
      * one persistent cached heap copy bounded by the validated output size. */
     s->staging_size = s->frame_size;
-    s->staging = malloc(s->staging_size);
-    if (!s->staging) { rc = stage(v, "IMAGEN NV12 CPU", -5); goto fail; }
+    if (s->staging_size > SIZE_MAX - 63) { rc = stage(v, "LIMITES NV12 CPU", -6); goto fail; }
+    s->staging_allocation = malloc(s->staging_size + 63);
+    if (!s->staging_allocation) { rc = stage(v, "IMAGEN NV12 CPU", -5); goto fail; }
+    s->staging = (uint8_t *)(((uintptr_t)s->staging_allocation + 63) & ~(uintptr_t)63);
     unsigned eax, ebx, ecx, edx;
     s->streaming_copy = __get_cpuid(1, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 19));
     printf("XCloud4: video NV12 copy mode=%u capacity=%zu source_alignment=16\n",
@@ -178,6 +215,12 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     printf("XCloud4: video RGB convert mode=2 block_pixels=8 scalar_tail_max=7\n");
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
     if (stage(v, "CREAR DECODER", rc) < 0) goto fail;
+    /* Optional optimization: the helper receives only a bounded CPU-copy
+     * job, never decoder handles, RGB, statistics or native API calls. */
+    int helper_rc = scePthreadCreate(&s->copy_thread, NULL, copy_worker, s, "x4-copy");
+    s->copy_running = s->parallel_enabled = helper_rc == 0;
+    printf("XCloud4: video copy helper create rc=0x%08x enabled=%u readers=%u staging_alignment=64\n",
+        (unsigned)helper_rc, s->parallel_enabled ? 1u : 0u, s->parallel_enabled ? 2u : 1u);
 
     stage(v, "REPRODUCIENDO", 0);
     return 0;
@@ -311,6 +354,159 @@ static void copy_nv12_sse41(uint8_t *destination, const uint8_t *source, size_t 
     for (; at < length; ++at) destination[at] = source[at];
 }
 
+static void copy_span(uint8_t *destination, const uint8_t *source, size_t length, bool streaming)
+{
+    /* Each reader orders its own WC loads and cached stores. These fences
+     * preserve the existing CPU ordering; they are not a new GPU contract. */
+    _mm_mfence();
+    if (streaming) copy_nv12_sse41(destination, source, length);
+    else copy_nv12_sse2(destination, source, length);
+    _mm_mfence();
+}
+
+static bool valid_copy_job(const VideoState *s, const CopyJob *job)
+{
+    if (!job->source || !job->destination || !job->length || job->length > s->staging_size ||
+        ((uintptr_t)job->source & 15) || ((uintptr_t)job->destination & 63)) return false;
+    uintptr_t destination = (uintptr_t)job->destination, staging = (uintptr_t)s->staging;
+    if (destination < staging || destination - staging > s->staging_size - job->length) return false;
+    uintptr_t source = (uintptr_t)job->source;
+    for (unsigned i = 0; i < RING; ++i) {
+        uintptr_t base = (uintptr_t)s->output[i].p;
+        if (s->output[i].p && job->length <= s->output[i].size && source >= base &&
+            source - base <= s->output[i].size - job->length) return true;
+    }
+    return false;
+}
+
+static void *copy_worker(void *context)
+{
+    VideoState *s = context;
+    uint64_t previous = 0;
+    for (;;) {
+        uint64_t sequence = atomic_load_explicit(&s->copy_submitted, memory_order_acquire);
+        if (sequence != previous) {
+            /* The owner does not rewrite this job until completion acquire.
+             * Storage/reservations remain alive until this thread is joined. */
+            CopyJob job = s->copy_job;
+            int result = valid_copy_job(s, &job) ? 0 : -7;
+            uint64_t begin = sceKernelGetProcessTime();
+            if (!result) copy_span(job.destination, job.source, job.length, job.streaming);
+            s->copy_result = result;
+            s->copy_elapsed_us = sceKernelGetProcessTime() - begin;
+            previous = sequence;
+            atomic_store_explicit(&s->copy_completed, sequence, memory_order_release);
+            continue;
+        }
+        /* A published job is completed before stop can be honored. There is
+         * no timeout fallback that might overwrite an in-flight helper span. */
+        if (atomic_load_explicit(&s->copy_stop, memory_order_acquire)) break;
+        sceKernelUsleep(1000);
+    }
+    return NULL;
+}
+
+enum { COPY_CHECK_NOT_CHECKED = 0, COPY_CHECK_PASS = 1, COPY_CHECK_MISMATCH = 2 };
+enum { COPY_REASON_NONE = 0, COPY_REASON_NO_HELPER = 1, COPY_REASON_SPANS = 2,
+    COPY_REASON_MEMORY = 3, COPY_REASON_JOB = 4 };
+
+static void report_copy_check(unsigned result, unsigned reason, size_t length, uint64_t elapsed)
+{
+    printf("XCloud4: video copy bytecheck result=%u reason=%u bytes=%zu check_us=%llu\n",
+        result, reason, length, (unsigned long long)elapsed);
+}
+
+static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, size_t length)
+{
+    if (!source || !s->staging || !length || length > s->staging_size || ((uintptr_t)source & 15))
+        return stage(v, "LIMITES COPIA CPU", -7);
+    size_t split = (length / 2) & ~(size_t)63;
+    bool eligible = length <= s->staging_size && !((uintptr_t)source & 63) &&
+        !((uintptr_t)s->staging & 63) && split >= 64 && split < length && length - split >= 64;
+    bool parallel = s->parallel_enabled && s->copy_running && eligible;
+    bool check = !s->copy_check_done;
+    uint8_t *reference = NULL;
+    uint64_t check_pre_us = 0;
+    if (check) {
+        s->copy_check_done = true;
+        ++v->copy_check_attempts;
+        uint64_t begin = sceKernelGetProcessTime();
+        unsigned reason = !s->copy_running ? COPY_REASON_NO_HELPER : COPY_REASON_SPANS;
+        if (parallel) {
+            reference = malloc(length);
+            if (!reference) { reason = COPY_REASON_MEMORY; parallel = false; }
+        }
+        check_pre_us = sceKernelGetProcessTime() - begin;
+        if (!parallel) {
+            /* The first valid picture is the only verification opportunity.
+             * Never enable an unverified parallel path later in this start. */
+            s->parallel_enabled = false;
+            ++v->copy_check_not_checked;
+            v->copy_check_us += check_pre_us;
+            report_copy_check(COPY_CHECK_NOT_CHECKED, reason, length, check_pre_us);
+        }
+    }
+
+    uint64_t begin = sceKernelGetProcessTime();
+    int result = 0;
+    if (parallel) {
+        if (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != s->copy_sequence) result = -7;
+        else {
+            s->copy_job = (CopyJob){source + split, s->staging + split, length - split, s->streaming_copy};
+            uint64_t sequence = ++s->copy_sequence;
+            atomic_store_explicit(&s->copy_submitted, sequence, memory_order_release);
+            uint64_t owner_begin = sceKernelGetProcessTime();
+            copy_span(s->staging, source, split, s->streaming_copy);
+            v->copy_owner_us += sceKernelGetProcessTime() - owner_begin;
+            uint64_t wait_begin = sceKernelGetProcessTime();
+            while (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != sequence)
+                sceKernelUsleep(50);
+            uint64_t wait_us = sceKernelGetProcessTime() - wait_begin;
+            v->copy_wait_us += wait_us;
+            if (wait_us > v->copy_wait_max_us) v->copy_wait_max_us = wait_us;
+            v->copy_helper_us += s->copy_elapsed_us;
+            result = s->copy_result;
+            _mm_mfence();
+        }
+    } else {
+        uint64_t owner_begin = sceKernelGetProcessTime();
+        copy_span(s->staging, source, length, s->streaming_copy);
+        v->copy_owner_us += sceKernelGetProcessTime() - owner_begin;
+    }
+    uint64_t elapsed = sceKernelGetProcessTime() - begin;
+    if (result) {
+        if (reference) {
+            free(reference);
+            ++v->copy_check_not_checked; v->copy_check_us += check_pre_us;
+            report_copy_check(COPY_CHECK_NOT_CHECKED, COPY_REASON_JOB, length, check_pre_us);
+        }
+        s->parallel_enabled = false;
+        /* Caller retains pending_valid and cannot Decode/reuse this output. */
+        return stage(v, "COPIAR IMAGEN CPU", result);
+    }
+    ++v->copy_calls; v->copy_bytes += length; v->copy_us += elapsed;
+    if (elapsed > v->copy_max_us) v->copy_max_us = elapsed;
+    if (parallel) ++v->copy_parallel_calls; else ++v->copy_serial_calls;
+    if (reference) {
+        /* Both spans are complete. The same native picture is still leased;
+         * the extra serial reference is excluded from selected-copy timing. */
+        uint64_t check_begin = sceKernelGetProcessTime();
+        copy_span(reference, source, length, s->streaming_copy);
+        bool equal = memcmp(s->staging, reference, length) == 0;
+        if (equal) ++v->copy_check_pass;
+        else {
+            ++v->copy_check_mismatch;
+            memcpy(s->staging, reference, length);
+            s->parallel_enabled = false;
+        }
+        free(reference);
+        uint64_t check_us = check_pre_us + sceKernelGetProcessTime() - check_begin;
+        v->copy_check_bytes += length; v->copy_check_us += check_us;
+        report_copy_check(equal ? COPY_CHECK_PASS : COPY_CHECK_MISMATCH, COPY_REASON_NONE, length, check_us);
+    }
+    return 0;
+}
+
 static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
 {
     if (o->isErrorFrame) return -7;
@@ -329,19 +525,12 @@ static int validate_picture(VideoState *s, const OrbisVideodec2OutputInfo *o)
 int x4_live_video_convert_pending(X4LiveVideo *v)
 {
     VideoState *s = v ? v->state : NULL;
-    if (!s || !s->pending_valid || v->error) return 0;
+    if (!s || !s->pending_valid) return 0;
+    if (v->error) return v->error;
     const OrbisVideodec2OutputInfo *o = &s->pending;
     size_t length = (size_t)o->framePitch * o->frameHeight * 3 / 2;
-    uint64_t copy_begin = sceKernelGetProcessTime();
-    /* Decode has reported a valid owned picture. MFENCE orders WC loads
-     * around the independent burst copy before reuse of its native output. */
-    _mm_mfence();
-    if (s->streaming_copy) copy_nv12_sse41(s->staging, o->pFrameBuffer, length);
-    else copy_nv12_sse2(s->staging, o->pFrameBuffer, length);
-    _mm_mfence();
-    uint64_t copy_elapsed = sceKernelGetProcessTime() - copy_begin;
-    ++v->copy_calls; v->copy_bytes += length; v->copy_us += copy_elapsed;
-    if (copy_elapsed > v->copy_max_us) v->copy_max_us = copy_elapsed;
+    int rc = copy_picture(v, s, o->pFrameBuffer, length);
+    if (rc < 0) return rc;
     uint64_t begin = sceKernelGetProcessTime();
     convert_nv12_sse2(v->pixels, s->staging, o->frameWidth, o->frameHeight, o->framePitch);
     s->pending_valid = false;
@@ -367,8 +556,12 @@ int x4_live_video_feed(X4LiveVideo *v, const uint8_t *bytes, size_t size, uint64
     /* Native pictures live in our fixed output ring. Preserve the last valid
      * one before reusing its reservation, even after no-picture Decode calls.
      * Otherwise only the newest valid output of a batch needs conversion. */
-    if (s->pending_valid && s->pending.pFrameBuffer == m->p)
-        x4_live_video_convert_pending(v);
+    if (s->pending_valid && s->pending.pFrameBuffer == m->p) {
+        ++v->forced_preserve_calls;
+        int rc = x4_live_video_convert_pending(v);
+        if (rc < 0 || v->error || s->pending_valid)
+            return rc < 0 ? rc : v->error ? v->error : stage(v, "PRESERVAR IMAGEN", -7);
+    }
     OrbisVideodec2FrameBuffer frame = {.thisSize = sizeof(frame), .pFrameBuffer = m->p, .frameBufferSize = s->frame_size};
     OrbisVideodec2OutputInfo output = {.thisSize = sizeof(output)};
     OrbisVideodec2InputData input = {.thisSize = sizeof(input), .pAuData = compressed->p,
