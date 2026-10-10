@@ -10,6 +10,8 @@ The six protection operations succeeded locally and the propagated `transportSen
 
 OFF retained **3 stable NEW-image intervals >100 ms in 15.050083 minutes (0.199334/min)**. ON retained **9 in 15.032901 minutes (0.598687/min)**. ON also encountered **six video gaps / 55 positions**, versus **three / 29** in OFF. This single ordered pair has unequal upstream gap exposure and unverified scene/server equivalence. It establishes neither improvement nor causal worsening from NACK.
 
+The owner subsequently reports that **OFF and ON felt the same**, with **audio, controls, catalog return and application exit working correctly**. This is the owner's perceptual and functional feedback, separate from the numerical pause counts; it does not establish equivalent measured performance or a NACK benefit.
+
 ## Binary and unchanged configuration
 
 | Item | OFF | ON |
@@ -44,7 +46,7 @@ The denominator below is **manual active phase exposure**, with only non-crossin
 
 Manual phase ledgers and all cadence intervals are retained, without clock/identity errors or an open pause at stop. OFF has one stable epoch; ON has two separated by a marked **1.166027-second** transition. Unmarked cinematics or loading remain in their manual phase; scene equivalence is not inferred from marks alone. The application was closed after each pass; neither session has been relabeled as an installation-only checkpoint.
 
-Both captures retain monitor start/join `0`, media/video/sampler stop events and NACK close state. Private Klog separately records session DELETE HTTP 200 / error 0 and both export return codes 0 for each mode. These support successful cleanup/export; they do not independently prove absence of a visible PS4 error dialog or individual audio/controller behavior. **Owner feedback about 0.7.33 audio, controls and perceived pauses is pending at report preparation.**
+Both captures retain monitor start/join `0`, media/video/sampler stop events and NACK close state. Private Klog separately records session DELETE HTTP 200 / error 0 and both export return codes 0 for each mode. These support successful cleanup/export; they do not independently prove absence of a visible PS4 error dialog or individual audio/controller behavior. **The owner confirms good audio, controls, catalog return and exit, and perceives the pauses as the same in both modes.**
 
 Retained copy-wall p50/p95 is **9.319/9.936 ms (OFF, n=157)** and **9.356/9.921 ms (ON, n=307)**; conversion p50 is **3.037/3.045 ms**. These are bounded windows and final history, mixing phases and favoring pauses/tail observations, not a complete stable-frame A/B. They do not establish zero diagnostic overhead. No compressed input is associated with a decoder output: the native decoder still supplies no output PTS.
 

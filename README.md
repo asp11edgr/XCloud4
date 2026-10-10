@@ -18,6 +18,8 @@ The [bounded OFF/ON experiment](docs/RECEIVER_NACK_EXPERIMENT_0.7.33.md) adds on
 
 The [closed-session console comparison](docs/CONSOLE_REPORT_0.7.33.md) retains **15.050 stable minutes / 3 pauses >100 ms (0.1993/min) in OFF** and **15.033 / 9 (0.5987/min) in ON**, both at measured **1280 × 720**. ON requested six ranges / 55 positions; all selected positions later appeared authenticated, **after their matched local holes had already been abandoned**, and none contributed to an AU. All six local SRTCP protections and send booleans succeeded, without proving server receipt or unique retransmission causality. ON encountered more upstream gaps than OFF; this ordered pair establishes no fluency improvement or causal worsening. Critical NACK evidence is complete; general detail remains bounded and two cross-stage late rows were omitted.
 
+The owner perceives **the same pauses in OFF and ON** and confirms good audio, controls, catalog return and exit. This feedback is recorded separately from the measured interval counts.
+
 A separately selectable **45 ms pending-NACK grace policy**, governing both early depth and time abandonment with a hard unchanged-capacity fallback, is proposed from the faster observed returns; it is **not implemented or verified**, and 128 entries may fill sooner. Portable and native preparation evidence remains in [the release notes](docs/RELEASE_NOTES_0.7.33.md). Diagnostic overhead is not established as zero; 0.7.32 assets and original evidence stay preserved. Raw console exports remain private.
 
 ## Console-exercised reception diagnostics: 0.7.32
