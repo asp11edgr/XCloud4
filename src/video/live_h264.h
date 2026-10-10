@@ -3,7 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../media/live_trace.h"
-enum { X4_LIVE_WIDTH = 1280, X4_LIVE_HEIGHT = 720, X4_LIVE_AU_MAX = 2 * 1024 * 1024 };
+enum { X4_LIVE_WIDTH = 1280, X4_LIVE_HEIGHT = 720, X4_LIVE_AU_MAX = 2 * 1024 * 1024,
+    X4_LIVE_COPY_READERS = 4 };
 typedef struct {
     void *state;
     uint32_t *pixels;
@@ -15,6 +16,8 @@ typedef struct {
     /* Selected-copy wall time includes dispatch/completion, but excludes the
      * first-copy serial reference/compare. Reader times may overlap. */
     uint64_t copy_calls, copy_us, copy_max_us, copy_bytes;
+    /* helper_us is the SUM of overlapping elapsed spans across three helpers;
+     * it is neither CPU time nor an additional contribution to copy wall. */
     uint64_t copy_parallel_calls, copy_serial_calls, copy_owner_us, copy_helper_us;
     uint64_t copy_wait_us, copy_wait_max_us, forced_preserve_calls;
     uint64_t copy_check_attempts, copy_check_pass, copy_check_mismatch, copy_check_not_checked;
@@ -28,10 +31,11 @@ typedef struct {
     uint64_t trace_au, trace_decode_next, trace_output_next, trace_copy_next;
     uint64_t trace_decoder_epoch, trace_converted_output;
 } X4LiveVideo;
-/* All calls run on one video-owner thread. An optional CPU-only copy helper
- * finishes its disjoint span before conversion, Decode or native teardown.
- * The caller retains RGB storage until teardown succeeds. A failed helper
- * join latches an error and retains native and staging storage. */
+/* All calls run on one video-owner thread. Three optional persistent CPU-only
+ * copy helpers finish their disjoint spans before conversion, Decode or native
+ * teardown. A partial pool is stopped/joined before serial fallback. The caller
+ * retains RGB storage until teardown succeeds. Any failed helper join latches
+ * an error and retains the entire state, native and staging storage. */
 int x4_live_video_start(X4LiveVideo *, uint32_t *pixels, size_t pixel_capacity);
 /* Select an unpublished destination before a batch. No reader may own it. */
 int x4_live_video_set_target(X4LiveVideo *, uint32_t *pixels, size_t pixel_capacity);

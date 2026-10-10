@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-only
-"""Read-only analysis of the bounded XCloud4 0.7.26 numeric trace.
+"""Read-only analysis of bounded XCloud4 two/four-reader numeric traces.
 
 All times are local monotonic observations. This tool neither starts XCloud4
 nor connects to a console. Negative evidence is disabled for incomplete
@@ -58,7 +58,7 @@ for base, names in (
      'WAIT_BEGIN WAIT_END POP_CONTENDED'),
     (0x220, 'OWNER_SPAN_BEGIN OWNER_SPAN_END HELPER_SPAN_BEGIN HELPER_SPAN_END '
      'HELPER_WAIT_BEGIN HELPER_WAIT_END BYTECHECK_BEGIN BYTECHECK_END OUTPUT_GEOMETRY '
-     'VIDEO_ERROR VIDEO_START VIDEO_STOP FEED_REJECT PRESERVE_BEGIN PRESERVE_END'),
+     'VIDEO_ERROR VIDEO_START VIDEO_STOP FEED_REJECT PRESERVE_BEGIN PRESERVE_END COPY_CONFIG'),
 ):
     EVENTS.update((base + i, name) for i, name in enumerate(names.split()))
 RESET_NAMES = (
@@ -132,11 +132,13 @@ def parse(data):
     h = dict(zip(HEADER_NAMES, reader.unpack(HEADER)))
     fixed = {'magic': MAGIC, 'schema': 1, 'endian': 0x0102030405060708,
              'header_bytes': 256, 'record_bytes': 32, 'window_header_bytes': 256,
-             'readers': 2, 'window_capacity': 12, 'history_capacity': 8192,
+             'window_capacity': 12, 'history_capacity': 8192,
              'stage_count': 8, 'counter_layout': COUNTER_LAYOUT}
     for name, expected in fixed.items():
         if h[name] != expected:
             raise ValueError('Unsupported or damaged %s' % name)
+    if h['readers'] not in (2, 4):
+        raise ValueError('Unsupported configured reader count')
     if h['window_count'] > 12 or h['history_count'] > 8192:
         raise ValueError('Header count exceeds a fixed capacity')
     stage_rows = [reader.unpack(struct.Struct('<4Q')) for _ in range(8)]
@@ -170,6 +172,13 @@ def parse(data):
     history = reader.records(h['history_count'])
     if reader.at != len(data):
         raise ValueError('Unexpected trailing trace data')
+    for records in [r for _, r in windows] + [history]:
+        for r in records:
+            if r['event'] in (0x222, 0x223):
+                low = r['flags'] & 255
+                if (r['flags'] >> 8 >= h['readers'] - 1
+                        or low not in ((0,) if r['event'] == 0x222 else (0, 1))):
+                    raise ValueError('Invalid helper identity/result flags')
     # Ordinals are admission identities, NOT physical ordering across producers.
     if not (h['coverage_bits'] & 256):
         identities = {}
@@ -194,14 +203,19 @@ def unique_records(groups, wrapped=False):
 
 def paired_durations(records, begin_event, end_event, begin_key='a', end_key='a'):
     starts, values, incomplete, ambiguous = {}, [], 0, set()
+    def identity(r, field):
+        # Older two-reader traces use helper index zero. Four-reader records
+        # carry the immutable helper index in the flag high byte. Low flags
+        # describe result and cannot form the BEGIN/END identity.
+        return (r['a'], r['flags'] >> 8) if field == 'copy_helper' else r[field]
     for r in records:
         if r['event'] == begin_event:
-            key = r[begin_key]
+            key = identity(r, begin_key)
             if key in starts:
                 ambiguous.add(key)
             starts[key] = r['t']
         elif r['event'] == end_event:
-            key = r[end_key]
+            key = identity(r, end_key)
             start = starts.pop(key, None)
             if start is None or key in ambiguous or r['t'] < start:
                 incomplete += 1
@@ -217,12 +231,18 @@ def timings(records, wrapped):
         'au_begin_to_marker_observation': (0x100, 0x101),
         'native_decode_call': (0x200, 0x201), 'selected_copy_observation': (0x206, 0x207),
         'owner_span_observation': (0x220, 0x221),
-        'helper_span_observation': (0x222, 0x223),
+        'helper_span_observation': (0x222, 0x223, 'copy_helper', 'copy_helper'),
         'helper_wait_observation': (0x224, 0x225),
         'conversion_observation': (0x20c, 0x20d), 'draw_observation': (0x300, 0x301),
         'submitted_flip_to_match': (0x303, 0x305, 'b', 'a'),
     }
     result = {name: paired_durations(records, *pair) for name, pair in pairs.items()}
+    helper_indices = sorted({r['flags'] >> 8 for r in records if r['event'] in (0x222, 0x223)})
+    result['helper_span_observation_by_index'] = {
+        str(index): paired_durations([r for r in records if r['event'] in (0x222, 0x223)
+                                      and r['flags'] >> 8 == index],
+                                     0x222, 0x223, 'copy_helper', 'copy_helper')
+        for index in helper_indices}
     result['queue_arrival_to_pop'] = distribution([r['b'] for r in records if r['event'] == 0x107])
     result['helper_wait_reported'] = distribution([r['b'] for r in records if r['event'] == 0x225])
     result['copy_wall_reported_excludes_reference_check'] = distribution(
@@ -387,10 +407,11 @@ def analyze(data):
             event = ((index // 64) << 8) | (index % 64)
             event_totals.append({'event_hex': '%04x' % event, 'event': event_name(event),
                                  'attempted': row[0], 'admitted': row[1], 'admission_dropped': row[2]})
-    return {'format': 'XCloud4 numeric pause analysis 0.7.26',
+    return {'format': 'XCloud4 numeric pause analysis schema 1 (two/four readers)',
             'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data),
             'threshold_us': 100000, 'header': h,
             'coverage_limits': coverage(h['coverage_bits']),
+            'configured_reader_count_is_not_actual_parallel_selection': True,
             'stage_counters': [{'stage': i, 'attempted': r[0], 'admitted': r[1],
                                 'admission_dropped': r[2]} for i, r in enumerate(stages)],
             'event_attempt_totals': event_totals,
@@ -409,6 +430,7 @@ def analyze(data):
                 'Damage-bit totals overlap. PLI_REQUEST is local demand, not RTCP transmission.',
                 'Counts, observations and local timing do not establish source FPS or visible behavior.',
                 'Diagnostic admission and capture work can affect playback timings.',
+                'Header readers is configured count. COPY_CONFIG and COPY_END describe availability/selection.',
             ]}
 
 

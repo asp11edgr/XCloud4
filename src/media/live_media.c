@@ -377,9 +377,10 @@ X4LiveMedia *x4_live_media_create(int *error)
         if (!m->rgb[i].pixels) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     }
     m->trace_session = x4_trace_now_us();
-    m->trace = x4_trace_create(m->trace_session);
+    m->trace = x4_trace_create(m->trace_session, X4_LIVE_COPY_READERS);
     m->video.trace = m->trace;
-    printf("XCloud4: numeric trace enabled=%u readers=2\n", m->trace ? 1u : 0u);
+    printf("XCloud4: numeric trace enabled=%u configured_readers=%u\n", m->trace ? 1u : 0u,
+        X4_LIVE_COPY_READERS);
     if (error) *error = 0; return m;
 fail:
     if (error) *error = rc; x4_live_media_close(m); return NULL;
@@ -723,7 +724,7 @@ finish:
 static void *video_worker(void *context)
 {
     X4LiveMedia *m = context;
-    x4_trace_record(m->trace, MT_WORKER_START, 0, 2, WORKER_BUDGET_US);
+    x4_trace_record(m->trace, MT_WORKER_START, 0, X4_LIVE_COPY_READERS, WORKER_BUDGET_US);
     x4_trace_record(m->trace, MT_WAIT_BEGIN, 0x8000u, 0, 0);
     int rc = x4_live_video_start(&m->video, m->rgb[0].pixels, (size_t)X4_LIVE_WIDTH * X4_LIVE_HEIGHT);
     publish_worker_view(m);
@@ -908,7 +909,7 @@ int x4_live_media_close(X4LiveMedia *m)
      * native teardown above, makes all trace producers quiescent. */
     x4_trace_end_session(m->trace);
     char path[96];
-    snprintf(path, sizeof(path), "/data/xcloud4-trace-0726-%llu.bin", (unsigned long long)m->trace_session);
+    snprintf(path, sizeof(path), "/data/xcloud4-trace-0727-%llu.bin", (unsigned long long)m->trace_session);
     int dump = x4_trace_dump_file(m->trace, path);
     printf("XCloud4: numeric trace dump rc=%d\n", dump);
     bool trace_released = x4_trace_free(m->trace);

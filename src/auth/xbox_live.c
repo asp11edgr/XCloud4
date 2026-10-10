@@ -28,7 +28,7 @@
 #define X4_XBOX_CANCELLED 1
 /* XCloud4's own short description; no browser identity is claimed. */
 #define X4_XBOX_DEVICE_INFO "{\"appInfo\":{\"env\":{\"clientAppId\":\"XCloud4\",\"clientAppType\":\"native\"," \
-    "\"clientAppVersion\":\"0.7.26\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
+    "\"clientAppVersion\":\"0.7.27\",\"httpEnvironment\":\"prod\"}},\"dev\":{\"hw\":{\"make\":\"Sony\"," \
     "\"model\":\"PS4\"},\"os\":{\"name\":\"Orbis\",\"platform\":\"console\"}}}"
 
 /* Cloud session preparation (milestone 0.5.0) and connection authorization

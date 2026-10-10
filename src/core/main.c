@@ -57,7 +57,7 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
-    printf("XCloud4 0.7.26: diagnostico de pausas con dos lectores NV12\n");
+    printf("XCloud4 0.7.27: comparacion con cuatro lectores NV12\n");
     printf("XCloud4: %s\n", X4_AUTH_PROFILE_NOTE);
     for (unsigned frame = 0;; ++frame) {
         uint64_t input_at = sceKernelGetProcessTime();

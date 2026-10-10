@@ -46,7 +46,7 @@ struct X4Trace {
     uint64_t seen_closed, seen_closed_id, observed_open_id, open_gap_id, ongoing;
     uint64_t retained_closed, late_closed, missing_details, storage_exhausted;
     uint64_t event_caps, time_caps, open_at_stop, detection_excess;
-    unsigned history_head, history_count, window_count;
+    unsigned configured_readers, history_head, history_count, window_count;
     int current_window;
     bool quiesced;
     X4TraceRecord history[HISTORY];
@@ -282,8 +282,9 @@ static void record_at(X4Trace *t, uint64_t time, uint16_t event,
     atomic_flag_clear_explicit(&t->gate, memory_order_release);
 }
 
-X4Trace *x4_trace_create(uint64_t ordinal)
+X4Trace *x4_trace_create(uint64_t ordinal, unsigned configured_readers)
 {
+    if (configured_readers != 2 && configured_readers != 4) return NULL;
     X4Trace *t = calloc(1, sizeof(*t));
     if (!t) return NULL;
     atomic_flag_clear(&t->gate);
@@ -300,8 +301,8 @@ X4Trace *x4_trace_create(uint64_t ordinal)
     atomic_init(&t->generation, 0); atomic_init(&t->closed_count, 0);
     atomic_init(&t->gap_id, 0); atomic_init(&t->gap_start, 0); atomic_init(&t->gap_end, 0);
     atomic_init(&t->active, false);
-    t->local_session = ordinal; t->current_window = -1;
-    x4_trace_record(t, X4_TRACE_SESSION_START, 0, ordinal, 2);
+    t->local_session = ordinal; t->configured_readers = configured_readers; t->current_window = -1;
+    x4_trace_record(t, X4_TRACE_SESSION_START, 0, ordinal, configured_readers);
     return t;
 }
 void x4_trace_record(X4Trace *t, uint16_t event, uint16_t flags, uint64_t a, uint64_t b)
@@ -379,7 +380,7 @@ int x4_trace_dump_file(X4Trace *t, const char *path)
     if (!file) return X4_TRACE_DUMP_IO;
     uint64_t h[32] = {
         UINT64_C(0x3145434152543458), 1, UINT64_C(0x0102030405060708),
-        256, sizeof(X4TraceRecord), 256, t->local_session, 2, WINDOWS, t->window_count,
+        256, sizeof(X4TraceRecord), 256, t->local_session, t->configured_readers, WINDOWS, t->window_count,
         HISTORY, t->history_count, t->total_records, t->history_overwrites,
         t->main_closed_count, t->ongoing, t->retained_closed, t->late_closed,
         t->missing_details, t->storage_exhausted, drop_count(t),

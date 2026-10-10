@@ -12,7 +12,8 @@
 #include <emmintrin.h>
 #include <smmintrin.h>
 
-enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024 };
+enum { RING = 4, INPUT_RING = 2, MAX_MEMORY = 64 * 1024 * 1024,
+    COPY_HELPERS = X4_LIVE_COPY_READERS - 1 };
 /* VIDEO trace namespace. IDs identify observed calls/leased outputs, never
  * correlate the current input PTS/AU with a returned native picture. */
 enum {
@@ -24,7 +25,8 @@ enum {
     VT_NOFRAME = X4_TRACE_OUTPUT_NONE,
     VT_OWNER_BEGIN = 0x220, VT_OWNER_END, VT_HELPER_BEGIN, VT_HELPER_END,
     VT_WAIT_BEGIN, VT_WAIT_END, VT_CHECK_BEGIN, VT_CHECK_END, VT_GEOMETRY,
-    VT_ERROR, VT_START, VT_STOP, VT_FEED_REJECT, VT_PRESERVE_BEGIN, VT_PRESERVE_END
+    VT_ERROR, VT_START, VT_STOP, VT_FEED_REJECT, VT_PRESERVE_BEGIN, VT_PRESERVE_END,
+    VT_COPY_CONFIG
 };
 typedef struct { void *p; off_t offset; size_t size; int allocated; } Memory;
 typedef struct {
@@ -34,7 +36,21 @@ typedef struct {
     bool streaming;
     uint64_t trace_copy;
 } CopyJob;
+
+typedef struct VideoState VideoState;
 typedef struct {
+    VideoState *owner;
+    unsigned index; /* Immutable for this persistent worker's lifetime. */
+    OrbisPthread thread;
+    bool running;
+    atomic_bool stop;
+    atomic_uint_fast64_t submitted, completed;
+    CopyJob job;
+    int result;
+    uint64_t elapsed_us;
+} CopyHelper;
+
+struct VideoState {
     int32_t (*QueryComputeMemoryInfo)(OrbisVideodec2ComputeMemoryInfo *);
     int32_t (*AllocateComputeQueue)(const OrbisVideodec2ComputeConfigInfo *, const OrbisVideodec2ComputeMemoryInfo *, void **);
     int32_t (*ReleaseComputeQueue)(void *);
@@ -55,18 +71,53 @@ typedef struct {
     uint8_t *staging;
     size_t staging_size;
     bool streaming_copy;
-    OrbisPthread copy_thread;
-    bool copy_running, parallel_enabled, copy_check_done;
+    CopyHelper helpers[COPY_HELPERS];
+    bool parallel_enabled, copy_check_done;
+    unsigned reported_readers;
     int copy_join_error;
-    atomic_bool copy_stop;
-    atomic_uint_fast64_t copy_submitted, copy_completed;
     uint64_t copy_sequence;
-    CopyJob copy_job;
-    int copy_result;
-    uint64_t copy_elapsed_us;
-} VideoState;
+};
 
 static void *copy_worker(void *context);
+
+static unsigned copy_helper_count(const VideoState *s)
+{
+    unsigned count = 0;
+    for (unsigned i = 0; i < COPY_HELPERS; ++i) if (s->helpers[i].running) ++count;
+    return count;
+}
+
+/* Only configuration transitions are reported. A four-reader initial setting
+ * is available capacity, pending the first-valid-picture comparison; COPY_END
+ * still identifies the selected path for each copy. */
+static void report_copy_config(VideoState *s, unsigned readers, unsigned reason)
+{
+    if (s->reported_readers == readers) return;
+    s->reported_readers = readers;
+    x4_trace_record(s->trace, VT_COPY_CONFIG, (uint16_t)reason, X4_LIVE_COPY_READERS, readers);
+    printf("XCloud4: video copy config requested_readers=%u configured_available_readers=%u helper_count=%u reason=%u\n",
+        (unsigned)X4_LIVE_COPY_READERS, readers, copy_helper_count(s), reason);
+}
+
+static int stop_copy_helpers(VideoState *s)
+{
+    if (s->copy_join_error) return s->copy_join_error;
+    /* Signal every started worker before joining any of them. A failure must
+     * not prevent join attempts for other workers or free any shared storage. */
+    for (unsigned i = 0; i < COPY_HELPERS; ++i)
+        if (s->helpers[i].running) atomic_store_explicit(&s->helpers[i].stop, true, memory_order_release);
+    int failure = 0;
+    for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+        CopyHelper *helper = &s->helpers[i];
+        if (!helper->running) continue;
+        int rc = scePthreadJoin(helper->thread, NULL);
+        printf("XCloud4: video copy helper join index=%u rc=0x%08x\n", i, (unsigned)rc);
+        if (!rc) helper->running = false;
+        else if (!failure) failure = rc < 0 ? rc : -rc;
+    }
+    if (failure) s->copy_join_error = failure;
+    return failure;
+}
 
 static int stage(X4LiveVideo *v, const char *name, int rc)
 {
@@ -114,17 +165,8 @@ int x4_live_video_stop(X4LiveVideo *v)
     x4_trace_record(v->trace, VT_STOP, 0, v->trace_decoder_epoch, 0);
     /* A failed join leaves the helper lifetime unknown. Never retry native
      * deletion or release its source/staging while that lifetime is unknown. */
-    if (s->copy_join_error) return stage(v, "CERRAR COPIA CPU", s->copy_join_error);
-    if (s->copy_running) {
-        atomic_store_explicit(&s->copy_stop, true, memory_order_release);
-        int rc = scePthreadJoin(s->copy_thread, NULL);
-        printf("XCloud4: video copy helper join rc=0x%08x\n", (unsigned)rc);
-        if (rc) {
-            s->copy_join_error = rc < 0 ? rc : -rc;
-            return stage(v, "CERRAR COPIA CPU", s->copy_join_error);
-        }
-        s->copy_running = false;
-    }
+    int helper_rc = stop_copy_helpers(s);
+    if (helper_rc < 0) return stage(v, "CERRAR COPIA CPU", helper_rc);
     /* Do not free buffers still owned by the decoder if teardown fails. */
     if (s->decoder) {
         int rc = s->DeleteDecoder(s->decoder);
@@ -170,9 +212,13 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     x4_trace_record(trace, VT_START, 0, epoch, 0);
     VideoState *s = calloc(1, sizeof(*s));
     if (!s) return stage(v, "MEMORIA", -5);
-    atomic_init(&s->copy_stop, false);
-    atomic_init(&s->copy_submitted, 0);
-    atomic_init(&s->copy_completed, 0);
+    for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+        CopyHelper *helper = &s->helpers[i];
+        helper->owner = s; helper->index = i;
+        atomic_init(&helper->stop, false);
+        atomic_init(&helper->submitted, 0);
+        atomic_init(&helper->completed, 0);
+    }
     v->state = s;
     s->trace = trace;
     int handle = x4_module_open("libSceVideodec2"), rc = handle;
@@ -242,12 +288,25 @@ int x4_live_video_start(X4LiveVideo *v, uint32_t *pixels, size_t pixel_capacity)
     printf("XCloud4: video RGB convert mode=2 block_pixels=8 scalar_tail_max=7\n");
     rc = s->CreateDecoder(&config, &memory, &s->decoder);
     if (stage(v, "CREAR DECODER", rc) < 0) goto fail;
-    /* Optional optimization: the helper receives only a bounded CPU-copy
-     * job, never decoder handles, RGB, statistics or native API calls. */
-    int helper_rc = scePthreadCreate(&s->copy_thread, NULL, copy_worker, s, "x4-copy");
-    s->copy_running = s->parallel_enabled = helper_rc == 0;
-    printf("XCloud4: video copy helper create rc=0x%08x enabled=%u readers=%u staging_alignment=64\n",
-        (unsigned)helper_rc, s->parallel_enabled ? 1u : 0u, s->parallel_enabled ? 2u : 1u);
+    /* Persistent helpers receive only bounded CPU-copy jobs. Their worker
+     * routine performs no decoder, RGB publication or native teardown calls. */
+    static const char *const names[COPY_HELPERS] = {"x4-copy0", "x4-copy1", "x4-copy2"};
+    for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+        CopyHelper *helper = &s->helpers[i];
+        int helper_rc = scePthreadCreate(&helper->thread, NULL, copy_worker, helper, names[i]);
+        helper->running = helper_rc == 0;
+        printf("XCloud4: video copy helper create index=%u rc=0x%08x enabled=%u staging_alignment=64\n",
+            i, (unsigned)helper_rc, helper->running ? 1u : 0u);
+    }
+    s->parallel_enabled = copy_helper_count(s) == COPY_HELPERS;
+    if (!s->parallel_enabled) {
+        /* No job is dispatched into a partial pool. Serial fallback is safe
+         * only after every started helper is successfully joined. */
+        rc = stop_copy_helpers(s);
+        if (rc < 0) { stage(v, "CERRAR COPIA CPU", rc); goto fail; }
+    }
+    report_copy_config(s, s->parallel_enabled ? X4_LIVE_COPY_READERS : 1u,
+        s->parallel_enabled ? 0u : 1u);
 
     stage(v, "REPRODUCIENDO", 0);
     return 0;
@@ -406,32 +465,71 @@ static bool valid_copy_job(const VideoState *s, const CopyJob *job)
     return false;
 }
 
+static bool make_copy_jobs(const VideoState *s, const uint8_t *source, size_t length,
+    uint64_t copy_id, CopyJob jobs[X4_LIVE_COPY_READERS])
+{
+    if (!source || !s->staging || !length || length > s->staging_size ||
+        ((uintptr_t)source & 63) || ((uintptr_t)s->staging & 63)) return false;
+    /* The first three spans contain floor(length/256)*64 bytes. Their starts
+     * and ends are cache-line aligned. The last span owns the exact remainder,
+     * including the leaf routine's bounded 16-byte/scalar tail. No gaps or
+     * overlap: offsets are 0,span,2*span,3*span and the final end is length. */
+    size_t span = (length / X4_LIVE_COPY_READERS) & ~(size_t)63;
+    if (span < 64) return false;
+    size_t at = 0;
+    for (unsigned i = 0; i < X4_LIVE_COPY_READERS; ++i) {
+        size_t bytes = i + 1 == X4_LIVE_COPY_READERS ? length - at : span;
+        if (bytes < 64 || bytes > length - at) return false;
+        jobs[i] = (CopyJob){source + at, s->staging + at, bytes, s->streaming_copy, copy_id};
+        if (!valid_copy_job(s, &jobs[i])) return false;
+        at += bytes;
+    }
+    return at == length;
+}
+
+static void wait_copy_helpers(const VideoState *s, const uint64_t sequences[COPY_HELPERS])
+{
+    /* Acquire every submitted completion before reading any result or touching
+     * leased native/staging storage. Never return early for a failed job. */
+    for (;;) {
+        bool complete = true;
+        for (unsigned i = 0; i < COPY_HELPERS; ++i)
+            if (atomic_load_explicit(&s->helpers[i].completed, memory_order_acquire) != sequences[i])
+                complete = false;
+        if (complete) return;
+        sceKernelUsleep(50);
+    }
+}
+
 static void *copy_worker(void *context)
 {
-    VideoState *s = context;
+    CopyHelper *helper = context;
+    VideoState *s = helper->owner;
+    const uint16_t index_flags = (uint16_t)(helper->index << 8);
     uint64_t previous = 0;
     for (;;) {
-        uint64_t sequence = atomic_load_explicit(&s->copy_submitted, memory_order_acquire);
+        uint64_t sequence = atomic_load_explicit(&helper->submitted, memory_order_acquire);
         if (sequence != previous) {
             /* The owner does not rewrite this job until completion acquire.
              * Storage/reservations remain alive until this thread is joined. */
-            CopyJob job = s->copy_job;
+            CopyJob job = helper->job;
             int result = valid_copy_job(s, &job) ? 0 : -7;
-            x4_trace_record(s->trace, VT_HELPER_BEGIN, 0, job.trace_copy, job.length);
+            x4_trace_record(s->trace, VT_HELPER_BEGIN, index_flags, job.trace_copy, job.length);
             uint64_t begin = sceKernelGetProcessTime();
             if (!result) copy_span(job.destination, job.source, job.length, job.streaming);
-            s->copy_result = result;
-            s->copy_elapsed_us = sceKernelGetProcessTime() - begin;
+            helper->result = result;
+            helper->elapsed_us = sceKernelGetProcessTime() - begin;
             previous = sequence;
-            atomic_store_explicit(&s->copy_completed, sequence, memory_order_release);
+            atomic_store_explicit(&helper->completed, sequence, memory_order_release);
             /* Local IDs remain valid even if completion lets owner publish
              * its next job before this diagnostic record is captured. */
-            x4_trace_record(s->trace, VT_HELPER_END, result ? 1u : 0u, job.trace_copy, (uint32_t)result);
+            x4_trace_record(s->trace, VT_HELPER_END, index_flags | (result ? 1u : 0u),
+                job.trace_copy, (uint32_t)result);
             continue;
         }
         /* A published job is completed before stop can be honored. There is
          * no timeout fallback that might overwrite an in-flight helper span. */
-        if (atomic_load_explicit(&s->copy_stop, memory_order_acquire)) break;
+        if (atomic_load_explicit(&helper->stop, memory_order_acquire)) break;
         sceKernelUsleep(1000);
     }
     return NULL;
@@ -451,12 +549,12 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
 {
     if (!source || !s->staging || !length || length > s->staging_size || ((uintptr_t)source & 15))
         return stage(v, "LIMITES COPIA CPU", -7);
-    size_t split = (length / 2) & ~(size_t)63;
-    bool eligible = length <= s->staging_size && !((uintptr_t)source & 63) &&
-        !((uintptr_t)s->staging & 63) && split >= 64 && split < length && length - split >= 64;
-    bool parallel = s->parallel_enabled && s->copy_running && eligible;
-    bool check = !s->copy_check_done;
     uint64_t copy_id = ++v->trace_copy_next;
+    CopyJob jobs[X4_LIVE_COPY_READERS];
+    bool eligible = make_copy_jobs(s, source, length, copy_id, jobs);
+    bool pool_ready = copy_helper_count(s) == COPY_HELPERS;
+    bool parallel = s->parallel_enabled && pool_ready && eligible;
+    bool check = !s->copy_check_done;
     x4_trace_record(v->trace, VT_COPY_BEGIN, parallel ? 1u : 0u, copy_id, s->pending_output);
     uint8_t *reference = NULL;
     uint64_t check_pre_us = 0;
@@ -465,7 +563,7 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         s->copy_check_done = true;
         ++v->copy_check_attempts;
         uint64_t begin = sceKernelGetProcessTime();
-        unsigned reason = !s->copy_running ? COPY_REASON_NO_HELPER : COPY_REASON_SPANS;
+        unsigned reason = !pool_ready ? COPY_REASON_NO_HELPER : COPY_REASON_SPANS;
         if (parallel) {
             reference = malloc(length);
             if (!reference) { reason = COPY_REASON_MEMORY; parallel = false; }
@@ -481,33 +579,51 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
             x4_trace_record(v->trace, VT_CHECK_END, (uint16_t)reason, copy_id, COPY_CHECK_NOT_CHECKED);
         }
     }
+    report_copy_config(s, parallel ? X4_LIVE_COPY_READERS : 1u, parallel ? 0u : 2u);
 
     uint64_t begin = sceKernelGetProcessTime();
     int result = 0;
     if (parallel) {
-        if (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != s->copy_sequence) result = -7;
+        uint64_t sequences[COPY_HELPERS];
+        bool idle = true;
+        for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+            CopyHelper *helper = &s->helpers[i];
+            sequences[i] = atomic_load_explicit(&helper->submitted, memory_order_acquire);
+            if (sequences[i] != s->copy_sequence ||
+                atomic_load_explicit(&helper->completed, memory_order_acquire) != sequences[i]) idle = false;
+        }
+        if (!idle) result = -7;
         else {
-            s->copy_job = (CopyJob){source + split, s->staging + split, length - split, s->streaming_copy,
-                copy_id};
+            /* All four jobs were validated before publication. Write all
+             * private job records before allowing any helper to start. */
+            for (unsigned i = 0; i < COPY_HELPERS; ++i) s->helpers[i].job = jobs[i + 1];
             uint64_t sequence = ++s->copy_sequence;
-            atomic_store_explicit(&s->copy_submitted, sequence, memory_order_release);
+            for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+                sequences[i] = sequence;
+                atomic_store_explicit(&s->helpers[i].submitted, sequence, memory_order_release);
+            }
             uint64_t owner_begin = sceKernelGetProcessTime();
-            x4_trace_record(v->trace, VT_OWNER_BEGIN, 1u, copy_id, split);
-            copy_span(s->staging, source, split, s->streaming_copy);
+            x4_trace_record(v->trace, VT_OWNER_BEGIN, 1u, copy_id, jobs[0].length);
+            copy_span(jobs[0].destination, jobs[0].source, jobs[0].length, jobs[0].streaming);
             v->copy_owner_us += sceKernelGetProcessTime() - owner_begin;
             x4_trace_record(v->trace, VT_OWNER_END, 1u, copy_id, 0);
-            uint64_t wait_begin = sceKernelGetProcessTime();
-            x4_trace_record(v->trace, VT_WAIT_BEGIN, 0, copy_id, s->pending_output);
-            while (atomic_load_explicit(&s->copy_completed, memory_order_acquire) != sequence)
-                sceKernelUsleep(50);
-            uint64_t wait_us = sceKernelGetProcessTime() - wait_begin;
-            x4_trace_record(v->trace, VT_WAIT_END, 0, copy_id, wait_us);
-            v->copy_wait_us += wait_us;
-            if (wait_us > v->copy_wait_max_us) v->copy_wait_max_us = wait_us;
-            v->copy_helper_us += s->copy_elapsed_us;
-            result = s->copy_result;
-            _mm_mfence();
         }
+        /* Even a preflight inconsistency waits for every previously submitted
+         * job before returning an error; it never permits lease reuse. */
+        uint64_t wait_begin = sceKernelGetProcessTime();
+        x4_trace_record(v->trace, VT_WAIT_BEGIN, 0, copy_id, s->pending_output);
+        wait_copy_helpers(s, sequences);
+        uint64_t wait_us = sceKernelGetProcessTime() - wait_begin;
+        x4_trace_record(v->trace, VT_WAIT_END, 0, copy_id, wait_us);
+        v->copy_wait_us += wait_us;
+        if (wait_us > v->copy_wait_max_us) v->copy_wait_max_us = wait_us;
+        if (idle) {
+            for (unsigned i = 0; i < COPY_HELPERS; ++i) {
+                v->copy_helper_us += s->helpers[i].elapsed_us;
+                if (!result && s->helpers[i].result) result = s->helpers[i].result;
+            }
+        }
+        _mm_mfence();
     } else {
         uint64_t owner_begin = sceKernelGetProcessTime();
         x4_trace_record(v->trace, VT_OWNER_BEGIN, 0, copy_id, length);
@@ -525,6 +641,7 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
             x4_trace_record(v->trace, VT_CHECK_END, COPY_REASON_JOB, copy_id, COPY_CHECK_NOT_CHECKED);
         }
         s->parallel_enabled = false;
+        report_copy_config(s, 1u, 3u);
         /* Caller retains pending_valid and cannot Decode/reuse this output. */
         return stage(v, "COPIAR IMAGEN CPU", result);
     }
@@ -532,7 +649,7 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
     if (elapsed > v->copy_max_us) v->copy_max_us = elapsed;
     if (parallel) ++v->copy_parallel_calls; else ++v->copy_serial_calls;
     if (reference) {
-        /* Both spans are complete. The same native picture is still leased;
+        /* All four spans are complete. The same native picture is still leased;
          * the extra serial reference is excluded from selected-copy timing. */
         uint64_t check_begin = sceKernelGetProcessTime();
         copy_span(reference, source, length, s->streaming_copy);
@@ -549,6 +666,7 @@ static int copy_picture(X4LiveVideo *v, VideoState *s, const uint8_t *source, si
         report_copy_check(equal ? COPY_CHECK_PASS : COPY_CHECK_MISMATCH, COPY_REASON_NONE, length, check_us);
         x4_trace_record(v->trace, VT_CHECK_END, COPY_REASON_NONE, copy_id,
             equal ? COPY_CHECK_PASS : COPY_CHECK_MISMATCH);
+        if (!equal) report_copy_config(s, 1u, 3u);
     }
     return 0;
 }

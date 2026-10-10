@@ -80,7 +80,9 @@ enum { X4_TRACE_DUMP_OK = 0, X4_TRACE_DUMP_DISABLED = 1,
     X4_TRACE_DUMP_IO = -3 };
 
 /* Optional one-time allocation before producers start; NULL means disabled. */
-X4Trace *x4_trace_create(uint64_t local_session_ordinal);
+/* Configured reader count describes the experiment, not a guarantee that
+ * helper startup/bytecheck selected the parallel path. Copy events say that. */
+X4Trace *x4_trace_create(uint64_t local_session_ordinal, unsigned configured_readers);
 uint64_t x4_trace_now_us(void);
 /* Any producer. One try-only gate; records may be dropped, playback may not. */
 void x4_trace_record(X4Trace *trace, uint16_t event, uint16_t flags,
