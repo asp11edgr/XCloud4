@@ -1,8 +1,12 @@
 # XCloud4 0.7.34 - bounded NACK grace and optional rumble
 
+## Subsequent console evidence
+
+The [closed G0/G45 report](CONSOLE_REPORT_0.7.34_G0_G45.md) now records both rumble-off passes. Neither had a sequence gap/NACK request or a stable NEW-image interval over 100 ms, so useful grace repair remains unexercised. Physical rumble remains pending. The preparation evidence below is preserved; packages and their source identities are unchanged.
+
 ## Verified preparation checkpoint
 
-Three native profiles are built, inspected and copied to PS4 with **two exact FTP readbacks each**. Final runtime source identity is `54d5793d1b50a7ea24ba73e79b258577f51511c0`. **No 0.7.34 playback trial, useful grace repair, physical vibration or instrumentation-overhead result is measured.** The [dev-0.7.34 release page](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.34) and its artifact manifest identify publication status and downloadable assets.
+At the preparation checkpoint, three native profiles were built, inspected and copied to PS4 with **two exact FTP readbacks each**. Final runtime source identity is `54d5793d1b50a7ea24ba73e79b258577f51511c0`. **At that checkpoint, no 0.7.34 playback trial, useful grace repair, physical vibration or instrumentation-overhead result had yet been measured.** The [dev-0.7.34 release page](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.34) and its artifact manifest identify publication status and downloadable assets.
 
 | Profile | NACK / grace ms / rumble | Build suffix | Package |
 | --- | --- | --- | --- |

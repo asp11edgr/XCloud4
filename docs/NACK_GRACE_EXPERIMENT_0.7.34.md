@@ -1,8 +1,8 @@
-# XCloud4 0.7.34 â€” bounded 45 ms NACK grace experiment
+# XCloud4 0.7.34 — bounded 45 ms NACK grace experiment
 
 ## Status and purpose
 
-This is a verified preparation report. Final host campaigns, native dependency/application rebuilds, selected linked inspection, source/archive correspondence and two exact PS4 readbacks of each of the three profiles passed. **The 0.7.34 console comparison, useful repair and fewer pauses remain unmeasured.** [Release notes](RELEASE_NOTES_0.7.34.md) record exact artifact hashes and review limits.
+This is a verified preparation report. Final host campaigns, native dependency/application rebuilds, selected linked inspection, source/archive correspondence and two exact PS4 readbacks of each of the three profiles passed. The [first closed G0/G45 pair](CONSOLE_REPORT_0.7.34_G0_G45.md) is recorded: neither session had a non-crossing stable/loading NEW-image interval over 100 ms or a NACK request. The configured grace policy was not exercised; useful repair or a fluency benefit remains unverified. [Release notes](RELEASE_NOTES_0.7.34.md) record exact artifact hashes and review limits.
 
 The [0.7.33 console report](CONSOLE_REPORT_0.7.33.md) observed authenticated positions returning after the worker had abandoned their holes. This motivates a bounded wait for eligible requested positions. It does not prove that NACK caused those returns, or that extending the wait will improve playback.
 
@@ -18,13 +18,13 @@ The grace change and [rumble experiment](RUMBLE_0.7.34.md) are separate. Keep ru
 
 The Makefile defaults remain grace 0 and rumble 0; enabling 45 ms requires NACK 1. Command-line flag changes alone do not invalidate existing objects. The delivered profiles used a full native dependency rebuild and forced fresh application builds for each configuration. Their source identity is `54d5793d1b50a7ea24ba73e79b258577f51511c0`, with suffixes `n1-g0-r0`, `n1-g45-r0` and `n1-g45-r1`. Verified package names and checksums are in the release notes.
 
-All three profiles retain MPSC ingress, four copy readers, the existing 16 ms/four-feed worker budget, the 128-slot reorder and existing H.264/Opus/recovery behavior. The stream request remains 960 Ã— 540, maxFPS 30 and 5,000 kbps. Actual delivered dimensions must be measured again. There is no new RTX negotiation, SDP change, resolution experiment, decoder allocation or recovery architecture.
+All three profiles retain MPSC ingress, four copy readers, the existing 16 ms/four-feed worker budget, the 128-slot reorder and existing H.264/Opus/recovery behavior. The stream request remains 960 × 540, maxFPS 30 and 5,000 kbps. Actual delivered dimensions must be measured again. There is no new RTX negotiation, SDP change, resolution experiment, decoder allocation or recovery architecture.
 
 ## Worker policy and bounds
 
 The video worker exclusively owns the pure grace state. A request must match the current session, accepted original-video source and sequence epoch. An unsolicited control cannot change that binding.
 
-- An admitted position has an absolute **detection time + 45,000 Âµs** deadline. Worker delay consumes this budget; it is not a fresh 45 ms after control delivery or transport dispatch.
+- An admitted position has an absolute **detection time + 45,000 µs** deadline. Worker delay consumes this budget; it is not a fresh 45 ms after control delivery or transport dispatch.
 - HOLD applies only when the current expected position belongs to an admitted pending range. It temporarily supersedes both ordinary depth-32 and 25 ms hole expiry for that position. Unrelated holes retain their ordinary policy.
 - Duplicate requests, overlapping requests, advancement of expected, dispatch and authenticated-return observations never renew the deadline.
 - **Authenticated reception alone does not clear pending grace.** Only actual STORED admission to the current worker reorder does. A delayed control reconciles matching slots already STORED; authentication completion can retire a send watch without claiming worker admission.
@@ -57,7 +57,7 @@ Worker-cost accumulators start when the worker consumes an admitted **OFFER**. T
 ## Controlled console procedure
 
 1. Close the current application. Install verified **G0 / `XCloud4-0.7.34-grace-off.pkg`**, launch freshly, confirm its identity/profile and open one game. Preserve the current working installer and previous exports.
-2. After loading, hold **L1 + R1** and press **TRIANGLE** once to mark stable gameplay. Record the game, scene, network arrangement and planned actions; play for **10â€“15 stable minutes**.
+2. After loading, hold **L1 + R1** and press **TRIANGLE** once to mark stable gameplay. Record the game, scene, network arrangement and planned actions; play for **10–15 stable minutes**.
 3. Use the same chord to mark each transition/loading interval and then stable play again. Preserve the marks and accompanying notes. Do not retrospectively infer an equivalent scene or uninterrupted stable exposure.
 4. Return with **L1 + R1 + CIRCLE**, then exit from the catalog with **OPTIONS**. Retain both numeric exports, hashes, close/export results and coverage counters. Use only one game session per fresh application process.
 5. Repeat with **G45 / `XCloud4-0.7.34-grace-45.pkg`**, rumble still 0, using the same game/scene, marking, duration and network arrangement. A fresh G0 repeat can follow if the pair warrants confirmation. Try **G45VIB / `XCloud4-0.7.34-grace-45-rumble.pkg`** only as a separate follow-up after this pair.
@@ -80,8 +80,8 @@ If grace worsens stable playback or introduces an audio/input/closure regression
 | Reader | 127 checks passed in the native-build campaign; subsequent analyzer-only labeling correction passed 128 checks |
 | Native application/profile inspection | Full dependency rebuild and three fresh profiles passed, including identities and Pad import |
 | Package/source verification | Three package hashes and two PS4 readbacks each matched; all 9,385 dependency-archive payload hashes matched |
-| Fresh Baseline/Grace console utility and pause comparison | Pending |
+| Fresh Baseline/Grace console comparison | Closed G0/G45 pair: zero stable intervals over 100 ms in both; repair policy unexercised |
 
 Two actual Claude Opus 5.5 immutable read-only reviews were completed. The second read 28 selected files and confirmed the four runtime corrections: release-specific forcing, fresh rumble poll time, stale inbox cursor handling and preservation of other pending ranges. It found no new runtime-safety issue in that selected scope. A wrong-root `candidate.diff` read failed despite the diff being present; neither review is described as a complete diff review. Tests/builds were executed separately from Claude.
 
-There is no full native-worker end-to-end fixture, real server-acknowledgment test or 0.7.34 PS4 playback result. Runtime source remains frozen; the later analyzer-only label/test update and this prose update do not alter the built packages. Host results do not validate native scheduling, callback contention, physical rumble or performance.
+There is no full native-worker end-to-end fixture, real server-acknowledgment test or exercised 0.7.34 PS4 grace-repair result. Runtime source remains frozen; the later analyzer-only label/test update and this prose update do not alter the built packages. Host results do not validate native scheduling, callback contention, physical rumble or performance.

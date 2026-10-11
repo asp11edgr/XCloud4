@@ -20,7 +20,7 @@ All three **9,043,968-byte** packages passed native rebuild, selected artifact/i
 
 Use `XCloud4-0.7.34-grace-off.pkg` first, then `XCloud4-0.7.34-grace-45.pkg`, for **10–15 manually stable minutes each** in fresh app/game sessions. Keep rumble off throughout this pair. Hold **L1 + R1** and tap **TRIANGLE** to mark stable/transition phases; the chord is locally reserved. Return with **L1 + R1 + CIRCLE**, then use **OPTIONS** from the catalog to exit. Only afterward try `XCloud4-0.7.34-grace-45-rumble.pkg` separately, using [the rumble procedure](docs/RUMBLE_0.7.34.md).
 
-The four readers, MPSC queue, stream request, native video allocation, reorder bounds, codecs and recovery architecture remain unchanged; no interface redesign is introduced. PT 102 and worker sequence epoch 1 limit the current experiment, and omitted control/bridge delivery disables grace for that session. **No 0.7.34 console trial, measured grace utility, physical rumble or diagnostic-overhead result is confirmed.** Publication of the planned `dev-0.7.34` release is not yet verified. Earlier tested milestones and assets remain preserved.
+The four readers, MPSC queue, stream request, native video allocation, reorder bounds, codecs and recovery architecture remain unchanged; no interface redesign is introduced. PT 102 and worker sequence epoch 1 limit the current experiment, and omitted control/bridge delivery disables grace for that session. The [first closed G0/G45 console pair](docs/CONSOLE_REPORT_0.7.34_G0_G45.md) retains 10.295235 / 10.148516 marked stable minutes, zero non-crossing stable NEW-image intervals over 100 ms and zero sequence gaps/NACK requests in both. The owner subjectively felt the same experience. The configured grace policy was not exercised; measured repair utility, physical rumble and zero diagnostic overhead remain unconfirmed. The descriptive p95 difference establishes no grace benefit. The [dev-0.7.34 prerelease](https://github.com/asp11edgr/XCloud4/releases/tag/dev-0.7.34) is published with seven verified assets. Earlier tested milestones and assets remain preserved.
 
 ## Console-exercised receiver NACK experiment: 0.7.33
 
@@ -223,10 +223,10 @@ Detailed evidence and package hashes are in the [development log](docs/JORNADA.m
 1. Prepare OpenOrbis and produce a minimal native application — confirmed.
 2. Establish local video, audio and DualShock 4 input — local media and UI confirmed.
 3. Implement Microsoft account authorization and the Xbox catalog — confirmed.
-4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — session authorization confirmed; negotiation work resumed before actual streaming.
+4. Implement a cloud session, WebRTC transport, game video/audio and controller messages — live media and controller messages exercised on the console; residual-pause and recovery experiments continue.
 5. Improve reconnection, errors and performance — future work.
 
-The proposed first beta target is **720p at 30 FPS**. Its feasibility depends on actual decoder and transport behavior on the console. Title search, access groups and a real-destination network check are now [authorized requests](docs/MEJORAS_FUTURAS.md) for subsequent work; cover images follow those catalog priorities.
+The first beta target remains **720p at 30 FPS**. Delivered native geometry is measured separately from requested or physical display FPS. Title search and access groups were [console-exercised in 0.7.29](docs/CONSOLE_REPORT_0.7.29.md). A real-destination network check and cover images remain [authorized future work](docs/MEJORAS_FUTURAS.md).
 
 `WaitingForResources` is handled as waiting, but initial provisioning is limited to **180 seconds**. Extended queue duration and UI remain a [future improvement](docs/MEJORAS_FUTURAS.md); no server wait-time estimate is claimed.
 
