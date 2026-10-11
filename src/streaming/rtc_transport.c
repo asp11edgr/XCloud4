@@ -3,6 +3,7 @@
 #include "rtc_native.h"
 #include "rtc_receive_diag.h"
 #include "nack_grace_inbox.h"
+#include "../input/rumble.h"
 #include "../media/live_trace.h"
 #include "../auth/json.h"
 #include <rtc/rtc.h>
@@ -20,6 +21,9 @@
 #define INPUT_INTERVAL_USEC 16667u
 #ifndef X4_RECEIVER_NACK
 #define X4_RECEIVER_NACK 0
+#endif
+#ifndef X4_RUMBLE
+#define X4_RUMBLE 0
 #endif
 #define NACK_POLL_USEC 500u
 
@@ -45,6 +49,9 @@ struct X4Rtc {
     void *media_user;
     X4Trace *diagnostic_trace;
     X4NackGraceInbox *grace_inbox;
+#if X4_RUMBLE
+    X4Rumble *rumble;
+#endif
     uint64_t diagnostic_pli_ordinal; /* Session owner is the sole writer. */
     bool handshake_ack, startup_sent;
     uint64_t started_at;
@@ -607,6 +614,12 @@ static void channel_message(int channel, const char *data, int size, void *point
     X4Rtc *rtc = enter(pointer);
     if (!rtc) return;
     size_t length = size < 0 ? (size_t)(-(int64_t)size - 1) : (size_t)size;
+#if X4_RUMBLE
+    /* libdatachannel's nonnegative size denotes binary. Input report bytes
+     * are parsed into an optional latest slot; hardware stays on main. */
+    if (channel == rtc->channels[2] && size >= 0 && data && rtc->rumble)
+        (void)x4_rumble_receive(rtc->rumble, data, length, sceKernelGetProcessTime());
+#endif
     if (channel == rtc->channels[3] && data && length && length <= 4096) {
         char type[32];
         X4JsonField field = {.name="type", .kind=X4_JSON_STRING, .text=type, .capacity=sizeof(type)};
@@ -729,6 +742,15 @@ void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
         (void)x4_rtc_receive_track_config(rtc->audio);
         (void)x4_rtc_receive_track_config(rtc->video);
     }
+}
+void x4_rtc_set_rumble_mailbox(X4Rtc *rtc, X4Rumble *rumble)
+{
+#if X4_RUMBLE
+    if (rtc) rtc->rumble = rumble;
+#else
+    (void)rtc;
+    (void)rumble;
+#endif
 }
 void x4_rtc_set_nack_grace_inbox(X4Rtc *rtc, X4NackGraceInbox *inbox)
 {
@@ -854,6 +876,9 @@ int x4_rtc_request_keyframe(X4Rtc *rtc)
 int x4_rtc_close(X4Rtc *rtc)
 {
     if(!rtc)return 0;
+#if X4_RUMBLE
+    x4_rumble_disable(rtc->rumble);
+#endif
     atomic_store_explicit(&rtc->nack_stop,true,memory_order_release);
     if (rtc->nack_thread_started) {
         int rc=scePthreadJoin(rtc->nack_thread,NULL);
@@ -893,6 +918,15 @@ int x4_rtc_close(X4Rtc *rtc)
     if(rtc->audio>=0) {rtcSetMessageCallback(rtc->audio,NULL);rtcDeleteTrack(rtc->audio);}
     if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
+#if X4_RUMBLE
+    X4RumbleSnapshot vibration={0};
+    x4_rumble_snapshot(rtc->rumble,&vibration);
+    printf("XCloud4: vibracion reports=%llu valid=%llu accepted=%llu malformed=%llu unsupported=%llu omitted=%llu inactive=%llu\n",
+        (unsigned long long)vibration.reports,(unsigned long long)vibration.valid,
+        (unsigned long long)vibration.accepted,(unsigned long long)vibration.malformed,
+        (unsigned long long)vibration.unsupported,(unsigned long long)vibration.contention_dropped,
+        (unsigned long long)vibration.inactive_dropped);
+#endif
     x4_nack_grace_inbox_unbind(rtc->grace_inbox);
     x4_rtc_receive_detach(rtc->diagnostic_trace);
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;

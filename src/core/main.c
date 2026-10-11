@@ -55,6 +55,12 @@ int main(void)
     uint64_t input_previous = 0, input_report_at = 0;
     uint64_t input_intervals = 0, input_interval_us = 0, input_interval_max_us = 0;
     uint64_t idle_present_skips = 0;
+#if X4_RUMBLE
+    OrbisPadVibeParam rumble_applied={0};
+    int rumble_handle=-1;
+    bool rumble_was_connected=false;
+    uint64_t rumble_pad_calls=0,rumble_pad_ok=0,rumble_pad_errors=0;
+#endif
     x4_catalog_browser_init(&catalog_browser);
     setvbuf(stdout, NULL, _IONBF, 0);
 reopen_interface:;
@@ -67,6 +73,9 @@ reopen_interface:;
         for (;;) sceKernelUsleep(100000);
     }
     x4_controller_init(&controller);
+#if X4_RUMBLE
+    rumble_applied=(OrbisPadVibeParam){0}; rumble_handle=-1; rumble_was_connected=false;
+#endif
 #ifdef X4_INGRESS_BASELINE
     printf("XCloud4 %s BASE: solo para referencia, no es la prueba autorizada\n",X4_PRODUCT_VERSION);
 #else
@@ -124,6 +133,24 @@ reopen_interface:;
             if (guide_action && !local_action && !diagnostic_action) gamepad.buttons = X4_GAMEPAD_NEXUS;
         }
         x4_auth_set_gamepad(auth, &gamepad);
+#if X4_RUMBLE
+        X4RumbleOutput desired={0};
+        /* A report can arrive after the frame-start input sample. Poll with
+         * a fresh time so that earlier sample is not treated as clock reversal. */
+        x4_auth_poll_rumble(auth,sceKernelGetProcessTime(),&desired);
+        if((!controller.data.connected&&rumble_was_connected)||controller.handle<0) rumble_handle=-1;
+        rumble_was_connected=controller.data.connected;
+        if(!game_input||!session.rtc_connected||!controller.data.connected)
+            desired.lgMotor=desired.smMotor=0;
+        if(controller.handle>=0&&(rumble_handle!=controller.handle||
+            rumble_applied.lgMotor!=desired.lgMotor||rumble_applied.smMotor!=desired.smMotor)) {
+            OrbisPadVibeParam next={desired.lgMotor,desired.smMotor};
+            int vibration_rc=scePadSetVibration(controller.handle,&next);
+            ++rumble_pad_calls;
+            if(vibration_rc>=0) ++rumble_pad_ok; else ++rumble_pad_errors;
+            if(vibration_rc>=0) { rumble_applied=next; rumble_handle=controller.handle; }
+        }
+#endif
         if (!closing) {
             uint32_t ui_pressed = controller.pressed;
             if (game_input) ui_pressed &= ~ORBIS_PAD_BUTTON_OPTIONS;
@@ -406,6 +433,16 @@ reopen_interface:;
      * cleaning the UI. Ordinary OPTIONS keeps rendering while it cancels. */
     trace_inactive(live);
     x4_auth_cancel(auth);
+#if X4_RUMBLE
+    if(controller.handle>=0) {
+        OrbisPadVibeParam zero={0};
+        (void)scePadSetVibration(controller.handle,&zero);
+        rumble_applied=zero; rumble_handle=controller.handle;
+    }
+    printf("XCloud4: vibracion Pad calls=%llu success=%llu errors=%llu (resultado local)\n",
+        (unsigned long long)rumble_pad_calls,(unsigned long long)rumble_pad_ok,
+        (unsigned long long)rumble_pad_errors);
+#endif
     while (x4_auth_busy(auth)) sceKernelUsleep(100000);
     if (live) {
         int live_rc = x4_auth_set_media_callback(auth, NULL, NULL, NULL);

@@ -3,6 +3,7 @@
 #include "xbox_catalog.h"
 #include "xbox_session.h"
 #include "../input/gamepad.h"
+#include "../input/rumble.h"
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
@@ -76,6 +77,8 @@ typedef struct X4Trace X4Trace;
 int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, void *user, X4Trace *trace);
 typedef struct X4NackGraceInbox X4NackGraceInbox;
 int x4_auth_set_grace_inbox(X4Auth *auth, X4NackGraceInbox *inbox);
+/* Main-only desired motors. Native controller calls remain on main. */
+bool x4_auth_poll_rumble(X4Auth *auth, uint64_t now_us, X4RumbleOutput *out);
 /* Thread-safe request flag. The session owner consumes it and requests PLI;
  * this never accesses the transport from the main/decoder thread. */
 void x4_auth_request_keyframe(X4Auth *auth);

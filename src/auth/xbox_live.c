@@ -93,6 +93,7 @@ struct X4XboxWork {
     X4SessionMediaCallback media_callback;
     void *media_user;
     X4Trace *media_trace;
+    X4Rumble *rumble;
     X4NackGraceInbox *grace_inbox;
     X4GamepadSource gamepad_source;
     void *gamepad_user;
@@ -2191,6 +2192,7 @@ static void session_stream(X4XboxWork *w, SessionEnd *end)
     if (!w->rtc) { end_with(end, X4_SESSION_ERROR, rc ? rc : X4_AUTH_E_SESSION, 0, "no se pudo iniciar WebRTC nativo"); return; }
     x4_rtc_set_media_callback(w->rtc, w->media_callback, w->media_user);
     x4_rtc_set_diagnostic_trace(w->rtc, w->media_trace);
+    x4_rtc_set_rumble_mailbox(w->rtc, w->rumble);
     x4_rtc_set_nack_grace_inbox(w->rtc, w->grace_inbox);
     rc = x4_rtc_set_gamepad_source(w->rtc, w->gamepad_source, w->gamepad_user);
     if (rc) printf("XCloud4: iniciar envio de control fallo 0x%08x\n", (unsigned)rc);
@@ -2317,7 +2319,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     X4SessionProgress progress, void *context, X4XboxPassport passport, void *passport_context,
     X4SessionMediaCallback media_callback, void *media_user,
     _Atomic int *keyframe_requested, X4GamepadSource gamepad_source, void *gamepad_user,
-    X4Trace *trace, X4NackGraceInbox *grace_inbox)
+    X4Trace *trace, X4Rumble *rumble, X4NackGraceInbox *grace_inbox)
 {
     memset(&w->result, 0, sizeof(w->result));
     memset(&w->session, 0, sizeof(w->session));
@@ -2332,6 +2334,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->media_callback = media_callback;
     w->media_user = media_user;
     w->media_trace = trace;
+    w->rumble = rumble;
     w->grace_inbox = grace_inbox;
     w->gamepad_source = gamepad_source;
     w->gamepad_user = gamepad_user;
@@ -2380,6 +2383,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
     w->media_callback = NULL;
     w->media_user = NULL;
     w->gamepad_source = NULL;
+    w->rumble = NULL;
     w->grace_inbox = NULL;
     w->gamepad_user = NULL;
     w->keyframe_requested = NULL;

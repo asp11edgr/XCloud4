@@ -9,6 +9,7 @@ extern "C" {
 #endif
 typedef struct X4Rtc X4Rtc;
 typedef struct X4Trace X4Trace;
+typedef struct X4Rumble X4Rumble;
 typedef struct X4NackGraceInbox X4NackGraceInbox;
 enum { X4_RTC_VIDEO = 0, X4_RTC_AUDIO = 1 };
 typedef enum {
@@ -35,7 +36,8 @@ void x4_rtc_set_media_callback(X4Rtc *, X4RtcMediaCallback, void *user);
 /* Session owner only, before dispatch starts. Trace outlives joined RTC. */
 void x4_rtc_set_diagnostic_trace(X4Rtc *, X4Trace *);
 /* Optional borrowed storage, bound by owner before remote SDP/callbacks.
- * The inbox outlives all producers and a successful RTC close. */
+ * Both objects outlive all producers and a successful RTC close. */
+void x4_rtc_set_rumble_mailbox(X4Rtc *, X4Rumble *);
 void x4_rtc_set_nack_grace_inbox(X4Rtc *, X4NackGraceInbox *);
 /* Owner thread only, once after open. Starts a bounded independent sender;
  * a native thread-creation error is returned without failing media/RTC.

@@ -12,6 +12,16 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Latest prepared experiment: 0.7.34
+
+The [bounded NACK grace experiment](docs/NACK_GRACE_EXPERIMENT_0.7.34.md) is implemented and built as **G0** (NACK 1 / grace 0 / rumble 0), **G45** (1 / 45 / 0) and the separate optional **G45VIB** (1 / 45 / 1). The worker grants eligible pending positions an absolute detection-time + 45 ms deadline; authenticated arrival alone does not complete grace. The existing worker evaluates expiry even without ingress; scheduling or Decode can delay evaluation, so no independent timer guarantees execution exactly at 45 ms. Only deadline/capacity releases force the existing hole advance, and an advance stops before a position protected by another range. **The unchanged 128-slot capacity can release grace before 45 ms.**
+
+All three **9,043,968-byte** packages passed native rebuild, selected artifact/import inspection and **two exact PS4 FTP readbacks each**. Frozen runtime source identity is `54d5793d1b50a7ea24ba73e79b258577f51511c0`; build/profile identities and package/source hashes are in [the release notes](docs/RELEASE_NOTES_0.7.34.md). GCC/Clang host campaigns, bounded shared-reorder fixtures, reader checks and two actual Claude Opus 5.5 selected-source reviews are recorded with their coverage limits. These preparation results establish neither a complete native-worker test nor a console playback improvement.
+
+Use `XCloud4-0.7.34-grace-off.pkg` first, then `XCloud4-0.7.34-grace-45.pkg`, for **10–15 manually stable minutes each** in fresh app/game sessions. Keep rumble off throughout this pair. Hold **L1 + R1** and tap **TRIANGLE** to mark stable/transition phases; the chord is locally reserved. Return with **L1 + R1 + CIRCLE**, then use **OPTIONS** from the catalog to exit. Only afterward try `XCloud4-0.7.34-grace-45-rumble.pkg` separately, using [the rumble procedure](docs/RUMBLE_0.7.34.md).
+
+The four readers, MPSC queue, stream request, native video allocation, reorder bounds, codecs and recovery architecture remain unchanged; no interface redesign is introduced. PT 102 and worker sequence epoch 1 limit the current experiment, and omitted control/bridge delivery disables grace for that session. **No 0.7.34 console trial, measured grace utility, physical rumble or diagnostic-overhead result is confirmed.** Publication of the planned `dev-0.7.34` release is not yet verified. Earlier tested milestones and assets remain preserved.
+
 ## Console-exercised receiver NACK experiment: 0.7.33
 
 The [bounded OFF/ON experiment](docs/RECEIVER_NACK_EXPERIMENT_0.7.33.md) adds one original-video receiver request generator through the existing protected RTCP path, gated by NACK feedback in the actual remote Answer. It reserves at most **64 single attempts per fresh session**, with ranges of at most 64 positions and 16 watched ranges. Selected bitmap, protection, local send, authenticated return, reorder and AU utility remain separate observations; a successful local send does not prove server delivery. NEW/MPSC256, four readers, stream request, reorder and recovery remain unchanged.
@@ -20,7 +30,7 @@ The [closed-session console comparison](docs/CONSOLE_REPORT_0.7.33.md) retains *
 
 The owner perceives **the same pauses in OFF and ON** and confirms good audio, controls, catalog return and exit. This feedback is recorded separately from the measured interval counts.
 
-A separately selectable **45 ms pending-NACK grace policy**, governing both early depth and time abandonment with a hard unchanged-capacity fallback, is proposed from the faster observed returns; it is **not implemented or verified**, and 128 entries may fill sooner. Portable and native preparation evidence remains in [the release notes](docs/RELEASE_NOTES_0.7.33.md). Diagnostic overhead is not established as zero; 0.7.32 assets and original evidence stay preserved. Raw console exports remain private.
+At the 0.7.33 checkpoint, a separately selectable **45 ms pending-NACK grace policy** was proposed from the observed return timings, without demonstrated causality or useful repair. It is now implemented in the **0.7.34 preparation checkpoint above**, where 128 entries may still fill sooner. Historical portable/native evidence remains in [the 0.7.33 release notes](docs/RELEASE_NOTES_0.7.33.md). Diagnostic overhead is not established as zero; 0.7.32 assets and original evidence stay preserved. Raw console exports remain private.
 
 ## Console-exercised reception diagnostics: 0.7.32
 

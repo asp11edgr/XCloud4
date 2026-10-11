@@ -90,6 +90,9 @@ struct X4Auth {
     void *media_user;
     X4Trace *media_trace; /* Same joined lifetime as media_user; diagnostic only. */
     X4NackGraceInbox *grace_inbox; /* Same joined lifetime; functional. */
+#if X4_RUMBLE
+    X4Rumble *rumble;
+#endif
     _Atomic int keyframe_requested;
 };
 
@@ -796,7 +799,13 @@ static void session_run(X4Auth *a)
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
             &a->cancel, session_progress, a, passport_provider, a, a->media_callback, a->media_user,
-            &a->keyframe_requested, gamepad_source, a, a->media_trace, a->grace_inbox);
+            &a->keyframe_requested, gamepad_source, a, a->media_trace,
+#if X4_RUMBLE
+            a->rumble,
+#else
+            NULL,
+#endif
+            a->grace_inbox);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);
@@ -881,6 +890,10 @@ X4Auth *x4_auth_create(void)
         printf("XCloud4: acceso Microsoft sin memoria\n");
         return NULL;
     }
+#if X4_RUMBLE
+    a->rumble=x4_rumble_new();
+    if(!a->rumble) printf("XCloud4: vibracion desactivada por falta de memoria\n");
+#endif
     atomic_init(&a->cancel, 0);
     atomic_init(&a->finished, 1);
     atomic_init(&a->keyframe_requested, 0);
@@ -1015,11 +1028,24 @@ int x4_auth_start_session(X4Auth *a, unsigned index)
     a->session_title = title;
     copy_text(a->session_offering, sizeof(a->session_offering), offering);
     a->action = X4_AUTH_XBOX_SESSION;
+#if X4_RUMBLE
+    x4_rumble_disable(a->rumble);
+    if(a->rumble&&!x4_rumble_begin(a->rumble)) {
+        x4_xbox_work_free(a->xwork); a->xwork=NULL;
+        x4_secure_clear(&a->session_title,sizeof(a->session_title));
+        x4_secure_clear(a->session_offering,sizeof(a->session_offering));
+        x4_secure_clear(&title,sizeof(title));
+        return X4_AUTH_E_BUSY;
+    }
+#endif
     atomic_store(&a->cancel, 0);
     reset_session(a, X4_SESSION_STARTING, 0, "preparando sesion Xbox", shown, offering, region);
     atomic_store_explicit(&a->finished, 0, memory_order_release);
     rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
     if (rc != 0) {
+#if X4_RUMBLE
+        x4_rumble_disable(a->rumble);
+#endif
         if (rc > 0) rc = -rc;
         printf("XCloud4: sesion Xbox crear hilo 0x%08x\n", (unsigned)rc);
         atomic_store(&a->finished, 1);
@@ -1038,6 +1064,9 @@ int x4_auth_start_session(X4Auth *a, unsigned index)
 
 void x4_auth_cancel(X4Auth *a)
 {
+#if X4_RUMBLE
+    if(a) x4_rumble_disable(a->rumble);
+#endif
     if (x4_auth_busy(a)) atomic_store(&a->cancel, 1);
 }
 
@@ -1165,6 +1194,16 @@ int x4_auth_set_grace_inbox(X4Auth *a,X4NackGraceInbox *inbox)
     int rc=join_worker(a); if(rc) return rc;
     a->grace_inbox=inbox; return 0;
 }
+bool x4_auth_poll_rumble(X4Auth *a,uint64_t now_us,X4RumbleOutput *out)
+{
+#if X4_RUMBLE
+    return x4_rumble_poll(a?a->rumble:NULL,now_us,out);
+#else
+    (void)a; (void)now_us;
+    if(out) *out=(X4RumbleOutput){0};
+    return false;
+#endif
+}
 
 void x4_auth_request_keyframe(X4Auth *a)
 {
@@ -1189,6 +1228,10 @@ int x4_auth_close(X4Auth *a)
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
+#if X4_RUMBLE
+    x4_rumble_disable(a->rumble);
+    if(!x4_rumble_free(a->rumble)) return X4_AUTH_E_BUSY;
+#endif
     x4_secure_clear(a, sizeof(*a));
     free(a);
     return 0;

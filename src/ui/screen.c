@@ -25,7 +25,11 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-#if X4_NACK_GRACE_MS == 45
+#if X4_RUMBLE && X4_NACK_GRACE_MS == 45
+    x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G45 VIB", MUTED);
+#elif X4_RUMBLE
+    x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G0 VIB", MUTED);
+#elif X4_NACK_GRACE_MS == 45
     x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G45", MUTED);
 #else
     x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G0", MUTED);

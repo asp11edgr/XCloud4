@@ -164,7 +164,8 @@ for name in ('rtc_native.c', 'rtc_native.h', 'rtc_net.c', 'rtc_transport.h'):
 for source in sorted(streaming.iterdir()):
     if source.is_file() and source.suffix in ('.c', '.h', '.cpp', '.cc', '.cxx', '.hpp'):
         add(source, 'src/streaming/' + source.name)
-add(project / 'src/input/gamepad.h', 'src/input/gamepad.h')
+for name in ('gamepad.h', 'rumble.h', 'rumble.c'):
+    add(project / 'src/input' / name, 'src/input/' + name)
 
 # Record the exact file bytes first and verify every original after the copy.
 # A simultaneous vendor edit makes the export fail instead of producing a
