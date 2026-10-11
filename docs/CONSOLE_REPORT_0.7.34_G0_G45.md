@@ -76,7 +76,7 @@ General operation detail remains incomplete: progress event admissions omitted *
 
 ## Preservation, lifecycle and next step
 
-Each legacy/progress pair was read twice by FTP with identical bytes, then matched by internal build identity, local session, reader count and first/last NEW. Both retain sampler start/join return **0**, lifecycle flags **15**, session end and no open pause. G45's PC Klog also retains successful local numeric export results. The original one-hour PC Klog capture expired before continuous G0 coverage could be established; G0's saved numeric exports supply its evidence. Later backlog reception is not proof of uninterrupted PC capture or a shared administrative/media clock.
+Each legacy/progress pair was read twice by FTP with identical bytes. Build identity comes from the progress header; its paired legacy export agrees on local session, reader count and first/last NEW. Both retain sampler start/join return **0**, lifecycle flags **15**, session end and no open pause. G45's PC Klog also retains successful local numeric export results. The original one-hour PC Klog capture expired before continuous G0 coverage could be established; G0's saved numeric exports supply its evidence. Later backlog reception is not proof of uninterrupted PC capture or a shared administrative/media clock.
 
 Raw exports, source/SSRC identities, detailed derived JSON and administrative logs remain private. Package/source hashes and the actual native/host preparation scope remain in [the release notes](RELEASE_NOTES_0.7.34.md); original 0.7.33 evidence stays preserved. Two independent parsing/pair/coverage checks support this report.
 
