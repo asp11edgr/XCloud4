@@ -2,6 +2,7 @@
 #include "live_media.h"
 #include "video_ingress.h"
 #include "nack_grace.h"
+#include "nack_sequence_binding.h"
 #include "../streaming/nack_grace_inbox.h"
 #include "../streaming/rtc_receive_diag.h"
 #include "../video/live_h264.h"
@@ -18,7 +19,9 @@ static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p
 #endif
 enum { GR_CONTROL_REQUEST=1, GR_CONTROL_OUTCOME, GR_OFFER, GR_RELEASE,
     GR_CALLBACK, GR_QUEUE_POP, GR_WORKER_ACCEPT, GR_WORK_COST, GR_QUEUE_AGE,
-    GR_COUNTER, GR_HOLD_BEGIN, GR_ABANDON };
+    GR_COUNTER, GR_HOLD_BEGIN, GR_ABANDON,
+    GR_SEQUENCE_ANNOUNCE, GR_SEQUENCE_CLOCK, GR_OBS_OMISSION, GR_OBS_RESET,
+    GR_BIND_CANDIDATE, GR_BIND_PROOF, GR_BIND_COMMIT, GR_BIND_REJECT, GR_BIND_MAP };
 /* Legacy trace schema excludes SSRC. The private progress sidecar records
  * numeric SSRC/sequence only; neither format contains payloads or credentials.
  * MEDIA events 0x100..0x13f are reserved in live_trace.h. */
@@ -151,6 +154,10 @@ struct X4LiveMedia {
     uint64_t au_ticket_omissions, reorder_ticket_omissions;
     X4NackGraceInbox grace_inbox;
     X4NackGraceState grace;
+    X4NackSequenceBinding grace_binding;
+    uint64_t binding_reject_source,binding_reject_omitted;
+    uint32_t binding_reject_epoch,binding_reject_flags;
+    bool binding_reject_valid;
     uint64_t grace_controls, grace_seen_omissions;
     uint64_t grace_decode_start[64], grace_copy_start[64], grace_convert_start[64];
     uint64_t grace_max_dwell[64];
@@ -485,8 +492,9 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         parsed >= 0 ? r.ssrc : 0, parsed >= 0 ? r.sequence : 0, size, callback_begin);
     X4IngressResult result = { .reason = X4_INGRESS_INVALID };
     X4NackPacket delivered = x4_rtc_nack_delivery_ticket();
-    X4IngressTicket ticket = {delivered.identity, delivered.source, delivered.extended_sequence,
-        delivered.rtp_timestamp, delivered.authenticated_us};
+    X4IngressTicket ticket = {.identity=delivered.identity,.source=delivered.source,
+        .extended_sequence=delivered.extended_sequence,.rtp_timestamp=delivered.rtp_timestamp,
+        .authenticated_us=delivered.authenticated_us,.sequence=delivered.sequence};
     uint64_t source = parsed >= 0 ? (1ull<<63) | ((uint64_t)r.payload_type<<32) | r.ssrc : 0;
     if (parsed < 0 || ticket.source != source || (uint16_t)ticket.extended_sequence != r.sequence ||
         ticket.rtp_timestamp != r.timestamp) ticket = (X4IngressTicket){0};
@@ -571,6 +579,50 @@ static void grace_effects(X4LiveMedia *m,X4NackGraceEffects effects)
             oldest&&now>=oldest?now-oldest:0,x4_video_ingress_depth(&m->ingress),m->grace_max_dwell[i]);
     }
 }
+static void grace_binding_reject(X4LiveMedia *m,unsigned flags,uint32_t sequence_epoch,
+    uint64_t identity,uint64_t source,uint64_t a,uint64_t b,uint64_t c)
+{
+    if(m->binding_reject_valid && m->binding_reject_source==source &&
+        m->binding_reject_epoch==sequence_epoch && m->binding_reject_flags==flags) {
+        ++m->binding_reject_omitted; return;
+    }
+    m->binding_reject_valid=true; m->binding_reject_source=source;
+    m->binding_reject_epoch=sequence_epoch; m->binding_reject_flags=flags;
+    grace_record(m,GR_BIND_REJECT,flags,identity,source,a,b,c);
+}
+static void grace_binding_result(X4LiveMedia *m,int result,const X4NackSequenceTag *tag,uint64_t source)
+{
+    uint64_t identity=((uint64_t)tag->transport_epoch<<32)|tag->sequence_epoch;
+    if(result==X4_BINDING_CANDIDATE || result==X4_BINDING_PROOF || result==X4_BINDING_COMMITTED) {
+        /* An announced or media-proven transition removes old holds. It does
+         * not force a gap, flush media, restart recovery or refund attempts. */
+        grace_effects(m,x4_nack_grace_unbind_source(&m->grace));
+        m->grace_force_gap=false; m->grace_force_ranges=0;
+    }
+    if(result==X4_BINDING_COMMITTED) {
+        grace_effects(m,x4_nack_grace_bind_source(&m->grace,(uint32_t)source,tag->sequence_epoch));
+        grace_record(m,GR_BIND_COMMIT,tag->reason,identity,source,tag->anchor_extended,
+            tag->anchor_extended+m->grace_binding.canonical_offset,m->grace_binding.canonical_offset);
+    } else if(result==X4_BINDING_CANDIDATE) {
+        grace_record(m,GR_BIND_CANDIDATE,tag->reason,identity,source,tag->anchor_extended,
+            tag->previous_high_extended,tag->previous_epoch);
+    } else if(result==X4_BINDING_PROOF) {
+        grace_record(m,GR_BIND_PROOF,tag->reason,identity,source,tag->anchor_extended,
+            tag->anchor_rtp_timestamp,m->grace_binding.proof_authenticated_us);
+    } else if(result!=X4_BINDING_NONE && result!=X4_BINDING_DUPLICATE && result!=X4_BINDING_UNPROVEN) {
+        grace_binding_reject(m,(unsigned)result|(tag->reason<<8),tag->sequence_epoch,identity,source,
+            tag->anchor_extended,tag->previous_high_extended,m->grace_binding.committed.sequence_epoch);
+    }
+}
+static bool grace_ticket_map(X4LiveMedia *m,const X4IngressTicket *ticket,
+    const X4LiveRtp *rtp,uint64_t *canonical)
+{
+    if(ticket->source!=grace_source(m) || ticket->rtp_timestamp!=rtp->timestamp ||
+        rtp->payload_type!=102 || rtp->ssrc!=m->track.ssrc) return false;
+    return x4_nack_binding_map(&m->grace_binding,&ticket->sequence,ticket->source,
+        ticket->extended_sequence,rtp->sequence,rtp->timestamp,ticket->authenticated_us,
+        x4_trace_now_us(),canonical);
+}
 static void grace_controls(X4LiveMedia *m)
 {
     uint64_t omitted=atomic_load_explicit(&m->grace_inbox.omitted,memory_order_relaxed);
@@ -583,19 +635,92 @@ static void grace_controls(X4LiveMedia *m)
     }
     if(!m->track.locked) return; /* First accepted packet owns source binding. */
     X4NackGraceControl control;
-    for(unsigned n=0;n<X4_GRACE_INBOX_CAP&&x4_nack_grace_inbox_pop(&m->grace_inbox,&control);++n) {
+    for(unsigned n=0;n<X4_GRACE_INBOX_CAP&&x4_nack_grace_inbox_peek(&m->grace_inbox,&control);++n) {
+        uint64_t now=x4_trace_now_us();
+        uint32_t transport=(uint32_t)(control.identity>>32);
+        uint32_t owner=atomic_load_explicit(&m->grace_inbox.epoch,memory_order_relaxed);
+        unsigned ordinal=(uint32_t)control.identity;
+        unsigned highest=0;
+        for(uint64_t bits=control.original_mask;bits>1;bits>>=1) ++highest;
+        bool request_shape=ordinal && ordinal<=64 && control.sequence_epoch && control.original_mask &&
+            control.detected_us<=now && control.detected_us<=UINT64_MAX-X4_NACK_GRACE_US &&
+            control.deadline_us==control.detected_us+X4_NACK_GRACE_US &&
+            control.first_extended<=UINT64_MAX-highest;
+        bool request_seen=ordinal && ordinal<=64 &&
+            (m->grace.seen_request_ids&(UINT64_C(1)<<(ordinal-1)));
+        /* Waiting preserves the existing FIFO cell, never stops media. It
+         * ends at the original absolute deadline even if no anchor appears.
+         * A later proven anchor may bind future requests, not renew this one. */
+        if(control.kind==X4_NACK_GRACE_REQUEST && transport==owner && !m->grace.closed &&
+            request_shape && !request_seen &&
+            x4_nack_binding_waiting(&m->grace_binding,control.source,transport,control.sequence_epoch) &&
+            control.detected_us<=UINT64_MAX-X4_NACK_GRACE_US &&
+            now<control.detected_us+X4_NACK_GRACE_US) break;
+        if(!x4_nack_grace_inbox_pop(&m->grace_inbox,&control)) break;
         ++m->grace_controls;
-        if(control.kind==X4_NACK_GRACE_REQUEST) {
+        if(!owner || transport!=owner || control.source!=grace_source(m)) {
+            grace_binding_reject(m,X4_BINDING_STALE,control.sequence_epoch,control.identity,control.source,
+                control.first_extended,control.sequence_epoch,owner);
+            continue;
+        }
+        if(control.kind==X4_NACK_GRACE_SEQUENCE) {
+            X4NackSequenceTag tag={.transport_epoch=transport,.sequence_epoch=control.sequence_epoch,
+                .anchor_extended=control.first_extended,.previous_high_extended=control.original_mask,
+                .previous_epoch=(uint32_t)control.selected_mask,.anchor_us=control.detected_us,
+                .anchor_rtp_timestamp=(uint32_t)control.attempt_start_us,.reason=control.reason};
+            int result=(control.selected_mask>UINT32_MAX || control.attempt_start_us>UINT32_MAX ||
+                (uint32_t)control.identity!=control.sequence_epoch || control.deadline_us ||
+                control.local_return_us || control.local_result) ? X4_BINDING_INVALID :
+                x4_nack_binding_announce(&m->grace_binding,&tag,control.source,now);
+            if(result==X4_BINDING_INVALID && tag.sequence_epoch>=m->grace_binding.committed.sequence_epoch) {
+                /* Unknown/contradictory newer provenance cannot keep old
+                 * protection alive. It also cannot establish a new binding. */
+                grace_effects(m,x4_nack_grace_unbind_source(&m->grace));
+                m->grace_force_gap=false; m->grace_force_ranges=0;
+            }
+            grace_binding_result(m,result,&tag,control.source);
+        } else if(control.kind==X4_NACK_GRACE_REQUEST) {
             grace_record(m,GR_CONTROL_REQUEST,0,control.identity,control.source,
                 control.first_extended,control.original_mask,control.detected_us);
+            uint64_t canonical=control.first_extended;
+            bool mapped=x4_nack_binding_offer_map(&m->grace_binding,control.source,transport,
+                control.sequence_epoch,control.first_extended,control.original_mask,&canonical);
             X4NackGraceRequest request={m->trace_session,control.identity,
-                control.first_extended,control.original_mask,control.detected_us,
+                canonical,control.original_mask,control.detected_us,
                 (uint32_t)control.source,control.sequence_epoch};
             X4NackGraceEffects effects;
-            uint64_t now=x4_trace_now_us();
-            int offer=x4_nack_grace_offer(&m->grace,&request,now,&effects);
+            int offer;
+            if(!request_shape) {
+                effects=(X4NackGraceEffects){0};
+                ++m->grace.counters.offers; ++m->grace.counters.invalid_offers;
+                offer=X4_GRACE_OFFER_INVALID;
+            } else if(mapped) {
+                grace_record(m,GR_BIND_MAP,0,control.identity,control.source,
+                    control.first_extended,canonical,control.sequence_epoch);
+                offer=x4_nack_grace_offer(&m->grace,&request,now,&effects);
+                /* A coherent current-owner attempt can map while grace was
+                 * safely unbound by a contradictory transition. Consumption
+                 * still burns its ID: a later proven rebase cannot revive it. */
+                if(offer==X4_GRACE_OFFER_STALE_SOURCE)
+                    m->grace.seen_request_ids|=UINT64_C(1)<<(ordinal-1);
+            } else {
+                /* Preserve offer accounting without allowing an unproven
+                 * tag to initialize a source or reinterpret an old mask. */
+                effects=(X4NackGraceEffects){0};
+                ++m->grace.counters.offers;
+                if(request_seen) {
+                    ++m->grace.counters.duplicate_offers; offer=X4_GRACE_OFFER_DUPLICATE;
+                } else {
+                    /* Burn the consumed opaque attempt ID, without storing
+                     * its unproven raw mask as a canonical tombstone. A later
+                     * copy cannot receive a renewed grace deadline. */
+                    m->grace.seen_request_ids|=UINT64_C(1)<<(ordinal-1);
+                    ++m->grace.counters.stale_source_offers; offer=X4_GRACE_OFFER_STALE_SOURCE;
+                }
+                grace_binding_reject(m,X4_BINDING_UNPROVEN,control.sequence_epoch,
+                    control.identity,control.source,control.first_extended,control.deadline_us,now);
+            }
             grace_effects(m,effects);
-            unsigned ordinal=(uint32_t)control.identity;
             X4NackGraceRange *r=ordinal&&ordinal<=64?&m->grace.ranges[ordinal-1]:NULL;
             grace_record(m,GR_OFFER,0,control.identity,control.source,
                 control.deadline_us,r?r->granted_mask:0,((uint64_t)m->reorder.buffered<<32)|(unsigned)offer);
@@ -606,13 +731,31 @@ static void grace_controls(X4LiveMedia *m)
                 m->grace_convert_start[i]=m->video.convert_us+m->video_totals.convert_us;
                 /* Controls may reach the worker after a requested packet was
                  * already STORED. Callback/AUTH alone never clear pending. */
-                for(unsigned slot=0;slot<m->reorder.window;++slot) if(m->reorder.slots[slot].used)
-                    grace_effects(m,x4_nack_grace_accepted_wire(&m->grace,m->track.ssrc,
-                        m->grace.sequence_epoch,m->reorder.slots[slot].sequence,x4_trace_now_us()));
+                for(unsigned slot=0;slot<m->reorder.window;++slot) if(m->reorder.slots[slot].used) {
+                    X4LiveRtp rtp;
+                    const X4LiveReorderSlot *stored=&m->reorder.slots[slot];
+                    uint64_t position;
+                    if(x4_live_rtp_parse(m->reorder.data+(size_t)slot*X4_LIVE_RTP_MAX,stored->size,&rtp)>=0 &&
+                        grace_ticket_map(m,&m->reorder_tickets[slot],&rtp,&position))
+                        grace_effects(m,x4_nack_grace_accepted_extended(&m->grace,rtp.ssrc,
+                            m->reorder_tickets[slot].sequence.sequence_epoch,position,x4_trace_now_us()));
+                }
             }
         } else if(control.kind==X4_NACK_GRACE_OUTCOME) {
-            grace_record(m,GR_CONTROL_OUTCOME,((unsigned)(control.local_result+2)&255u)|(control.reason<<8),
+            /* Receipt retains the local return clock, including retired old
+             * epochs. Recording it is not permission to cancel worker grace. */
+            grace_record(m,GR_CONTROL_OUTCOME,(((uint32_t)control.local_result+2u)&255u)|(control.reason<<8),
                 control.identity,control.source,control.attempt_start_us,control.local_return_us,control.selected_mask);
+            unsigned ordinal=(uint32_t)control.identity;
+            const X4NackGraceRange *range=ordinal && ordinal<=64 ? &m->grace.ranges[ordinal-1] : NULL;
+            if(!m->grace_binding.bound || m->grace_binding.candidate_valid ||
+                control.sequence_epoch!=m->grace_binding.committed.sequence_epoch ||
+                !range || range->identity!=control.identity || range->ssrc!=(uint32_t)control.source ||
+                range->sequence_epoch!=control.sequence_epoch) {
+                grace_binding_reject(m,X4_BINDING_STALE,control.sequence_epoch,control.identity,control.source,
+                    control.first_extended,control.sequence_epoch,m->grace_binding.committed.sequence_epoch);
+                continue;
+            }
             if((control.reason==X4_NACK_GRACE_ATTEMPT && control.local_result!=1) ||
                 control.reason==X4_NACK_GRACE_CANCEL_RETIRED || control.reason==X4_NACK_GRACE_CANCEL_CLOSING)
                 grace_effects(m,x4_nack_grace_cancel(&m->grace,control.identity,X4_GRACE_RELEASE_TRANSPORT));
@@ -1025,10 +1168,10 @@ static void video_batch(X4LiveMedia *m)
             memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
             x4_trace_record(m->trace, MT_TRACK, locked ? 1u : 0u, ++m->trace_track_epoch, r.sequence);
             reset_au(m, true, RESET_TRACK, locked ? 1u : 0u); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
-            /* Vendor original-video observation starts at sequence epoch1.
-             * A later vendor rebase is not permission to rebind the accepted
-             * worker source; such controls fail closed until a fresh session. */
-            grace_effects(m,x4_nack_grace_bind_source(&m->grace,r.ssrc,1));
+            /* Session/Track owner establish the expected source and transport.
+             * Neither SEQUENCE nor REQUEST is allowed to initialize them. */
+            x4_nack_binding_init(&m->grace_binding,
+                atomic_load_explicit(&m->grace_inbox.epoch,memory_order_relaxed),grace_source(m));
             if (locked) {
                 int rc = x4_live_video_stop(&m->video); if (rc < 0) goto finish;
                 retire_video_counters(m);
@@ -1057,13 +1200,16 @@ static void video_batch(X4LiveMedia *m)
                 nack_reject = 2u;
         }
         int rc = x4_live_reorder_insert(&m->reorder, packet, size, r.sequence, sceKernelGetProcessTime());
+        if(rc!=X4_LIVE_REORDER_STORED && ticket.sequence.sequence_epoch &&
+            ticket.extended_sequence==ticket.sequence.anchor_extended &&
+            r.timestamp==ticket.sequence.anchor_rtp_timestamp)
+            grace_binding_reject(m,X4_BINDING_UNPROVEN|(ticket.sequence.reason<<8),ticket.sequence.sequence_epoch,
+                ((uint64_t)ticket.sequence.transport_epoch<<32)|ticket.sequence.sequence_epoch,
+                ticket.source,ticket.sequence.anchor_extended,rc,m->grace_binding.committed.sequence_epoch);
         if(rc==X4_LIVE_REORDER_JUMP) {
             for(unsigned i=0;i<64;++i) if(m->grace.ranges[i].active)
                 grace_effects(m,x4_nack_grace_cancel(&m->grace,m->grace.ranges[i].identity,X4_GRACE_RELEASE_SOURCE));
             m->grace_force_gap=false; m->grace_force_ranges=0;
-        } else if(rc==X4_LIVE_REORDER_STORED) {
-            grace_effects(m,x4_nack_grace_accepted_wire(&m->grace,r.ssrc,
-                m->grace.sequence_epoch,r.sequence,x4_trace_now_us()));
         }
         if (rc == X4_LIVE_REORDER_JUMP) memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
         if (ticket.identity) x4_trace_monitor_critical(m->trace, x4_trace_now_us(),
@@ -1077,6 +1223,21 @@ static void video_batch(X4LiveMedia *m)
                 ticket.extended_sequence,((uint64_t)expected<<32)|buffered,deadline);
         }
         if (rc != X4_LIVE_REORDER_LATE) m->reorder_tickets[r.sequence & 127u] = ticket;
+        if(rc==X4_LIVE_REORDER_STORED) {
+            uint64_t canonical=0;
+            int binding=x4_nack_binding_stored(&m->grace_binding,&ticket.sequence,ticket.source,
+                ticket.extended_sequence,r.sequence,r.timestamp,ticket.authenticated_us,
+                x4_trace_now_us(),&canonical);
+            grace_binding_result(m,binding,&ticket.sequence,ticket.source);
+            /* The exact anchor may now confirm the already announced epoch.
+             * Drain controls before emit so queued returns can reconcile only
+             * against retained slots from the same proven canonical domain. */
+            if(binding==X4_BINDING_COMMITTED || binding==X4_BINDING_PROOF)
+                grace_controls(m);
+            if(grace_ticket_map(m,&ticket,&r,&canonical))
+                grace_effects(m,x4_nack_grace_accepted_extended(&m->grace,r.ssrc,
+                    ticket.sequence.sequence_epoch,canonical,x4_trace_now_us()));
+        }
         if (rc == X4_LIVE_REORDER_JUMP)
             x4_trace_record(m->trace, X4_TRACE_REORDER_WINDOW_JUMP, 0,
                 ((uint64_t)expected << 32) | r.sequence, buffered);
@@ -1149,6 +1310,16 @@ static void *video_worker(void *context)
         X4_NACK_GRACE_MS,X4_RUMBLE};
     for(unsigned i=0;i<sizeof(grace_counters)/sizeof(grace_counters[0]);++i)
         grace_record(m,GR_COUNTER,0,0,0,100+i,grace_counters[i],0);
+    const X4NackBindingCounters *bc=&m->grace_binding.counters;
+    const uint64_t binding_counters[]={bc->announcements,bc->candidates,bc->commits,bc->duplicates,
+        bc->stale,bc->invalid,bc->proofs,bc->unproven,bc->mapping_checks,
+        bc->unmapped_provenance,bc->mapped_offers};
+    for(unsigned i=0;i<sizeof(binding_counters)/sizeof(binding_counters[0]);++i)
+        grace_record(m,GR_COUNTER,0,0,0,116+i,binding_counters[i],0);
+    grace_record(m,GR_COUNTER,0,0,0,127,m->binding_reject_omitted,0);
+    grace_record(m,GR_COUNTER,0,0,0,128,
+        atomic_load_explicit(&m->grace_inbox.enqueue,memory_order_acquire)-
+        atomic_load_explicit(&m->grace_inbox.dequeue,memory_order_relaxed),0);
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STOPPING, 0);
     m->worker_close_result = x4_live_video_stop(&m->video);
     for (unsigned i = 0; i < RESET_COUNT; ++i) {

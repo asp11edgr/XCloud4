@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "nack_sequence.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,18 +65,27 @@ int x4_rtc_poll_receiver_nack(int track);
 int x4_rtc_close_receiver_nack(int track);
 void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     uint64_t source, uint64_t a, uint64_t b, uint64_t c);
+/* For event31 vendor sequence observations only, flags encodes
+ * low8=subkind13..16 and high bits=record flags. Other events unchanged. */
 /* Track-pop thread owns this numeric ticket until its next delivery.
- * authenticated_us observes the first watched sequence recognized by the
- * generator after authenticated provenance, ReceivingSession and full RTP
- * validation. It is not an exact socket-read/unprotect completion timestamp.
- * Zero means no recognized first return on this Message, not no reception. */
+ * authenticated_us observes generator recognition after authenticated
+ * provenance, ReceivingSession and full RTP validation. Ordinary packets now
+ * carry sequence provenance too; identity!=0 still means a recognized first
+ * watched return. This is not the exact socket-read/unprotect completion.
+ * A zero tag means no usable observer provenance, not no reception. */
 typedef struct {
     uint64_t identity, source, extended_sequence, rtp_timestamp;
     uint64_t authenticated_us;
+    X4NackSequenceTag sequence;
 } X4NackPacket;
 void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
     uint64_t extended_sequence, uint32_t rtp_timestamp, uint64_t authenticated_us);
 X4NackPacket x4_rtc_nack_delivery_ticket(void);
+/* Track-pop provenance for ALL validated original-video messages, independent
+ * of a watched NACK return. A missing tag never manufactures authentication.
+ * Called together with the existing delivery ticket before the app callback.
+ */
+void x4_rtc_nack_sequence_delivery(const X4NackSequenceTag *sequence);
 /* Functional control for the existing original-video receiver generator.
  * The application binds an independently bounded inbox to the current
  * transport epoch. Producers never wait, allocate or print; false reports
@@ -92,6 +102,7 @@ X4NackPacket x4_rtc_nack_delivery_ticket(void);
  * A true local_result does not establish remote delivery. */
 enum {
     X4_NACK_GRACE_REQUEST = 1, X4_NACK_GRACE_OUTCOME = 2,
+    X4_NACK_GRACE_SEQUENCE = 3,
     X4_NACK_GRACE_MAX_US = 45000,
     X4_NACK_GRACE_NOT_ATTEMPTED = -2,
     X4_NACK_GRACE_EXCEPTION = -1,
@@ -107,6 +118,16 @@ typedef struct {
     int32_t local_result;
     uint32_t reason;
 } X4NackGraceControl;
+/* SEQUENCE reuses the fixed control cell, never a REQUEST:
+ * identity = owner transport_epoch<<32 | new sequence_epoch;
+ * source = packed original PT102/SSRC;
+ * sequence_epoch = new; first_extended = anchor raw extended;
+ * original_mask = previous raw high; selected_mask = previous epoch;
+ * detected_us = anchor clock; attempt_start_us = anchor RTP timestamp;
+ * deadline_us/local_return_us =0; local_result=0; reason=sequence reason.
+ * It is an announcement only. Media provenance and actual worker STORED must
+ * confirm it before any binding change. A transition never renews deadlines.
+ */
 bool x4_rtc_nack_grace_control(const X4NackGraceControl *control);
 #ifdef __cplusplus
 }

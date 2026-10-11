@@ -76,8 +76,23 @@ int main(void)
     X4NackPacket ticket=x4_rtc_nack_delivery_ticket();
     assert(ticket.identity==0x100000002ull && ticket.source==0x8000006612345678ull &&
         ticket.extended_sequence==65536 && ticket.rtp_timestamp==789 && ticket.authenticated_us==123456);
+    assert(!ticket.sequence.sequence_epoch);
+    X4NackSequenceTag sequence={.anchor_extended=6,.previous_high_extended=65538,
+        .anchor_us=123000,.transport_epoch=1,.sequence_epoch=2,.previous_epoch=1,
+        .anchor_rtp_timestamp=789,.reason=X4_NACK_SEQUENCE_OMISSION};
+    x4_rtc_nack_sequence_delivery(&sequence);ticket=x4_rtc_nack_delivery_ticket();
+    assert(ticket.sequence.sequence_epoch==2&&ticket.sequence.transport_epoch==1&&
+        ticket.sequence.anchor_extended==6&&ticket.sequence.previous_high_extended==65538&&
+        ticket.identity==0x100000002ull);
     x4_rtc_nack_delivery(0,0,0,0,0);ticket=x4_rtc_nack_delivery_ticket();
-    assert(!ticket.identity && !ticket.source && !ticket.extended_sequence && !ticket.rtp_timestamp && !ticket.authenticated_us);
+    assert(!ticket.identity && !ticket.source && !ticket.extended_sequence && !ticket.rtp_timestamp && !ticket.authenticated_us&&
+        !ticket.sequence.sequence_epoch&&!ticket.sequence.transport_epoch);
+    x4_rtc_nack_delivery(0,0x8000006612345678ull,6,789,123456);
+    x4_rtc_nack_sequence_delivery(&sequence);ticket=x4_rtc_nack_delivery_ticket();
+    assert(!ticket.identity&&ticket.sequence.sequence_epoch==2&&ticket.source);
+    x4_rtc_nack_sequence_delivery(NULL);ticket=x4_rtc_nack_delivery_ticket();
+    assert(!ticket.sequence.sequence_epoch&&!ticket.identity&&ticket.source);
+    puts("PASS ordinary provenance, watched ticket, and delivery reset remain separate");
     puts("PASS numeric NACK critical observation and clearing of delivery tickets");
     atomic_store(&hold,true);pthread_t writer,closer;
     assert(!pthread_create(&writer,NULL,producer,NULL));while(!atomic_load(&entered))usleep(50);

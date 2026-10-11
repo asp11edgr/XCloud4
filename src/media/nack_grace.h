@@ -141,10 +141,19 @@ typedef struct {
 void x4_nack_grace_init(X4NackGraceState *state, uint64_t session_id, bool enabled);
 X4NackGraceEffects x4_nack_grace_bind_source(X4NackGraceState *state,
     uint32_t ssrc, uint32_t sequence_epoch);
+/* Announced observer transition retires holds without forcing a reorder gap.
+ * Histories and global64-attempt budget survive. Only a separately proven
+ * worker binding may call bind_source again. */
+X4NackGraceEffects x4_nack_grace_unbind_source(X4NackGraceState *state);
 int x4_nack_grace_offer(X4NackGraceState *state, const X4NackGraceRequest *request,
     uint64_t now_us, X4NackGraceEffects *effects);
 X4NackGraceEffects x4_nack_grace_accepted_wire(X4NackGraceState *state,
     uint32_t ssrc, uint32_t sequence_epoch, uint16_t sequence, uint64_t now_us);
+/* Proven worker positions share one canonical domain across same-source
+ * observer rebases. An old packet with the same low16 sequence cannot accept
+ * a position in a different canonical cycle. */
+X4NackGraceEffects x4_nack_grace_accepted_extended(X4NackGraceState *state,
+    uint32_t ssrc, uint32_t sequence_epoch, uint64_t canonical_sequence, uint64_t now_us);
 X4NackGraceDecision x4_nack_grace_query(X4NackGraceState *state,
     uint16_t expected, uint32_t buffered, uint32_t furthest_forward_offset,
     uint64_t now_us);

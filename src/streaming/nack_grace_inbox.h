@@ -18,5 +18,8 @@ typedef struct X4NackGraceInbox {
  * Callback producers do at most16 CAS attempts; no allocation/wait/I/O. */
 void x4_nack_grace_inbox_init(X4NackGraceInbox *);
 bool x4_nack_grace_inbox_pop(X4NackGraceInbox *, X4NackGraceControl *);
+/* Single consumer only: observe the published head without releasing its
+ * fixed cell. Media continues while an unproven request waits in this FIFO. */
+bool x4_nack_grace_inbox_peek(X4NackGraceInbox *, X4NackGraceControl *);
 void x4_nack_grace_inbox_bind(X4NackGraceInbox *, uint32_t transport_epoch);
 void x4_nack_grace_inbox_unbind(X4NackGraceInbox *);

@@ -98,6 +98,15 @@ X4NackGraceEffects x4_nack_grace_bind_source(X4NackGraceState *state,
     return effects;
 }
 
+X4NackGraceEffects x4_nack_grace_unbind_source(X4NackGraceState *state)
+{
+    X4NackGraceEffects effects = {0};
+    if (!state) return effects;
+    retire_all(state, X4_GRACE_RELEASE_SOURCE, &effects);
+    state->bound = false;
+    return effects;
+}
+
 int x4_nack_grace_offer(X4NackGraceState *state, const X4NackGraceRequest *request,
     uint64_t now_us, X4NackGraceEffects *effects_out)
 {
@@ -151,13 +160,13 @@ int x4_nack_grace_offer(X4NackGraceState *state, const X4NackGraceRequest *reque
     }
     uint64_t grant = request->missing_mask;
     /* Fixed64 histories x fixed64 bits; no scanning a sequence-sized gap.
-     * The masks belong to actual extended positions within one source epoch. */
+     * Positions are canonical across separately proven same-source epochs.
+     * A rebase cannot renew a tombstoned position by changing epoch alone. */
     for (unsigned bit = 0; bit < 64; ++bit) if (grant & (UINT64_C(1) << bit)) {
         uint64_t position = request->first_extended + bit;
         for (unsigned i = 0; i < X4_NACK_GRACE_REQUEST_MAX; ++i) {
             const X4NackGraceRange *old = &state->ranges[i];
-            if (old == range || !old->seen || old->ssrc != request->ssrc ||
-                old->sequence_epoch != request->sequence_epoch || position < old->first_extended)
+            if (old == range || !old->seen || old->ssrc != request->ssrc || position < old->first_extended)
                 continue;
             uint64_t offset = position - old->first_extended;
             if (offset < 64 && (old->original_mask & (UINT64_C(1) << offset))) {
@@ -188,6 +197,29 @@ X4NackGraceEffects x4_nack_grace_accepted_wire(X4NackGraceState *state,
         X4NackGraceRange *range = &state->ranges[i];
         if (!range->active || !pending_at(range, sequence)) continue;
         uint16_t offset = (uint16_t)(sequence - (uint16_t)range->first_extended);
+        uint64_t bit = UINT64_C(1) << offset;
+        range->pending_mask &= ~bit; range->accepted_mask |= bit;
+        ++state->counters.accepted_positions; --state->counters.pending_positions;
+        if (!range->pending_mask) retire(state, range,
+            range->accepted_mask == range->granted_mask ? X4_GRACE_RELEASE_ACCEPTED :
+            X4_GRACE_RELEASE_PASSED, &effects);
+    }
+    return effects;
+}
+
+X4NackGraceEffects x4_nack_grace_accepted_extended(X4NackGraceState *state,
+    uint32_t ssrc, uint32_t sequence_epoch, uint64_t sequence, uint64_t now_us)
+{
+    X4NackGraceEffects effects = {0};
+    if (!state || state->closed || !state->bound || state->ssrc != ssrc ||
+        state->sequence_epoch != sequence_epoch) return effects;
+    if (!time_ok(state, now_us, &effects)) return effects;
+    expire(state, now_us, &effects);
+    for (unsigned i = 0; i < X4_NACK_GRACE_REQUEST_MAX; ++i) {
+        X4NackGraceRange *range = &state->ranges[i];
+        if (!range->active || sequence < range->first_extended) continue;
+        uint64_t offset = sequence - range->first_extended;
+        if (offset >= 64 || !(range->pending_mask & (UINT64_C(1) << offset))) continue;
         uint64_t bit = UINT64_C(1) << offset;
         range->pending_mask &= ~bit; range->accepted_mask |= bit;
         ++state->counters.accepted_positions; --state->counters.pending_positions;

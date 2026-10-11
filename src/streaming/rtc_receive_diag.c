@@ -170,7 +170,12 @@ void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     int saved = errno;
     uint64_t now = x4_rtc_receive_clock();
     X4Trace *trace = enter();
-    if (trace) x4_trace_monitor_critical(trace, now, event, 0xffffu, flags,
+    /* The newly used vendor sequence records share critical31 with worker
+     * grace records. Low byte selects subkind13..16, remaining bits are its
+     * flags. No extra critical-counter slot or record capacity is allocated. */
+    unsigned stage = event == X4_MON_CR_NACK_GRACE ? flags & 255u : 0xffffu;
+    unsigned record_flags = event == X4_MON_CR_NACK_GRACE ? flags >> 8 : flags;
+    if (trace) x4_trace_monitor_critical(trace, now, event, stage, record_flags,
         identity, source, a, b, c);
     leave(); errno = saved;
 }
@@ -178,7 +183,15 @@ void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
     uint64_t extended_sequence, uint32_t rtp_timestamp, uint64_t authenticated_us)
 {
     ReceiveThread *slot = thread_slot();
-    if (slot) slot->nack = (X4NackPacket){identity, source, extended_sequence, rtp_timestamp, authenticated_us};
+    if (slot) slot->nack = (X4NackPacket){.identity=identity, .source=source,
+        .extended_sequence=extended_sequence, .rtp_timestamp=rtp_timestamp,
+        .authenticated_us=authenticated_us};
+    else atomic_fetch_add_explicit(&nack_ticket_omissions,1,memory_order_relaxed);
+}
+void x4_rtc_nack_sequence_delivery(const X4NackSequenceTag *sequence)
+{
+    ReceiveThread *slot = thread_slot();
+    if (slot) slot->nack.sequence = sequence ? *sequence : (X4NackSequenceTag){0};
     else atomic_fetch_add_explicit(&nack_ticket_omissions,1,memory_order_relaxed);
 }
 X4NackPacket x4_rtc_nack_delivery_ticket(void)

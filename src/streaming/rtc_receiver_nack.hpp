@@ -41,6 +41,8 @@ private:
     void graceControl(const X4ReceiverNackGap &gap, unsigned kind,
         uint64_t selectedMask, uint64_t attemptStart, uint64_t localReturn,
         int localResult, unsigned reason);
+    void sequenceControl(uint32_t ssrc, const X4NackSequenceTag &sequence);
+    void resetObserver(unsigned locus);
     const bool mEnabled;
     const uint32_t mEpoch;
     uint32_t mSenderSsrc;
@@ -51,8 +53,9 @@ private:
     std::atomic<bool> mDirty{false};
     std::atomic<unsigned> mQueued{0};
     std::atomic_flag mGate = ATOMIC_FLAG_INIT;
-    std::array<std::atomic<uint64_t>, 7> mExtra{};
+    std::array<std::atomic<uint64_t>, 9> mExtra{};
     X4ReceiverNackState mState{};
+    uint32_t mAnchorTimestamp = 0;
     std::array<Request, X4_RECEIVER_NACK_SESSION_REQUEST_MAX> mRequests{};
     unsigned mNextDispatch = 0;
     bool mFinalCounters = false;

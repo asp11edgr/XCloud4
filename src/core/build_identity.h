@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Frozen native sources plus independent, explicit experiment modes. */
 #pragma once
-#define X4_PRODUCT_VERSION "0.7.34"
-#define X4_SOURCE_ID "54d5793d1b50a7ea24ba73e79b258577f51511c0"
+#define X4_PRODUCT_VERSION "0.7.35"
+#define X4_SOURCE_ID "8425f615c09af4a4d796157922968635fbcad89b"
 #if X4_RECEIVER_NACK
 #define X4_NACK_ID "-n1"
 #else

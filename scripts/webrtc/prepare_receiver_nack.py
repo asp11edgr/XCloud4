@@ -49,13 +49,18 @@ def apply(base):
         """
         path = vendor / relative
         text = edits.get(path, path.read_text(encoding='utf-8'))
-        old, new = anchor + legacy_suffix, anchor + suffix
+        new = anchor + suffix
         if legacy_marker_count is None:
             legacy_marker_count = marker_count - 1
+        legacy = legacy_suffix if isinstance(legacy_suffix, list) else [
+            (legacy_suffix, legacy_marker_count)]
         if text.count(new) == 1 and text.count(marker) == marker_count:
             pass
-        elif text.count(old) == 1 and text.count(marker) == legacy_marker_count:
-            text = text.replace(old, new, 1)
+        elif any(text.count(anchor + value) == 1 and text.count(marker) == count
+            for value, count in legacy):
+            value, _ = next((value, count) for value, count in legacy
+                if text.count(anchor + value) == 1 and text.count(marker) == count)
+            text = text.replace(anchor + value, new, 1)
         elif marker not in text and text.count(anchor) == 1:
             text = text.replace(anchor, new, 1)
         else:
@@ -65,25 +70,35 @@ def apply(base):
     # Keep the complete preceding diagnostic replacements intact so that
     # prepare_receive_diagnostics remains idempotent on the combined overlay.
     old = '\tuint32_t x4DiagFlags = 0; // provenance only\n#endif\n'
-    declarations = ''.join(f'\t{kind} x4Nack{name} = 0;\n' for kind, name in FIELDS)
+    preceding_declarations = ''.join(f'\t{kind} x4Nack{name} = 0;\n' for kind, name in FIELDS)
+    declarations = preceding_declarations + '\tX4NackSequenceTag x4NackSequence{};\n'
     legacy_declarations = ''.join(f'\t{kind} x4Nack{name} = 0;\n' for kind, name in LEGACY_FIELDS)
     known_overlay('include/rtc/message.hpp', old,
-        '#ifdef X4_OPENORBIS\n' + legacy_declarations + '#endif\n',
-        '#ifdef X4_OPENORBIS\n' + declarations + '#endif\n', ' x4Nack', len(FIELDS))
+        [('#ifdef X4_OPENORBIS\n' + legacy_declarations + '#endif\n', len(LEGACY_FIELDS)),
+         ('#ifdef X4_OPENORBIS\n' + preceding_declarations + '#endif\n', len(FIELDS))],
+        '#ifdef X4_OPENORBIS\n' + declarations + '#endif\n', ' x4Nack', len(FIELDS) + 1)
+    patch('include/rtc/message.hpp', '#include "common.hpp"',
+        '#include "common.hpp"\n#ifdef X4_OPENORBIS\n#include <nack_sequence.h>\n#endif')
     old = '\tmessage->x4DiagFlags = orig->x4DiagFlags;\n#endif\n'
-    copies = ''.join(f'\tmessage->x4Nack{name} = orig->x4Nack{name};\n' for _, name in FIELDS)
+    preceding_copies = ''.join(f'\tmessage->x4Nack{name} = orig->x4Nack{name};\n' for _, name in FIELDS)
+    copies = preceding_copies + '\tmessage->x4NackSequence = orig->x4NackSequence;\n'
     legacy_copies = ''.join(f'\tmessage->x4Nack{name} = orig->x4Nack{name};\n' for _, name in LEGACY_FIELDS)
     known_overlay('src/message.cpp', old,
-        '#ifdef X4_OPENORBIS\n' + legacy_copies + '#endif\n',
-        '#ifdef X4_OPENORBIS\n' + copies + '#endif\n', 'message->x4Nack', len(FIELDS))
+        [('#ifdef X4_OPENORBIS\n' + legacy_copies + '#endif\n', len(LEGACY_FIELDS)),
+         ('#ifdef X4_OPENORBIS\n' + preceding_copies + '#endif\n', len(FIELDS))],
+        '#ifdef X4_OPENORBIS\n' + copies + '#endif\n', 'message->x4Nack', len(FIELDS) + 1)
     known_overlay('src/impl/track.cpp',
         'message_variant Track::trackMessageToVariant(message_ptr message) {',
+        [('\n#ifdef X4_OPENORBIS\n'
+        '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
+        '\t    message->x4NackExtended, message->x4NackRtpTimestamp);\n#endif', 1),
+         ('\n#ifdef X4_OPENORBIS\n'
+        '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
+        '\t    message->x4NackExtended, message->x4NackRtpTimestamp, message->x4NackAuthenticated);\n#endif', 1)],
         '\n#ifdef X4_OPENORBIS\n'
         '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
-        '\t    message->x4NackExtended, message->x4NackRtpTimestamp);\n#endif',
-        '\n#ifdef X4_OPENORBIS\n'
-        '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
-        '\t    message->x4NackExtended, message->x4NackRtpTimestamp, message->x4NackAuthenticated);\n#endif',
+        '\t    message->x4NackExtended, message->x4NackRtpTimestamp, message->x4NackAuthenticated);\n'
+        '\tx4_rtc_nack_sequence_delivery(&message->x4NackSequence);\n#endif',
         'x4_rtc_nack_delivery', 1, 1)
     old = '\t\t\t\tif (auto locked = weak_this.lock()) {\n\t\t\t\t\tlocked->transportSend(m);\n\t\t\t\t}\n'
     patch('src/impl/track.cpp', old,
@@ -206,7 +221,7 @@ extern "C" int x4_rtc_close_receiver_nack(int tr) {
     for path, text in edits.items():
         if path.read_text(encoding='utf-8') != text:
             path.write_text(text, encoding='utf-8', newline='\n')
-    for name in ('receiver_nack_state.h', 'rtc_receiver_nack.hpp'):
+    for name in ('receiver_nack_state.h', 'rtc_receiver_nack.hpp', 'nack_sequence.h'):
         target = base / 'overlay' / name
         target.parent.mkdir(parents=True, exist_ok=True)
         data = (source / name).read_bytes()

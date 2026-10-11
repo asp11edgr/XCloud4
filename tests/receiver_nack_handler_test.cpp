@@ -39,12 +39,14 @@ X4_TEST_NOINLINE void operator delete[](void *value, size_t) noexcept { std::fre
 
 namespace {
 static_assert(sizeof(X4NackGraceControl) == 88, "Functional control POD ABI");
-static_assert(sizeof(X4NackPacket) == 40, "Authenticated ticket POD ABI");
+static_assert(sizeof(X4NackSequenceTag) == 48, "Authenticated sequence provenance POD ABI");
+static_assert(sizeof(X4NackPacket) == 88, "Authenticated ticket and sequence provenance POD ABI");
 struct Event { unsigned event, flags; uint64_t identity, source, a, b, c; };
 std::array<Event, 2048> events{};
 std::atomic<unsigned> eventCount{0}, eventOmissions{0};
 std::array<X4NackGraceControl, 256> controls{};
 std::atomic<unsigned> controlCount{0}, controlOmissions{0};
+std::array<std::atomic<unsigned>,4> controlOmittedKind{};
 std::atomic<bool> acceptControls{true}, recordEvents{true};
 std::atomic<uint64_t> testClock{10000};
 std::atomic<uint32_t> entropySender{UINT32_C(0x5a5a5a5a)};
@@ -60,6 +62,7 @@ void fail(const char *expression, int line) {
 void clearEvents() {
     eventCount.store(0); eventOmissions.store(0); testClock.store(10000);
     controlCount.store(0); controlOmissions.store(0); acceptControls.store(true); recordEvents.store(true);
+    for(auto &count : controlOmittedKind) count.store(0);
 }
 unsigned countControl(unsigned kind) {
     unsigned result = 0, total = controlCount.load();
@@ -420,10 +423,13 @@ void failed_and_exception_returns_are_local_observations() {
 void rejected_control_inbox_preserves_nack_budget_and_dispatch() {
     auto value = generator(); acceptControls.store(false);
     incoming(value, rtp(100)); incoming(value, rtp(102));
-    CHECK(controlCount.load() == 0 && controlOmissions.load() == 1);
+    CHECK(controlCount.load() == 0 && controlOmissions.load() == 2);
+    CHECK(controlOmittedKind[X4_NACK_GRACE_SEQUENCE].load() == 1);
+    CHECK(controlOmittedKind[X4_NACK_GRACE_REQUEST].load() == 1);
     unsigned sends = 0;
     CHECK(value->poll([&](rtc::message_ptr) { ++sends; return true; }) == 1);
-    CHECK(controlCount.load() == 0 && controlOmissions.load() == 2 && sends == 1);
+    CHECK(controlCount.load() == 0 && controlOmissions.load() == 3 && sends == 1);
+    CHECK(controlOmittedKind[X4_NACK_GRACE_OUTCOME].load() == 1);
     CHECK(value->poll([&](rtc::message_ptr) { ++sends; return true; }) == 0);
     CHECK(value->close() == 0 && counter(14) == 1);
 }
@@ -454,6 +460,31 @@ void original_sixty_four_bit_mask_and_invalid_deadline_are_explicit() {
     CHECK(request.deadline_us == 0); // Worker bridge must fail closed on this clock.
     CHECK(overflow->close() == 0);
 }
+void ordinary_provenance_copy_and_reused_invalid_messages_are_explicit() {
+    auto value = generator();
+    auto first = rtp(100); incoming(value, first);
+    CHECK(!first->x4NackIdentity && first->x4NackSource && first->x4NackExtended == 100);
+    CHECK(first->x4NackAuthenticated && first->x4NackRtpTimestamp == 12345);
+    CHECK(first->x4NackSequence.transport_epoch == 5 && first->x4NackSequence.sequence_epoch == 1);
+    CHECK(first->x4NackSequence.previous_epoch == 0 && first->x4NackSequence.reason == X4_NACK_SEQUENCE_INITIAL);
+    CHECK(first->x4NackSequence.anchor_extended == 100 && first->x4NackSequence.anchor_rtp_timestamp == 12345);
+    const auto anchor = first->x4NackSequence;
+    auto ordinary = rtp(101); incoming(value, ordinary);
+    CHECK(!ordinary->x4NackIdentity && ordinary->x4NackExtended == 101);
+    CHECK(ordinary->x4NackSequence.anchor_us == anchor.anchor_us);
+    CHECK(ordinary->x4NackSequence.anchor_extended == anchor.anchor_extended);
+    auto copy = rtc::make_message(ordinary->size(), ordinary);
+    CHECK(copy->x4NackSource == ordinary->x4NackSource && copy->x4NackAuthenticated == ordinary->x4NackAuthenticated);
+    CHECK(copy->x4NackSequence.anchor_us == anchor.anchor_us && copy->x4NackSequence.transport_epoch == 5);
+    copy->x4DiagFlags = 0; incoming(value, copy);
+    CHECK(!copy->x4NackIdentity && !copy->x4NackSource && !copy->x4NackAuthenticated);
+    CHECK(!copy->x4NackSequence.sequence_epoch && !copy->x4NackSequence.transport_epoch);
+    ordinary->x4DiagFlags = X4_RD_AUTHENTICATED;
+    reinterpret_cast<uint8_t *>(ordinary->data())[1] = 103;
+    incoming(value, ordinary);
+    CHECK(!ordinary->x4NackIdentity && !ordinary->x4NackSource && !ordinary->x4NackSequence.sequence_epoch);
+    CHECK(countControl(X4_NACK_GRACE_REQUEST) == 0 && value->close() == 0);
+}
 }
 
 extern "C" void x4_native_random_or_exit(void *target, size_t size) {
@@ -476,10 +507,14 @@ extern "C" void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t ident
     }
 }
 extern "C" bool x4_rtc_nack_grace_control(const X4NackGraceControl *control) {
-    if (!acceptControls.load()) { controlOmissions.fetch_add(1); return false; }
+    if (!acceptControls.load()) { controlOmissions.fetch_add(1);
+        if(control->kind < controlOmittedKind.size()) ++controlOmittedKind[control->kind];
+        return false; }
     unsigned slot = controlCount.fetch_add(1);
     if (slot < controls.size()) { controls[slot] = *control; return true; }
-    controlOmissions.fetch_add(1); return false;
+    controlOmissions.fetch_add(1);
+    if(control->kind < controlOmittedKind.size()) ++controlOmittedKind[control->kind];
+    return false;
 }
 
 int main() {
@@ -506,6 +541,7 @@ int main() {
     CASE(rejected_control_inbox_preserves_nack_budget_and_dispatch);
     CASE(closure_and_source_retirement_keep_control_identity);
     CASE(original_sixty_four_bit_mask_and_invalid_deadline_are_explicit);
+    CASE(ordinary_provenance_copy_and_reused_invalid_messages_are_explicit);
     std::printf("PASS receiver NACK production handler: %u cases, %llu checks\n", cases,
         static_cast<unsigned long long>(checks));
     return 0;

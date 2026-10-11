@@ -39,11 +39,22 @@ static void retire_ranges(X4ReceiverNackState *state, enum RetireReason reason)
     memset(state->ranges, 0, sizeof(state->ranges));
 }
 
-static void begin_sequence_epoch(X4ReceiverNackState *state, uint16_t sequence)
+static void begin_sequence_epoch(X4ReceiverNackState *state, uint16_t sequence,
+    uint64_t monotonic_us, uint32_t reason, uint32_t previous_epoch,
+    uint64_t previous_high_extended)
 {
     ++state->sequence_epoch;
     state->high_extended = sequence;
     state->recent_seen = 1;
+    state->sequence_tag = (X4NackSequenceTag){
+        .anchor_extended = sequence,
+        .previous_high_extended = previous_high_extended,
+        .anchor_us = monotonic_us,
+        .sequence_epoch = state->sequence_epoch,
+        .previous_epoch = previous_epoch,
+        .reason = reason
+    };
+    state->rebase_pending = false;
 }
 
 void x4_receiver_nack_init(X4ReceiverNackState *state, bool enabled)
@@ -63,10 +74,17 @@ void x4_receiver_nack_discontinuity(X4ReceiverNackState *state)
 {
     if (state->closed) return;
     ++state->counters.observer_discontinuities;
+    if (state->bound) {
+        state->rebase_high_extended = state->high_extended;
+        state->rebase_previous_epoch = state->sequence_epoch;
+        state->rebase_previous_ssrc = state->ssrc;
+        state->rebase_pending = true;
+    }
     retire_ranges(state, RETIRE_OMISSION);
     state->bound = false;
     state->high_extended = 0;
     state->recent_seen = 0;
+    memset(&state->sequence_tag, 0, sizeof(state->sequence_tag));
 }
 
 uint64_t x4_receiver_nack_pending(const X4ReceiverNackState *state,
@@ -201,6 +219,15 @@ void x4_receiver_nack_observe(X4ReceiverNackState *state, uint32_t ssrc,
         return;
     }
     if (!state->bound || state->ssrc != ssrc) {
+        uint32_t previous_epoch = state->bound ? state->sequence_epoch :
+            state->rebase_pending ? state->rebase_previous_epoch : 0;
+        uint64_t previous_high = state->bound ? state->high_extended :
+            state->rebase_pending ? state->rebase_high_extended : 0;
+        uint32_t previous_ssrc = state->bound ? state->ssrc :
+            state->rebase_previous_ssrc;
+        uint32_t reason = !previous_epoch ? X4_NACK_SEQUENCE_INITIAL :
+            previous_ssrc != ssrc ? X4_NACK_SEQUENCE_SOURCE_CHANGE :
+            X4_NACK_SEQUENCE_OMISSION;
         if (state->bound) {
             ++state->counters.ssrc_changes;
             retire_ranges(state, RETIRE_SSRC);
@@ -209,10 +236,12 @@ void x4_receiver_nack_observe(X4ReceiverNackState *state, uint32_t ssrc,
         state->bound = true;
         state->ssrc = ssrc;
         ++state->counters.sources_started;
-        begin_sequence_epoch(state, sequence);
+        begin_sequence_epoch(state, sequence, monotonic_us, reason,
+            previous_epoch, previous_high);
         observation->flags |= X4_NACK_OBS_INITIAL;
         observation->sequence_epoch = state->sequence_epoch;
         observation->extended_sequence = state->high_extended;
+        observation->sequence_tag = state->sequence_tag;
         return;
     }
 
@@ -223,14 +252,18 @@ void x4_receiver_nack_observe(X4ReceiverNackState *state, uint32_t ssrc,
         if (forward == 32768u) ++state->counters.ambiguous_halfspan;
         else ++state->counters.extended_overflow;
         retire_ranges(state, RETIRE_AMBIGUITY);
-        begin_sequence_epoch(state, sequence);
+        begin_sequence_epoch(state, sequence, monotonic_us,
+            forward == 32768u ? X4_NACK_SEQUENCE_AMBIGUOUS : X4_NACK_SEQUENCE_OVERFLOW,
+            state->sequence_epoch, state->high_extended);
         observation->flags = X4_NACK_OBS_AMBIGUOUS;
         observation->sequence_epoch = state->sequence_epoch;
         observation->extended_sequence = state->high_extended;
+        observation->sequence_tag = state->sequence_tag;
         return;
     }
 
     observation->sequence_epoch = state->sequence_epoch;
+    observation->sequence_tag = state->sequence_tag;
     if (!forward) {
         ++state->counters.duplicate_packets;
         observation->flags = X4_NACK_OBS_DUPLICATE;

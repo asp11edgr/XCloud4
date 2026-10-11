@@ -814,6 +814,114 @@ class ReceiverNackGraceReaderTests(unittest.TestCase):
         kwargs.setdefault('t', 120000+kind)
         return nack_critical_record(31, stage=kind, **kwargs)
 
+    def test_sequence_identity_collision_is_not_a_NACK_request(self):
+        identity = (7 << 32)|2
+        rows = [self.row(kind, identity=identity, a=6, b=65538, c=1)
+                for kind in range(13, 21)]
+        out = self.analyze(rows)
+        self.assertEqual(out['range_correlations'], [])
+        self.assertEqual(len(out['retained_sequence_binding_chronology']), 8)
+        for row in out['retained_timeline']:
+            self.assertIsNone(row['request_ordinal'])
+            self.assertEqual(row['transport_epoch'], 7)
+            if row['grace_subkind_id'] == 20:
+                self.assertIsNone(row['identity_is_request'])
+                self.assertIsNone(row['sequence_epoch'])
+                self.assertEqual(row['identity_low32_unclassified'], 2)
+                self.assertTrue(row['rejection_payload_layout_unclassified'])
+                self.assertIn('rejection_payload_b', row)
+                self.assertIn('rejection_payload_c', row)
+                self.assertNotIn('previous_high_or_control_epoch', row)
+                self.assertNotIn('committed_epoch_or_owner_transport_epoch', row)
+            else:
+                self.assertFalse(row['identity_is_request'])
+                self.assertEqual(row['sequence_epoch'], 2)
+            self.assertEqual(row['observer_record_not_worker_binding'], row['grace_subkind_id'] <= 16)
+
+    def test_zero_and_large_sequence_ordinals_never_break_range_grouping(self):
+        for identity in (0, (7 << 32), (7 << 32)|65536, (7 << 32)|0xffffffff):
+            with self.subTest(identity=identity):
+                out = self.analyze([self.row(13, identity=identity),
+                                    self.row(19, identity=identity)])
+                self.assertEqual(out['range_correlations'], [])
+                self.assertEqual(len(out['retained_sequence_binding_chronology']), 2)
+                self.assertTrue(all(row['request_ordinal'] is None
+                                    for row in out['retained_timeline']))
+
+    def test_binding_proof_commit_and_request_map_preserve_distinct_facts(self):
+        identity = (7 << 32)|2
+        rows = [self.row(17, t=120000, identity=identity, a=6, b=65538, c=1, flags=2),
+                self.row(18, t=121000, identity=identity, a=6, b=70000, c=120500),
+                self.row(19, t=121001, identity=identity, a=6, b=65542, c=65536, flags=2),
+                self.row(1, t=130010, identity=identity, a=7, b=1, c=130000),
+                self.row(21, t=130011, identity=identity, a=7, b=65543, c=2),
+                self.row(3, t=130012, identity=identity, a=175000, b=1, c=0)]
+        out = self.analyze(rows)
+        self.assertEqual(len(out['range_correlations']), 1)
+        result = out['range_correlations'][0]
+        self.assertEqual(result['request']['original_missing_positions'], [7])
+        self.assertTrue(result['offer_deadline_matches_detect_plus_45ms'])
+        mapping = result['retained_canonical_request_maps'][0]
+        self.assertEqual((mapping['first_raw_extended'], mapping['first_canonical_extended'], mapping['sequence_epoch']),
+                         (7, 65543, 2))
+        self.assertTrue(mapping['map_is_request_not_binding_permission'])
+        proof, commit = out['retained_sequence_binding_chronology'][1:]
+        self.assertTrue(proof['exact_anchor_STORED_observed'])
+        self.assertTrue(proof['announcement_still_required'])
+        self.assertTrue(commit['worker_binding_commit_observed'])
+        self.assertFalse(commit['observer_record_not_worker_binding'])
+        self.assertEqual(commit['canonical_offset'], 65536)
+        self.assertFalse(result['AU_reconstruction_native_picture_and_presentation_established'])
+
+    def test_gate_omission_is_functional_not_diagnostic_loss_or_packet_drop(self):
+        rows = [self.row(15, a=4, b=90000, c=1),
+                self.row(16, a=65538, b=1, flags=2),
+                self.row(20, flags=(2 << 8)|7, a=6, b=65538, c=1)]
+        omitted = [0]*32; omitted[31] = 1
+        out = self.analyze(rows, omitted)
+        gap, reset, rejected = out['retained_timeline']
+        self.assertTrue(gap['functional_gate_contention'])
+        self.assertFalse(gap['diagnostic_retention_omission'])
+        self.assertFalse(gap['packet_discard_established'])
+        self.assertEqual(reset['dirty_consumed_by'], 'poll')
+        self.assertEqual((rejected['binding_result'], rejected['sequence_reason']), (7, 2))
+        self.assertIsNone(rejected['identity_is_request'])
+        self.assertIsNone(rejected['sequence_epoch'])
+        self.assertEqual(rejected['identity_low32_unclassified'], 1)
+        self.assertFalse(rejected['observer_record_not_worker_binding'])
+        self.assertFalse(rejected['packet_discard_established'])
+        self.assertFalse(out['coverage']['details_complete'])
+        self.assertFalse(out['coverage']['absent_subkind_establishes_no_record_attempt'])
+
+    def test_new_binding_counters_are_cumulative_and_separate_from_observer(self):
+        rows = [self.row(10, identity=0, a=index, b=index-110) for index in range(116,129)]
+        rows += [self.row(10, identity=0, a=118, b=9, t=140000)]
+        out = self.analyze(rows)
+        latest = {row['counter_id']:row for row in out['latest_retained_counter_snapshots']}
+        self.assertEqual(len(latest), 13)
+        self.assertEqual(latest[118]['value'], 9)
+        self.assertEqual(latest[118]['counter_name'], 'binding_commits')
+        self.assertEqual(latest[127]['counter_name'], 'binding_repeated_detail_suppressed')
+        self.assertEqual(latest[128]['counter_name'], 'control_fifo_pending_at_close')
+        self.assertEqual(out['counter_snapshot_duplicates_not_summed'], 1)
+        raw = [nack_critical_record(27, flags=7), nack_critical_record(29, a=110, b=1),
+               nack_critical_record(29, a=111, b=2)]
+        raw = [tuple(row[:7])+(i+1,) for i,row in enumerate(raw)]
+        counters = p.analyze(fixture_v2(critical=raw))['upstream_diagnostics']['receiver_NACK']['latest_retained_counter_snapshots']
+        self.assertEqual([row['counter_name'] for row in counters],
+                         ['sequence_control_inbox_omissions', 'observer_resets_consumed'])
+
+    def test_older_grace_capture_keeps_raw_request_without_fabricated_binding(self):
+        out = self.analyze([self.row(1, a=65535, b=3, c=110000),
+                            self.row(3, a=155000, b=3, c=0)])
+        self.assertEqual(out['retained_sequence_binding_chronology'], [])
+        self.assertEqual(len(out['range_correlations']), 1)
+        result = out['range_correlations'][0]
+        self.assertEqual(result['request']['original_missing_positions'], [65535,65536])
+        self.assertEqual(result['retained_canonical_request_maps'], [])
+        self.assertTrue(result['offer_deadline_matches_detect_plus_45ms'])
+        self.assertFalse(result['AU_reconstruction_native_picture_and_presentation_established'])
+
     def test_older_capture_is_unavailable_not_OFF(self):
         out = self.analyze([])
         self.assertFalse(out['available'])

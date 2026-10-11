@@ -81,13 +81,21 @@ leave:
     atomic_fetch_sub_explicit(&producers,1,memory_order_seq_cst);
     return ok;
 }
-bool x4_nack_grace_inbox_pop(X4NackGraceInbox *q,X4NackGraceControl *out)
+bool x4_nack_grace_inbox_peek(X4NackGraceInbox *q,X4NackGraceControl *out)
 {
+    if(!q || !out) return false;
     uint_fast64_t tail=atomic_load_explicit(&q->dequeue,memory_order_relaxed);
     if(tail==atomic_load_explicit(&q->enqueue,memory_order_acquire)) return false;
     X4NackGraceCell *cell=&q->cells[tail&(X4_GRACE_INBOX_CAP-1)];
     if(!atomic_load_explicit(&cell->ready,memory_order_acquire)) return false;
     *out=cell->control;
+    return true;
+}
+bool x4_nack_grace_inbox_pop(X4NackGraceInbox *q,X4NackGraceControl *out)
+{
+    if(!x4_nack_grace_inbox_peek(q,out)) return false;
+    uint_fast64_t tail=atomic_load_explicit(&q->dequeue,memory_order_relaxed);
+    X4NackGraceCell *cell=&q->cells[tail&(X4_GRACE_INBOX_CAP-1)];
     atomic_store_explicit(&cell->ready,false,memory_order_release);
     atomic_store_explicit(&q->dequeue,tail+1,memory_order_release);
     return true;

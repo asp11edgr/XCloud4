@@ -30,6 +30,14 @@ static X4ReceiverNackObservation video(X4ReceiverNackState *state,
     uint16_t sequence, uint64_t now)
 { return observe(state, 10, X4_RECEIVER_NACK_VIDEO_PT, sequence, now); }
 
+static bool tag_equal(const X4NackSequenceTag *a,const X4NackSequenceTag *b)
+{
+    return a->anchor_extended==b->anchor_extended && a->previous_high_extended==b->previous_high_extended &&
+        a->anchor_us==b->anchor_us && a->transport_epoch==b->transport_epoch &&
+        a->sequence_epoch==b->sequence_epoch && a->previous_epoch==b->previous_epoch &&
+        a->anchor_rtp_timestamp==b->anchor_rtp_timestamp && a->reason==b->reason;
+}
+
 static void initial_and_contiguous(void)
 {
     X4ReceiverNackState state;
@@ -441,6 +449,58 @@ static void repeated_wraps_preserve_highwater_and_budget(void)
     CHECK(state.counters.requests_reserved == 0 && state.counters.ambiguous_halfspan == 0);
 }
 
+static void immutable_epoch_provenance_and_wrap_rebase(void)
+{
+    X4ReceiverNackState s; x4_receiver_nack_init(&s, true);
+    X4ReceiverNackObservation r = video(&s, 65534, 10000);
+    X4NackSequenceTag first = r.sequence_tag;
+    CHECK(first.reason == X4_NACK_SEQUENCE_INITIAL && first.sequence_epoch == 1);
+    CHECK(first.previous_epoch == 0 && first.anchor_extended == 65534);
+    CHECK(first.anchor_us == 10000 && !first.transport_epoch && !first.anchor_rtp_timestamp);
+    r = video(&s, 65535, 10001); CHECK(tag_equal(&r.sequence_tag, &first));
+    r = video(&s, 0, 10002); CHECK(r.extended_sequence == 65536);
+    CHECK(tag_equal(&r.sequence_tag, &first));
+    r = video(&s, 2, 10003); CHECK(r.gap.first_extended == 65537);
+    CHECK(s.counters.requests_reserved == 1 && s.high_extended == 65538);
+    x4_receiver_nack_discontinuity(&s);
+    x4_receiver_nack_discontinuity(&s); /* Repeated dirty does not erase origin. */
+    r = video(&s, 6, 11000);
+    X4NackSequenceTag rebased = r.sequence_tag;
+    CHECK(r.flags == X4_NACK_OBS_INITIAL && r.extended_sequence == 6);
+    CHECK(rebased.reason == X4_NACK_SEQUENCE_OMISSION);
+    CHECK(rebased.sequence_epoch == 2 && rebased.previous_epoch == 1);
+    CHECK(rebased.previous_high_extended == 65538 && rebased.anchor_extended == 6);
+    CHECK(rebased.anchor_us == 11000 && !rebased.transport_epoch && !rebased.anchor_rtp_timestamp);
+    CHECK(s.counters.requests_reserved == 1 && s.counters.omission_retired_positions == 1);
+    r = video(&s, 8, 12000); CHECK(r.gap.request_id == 2 && r.gap.first_extended == 7);
+    CHECK(tag_equal(&r.sequence_tag, &rebased));
+    r = video(&s, 7, 13000); CHECK(r.arrival.first_observation);
+    CHECK(tag_equal(&r.sequence_tag, &rebased));
+    r = observe(&s, 10, 103, 9, 14000);
+    X4NackSequenceTag zero = {0}; CHECK(tag_equal(&r.sequence_tag, &zero));
+    x4_receiver_nack_close(&s); r = video(&s, 9, 15000);
+    CHECK(tag_equal(&r.sequence_tag, &zero));
+}
+
+static void provenance_reason_never_authorizes_foreign_or_ambiguous_rebind(void)
+{
+    X4ReceiverNackState s; x4_receiver_nack_init(&s, true);
+    video(&s, 65535, 1); video(&s, 0, 2);
+    x4_receiver_nack_discontinuity(&s);
+    X4ReceiverNackObservation r = observe(&s, 11, 102, 6, 3);
+    CHECK(r.sequence_tag.reason == X4_NACK_SEQUENCE_SOURCE_CHANGE);
+    CHECK(r.sequence_tag.previous_epoch == 1 && r.sequence_tag.previous_high_extended == 65536);
+    CHECK(r.sequence_tag.anchor_extended == 6 && r.sequence_tag.sequence_epoch == 2);
+    r = observe(&s, 11, 102, (uint16_t)(6 + 32768), 4);
+    CHECK(r.sequence_tag.reason == X4_NACK_SEQUENCE_AMBIGUOUS);
+    CHECK(r.sequence_tag.previous_epoch == 2 && r.sequence_tag.previous_high_extended == 6);
+    CHECK(!r.gap.present && s.counters.requests_reserved == 0);
+    s.high_extended = UINT64_MAX;
+    r = observe(&s, 11, 102, 0, 5);
+    CHECK(r.sequence_tag.reason == X4_NACK_SEQUENCE_OVERFLOW);
+    CHECK(r.sequence_tag.previous_high_extended == UINT64_MAX && !r.gap.present);
+}
+
 int main(void)
 {
     CASE(initial_and_contiguous);
@@ -467,6 +527,8 @@ int main(void)
     CASE(clock_regression_is_counted_without_negative_duration);
     CASE(extended_overflow_is_explicit_resync);
     CASE(repeated_wraps_preserve_highwater_and_budget);
+    CASE(immutable_epoch_provenance_and_wrap_rebase);
+    CASE(provenance_reason_never_authorizes_foreign_or_ambiguous_rebind);
     printf("PASS receiver NACK state: %u cases, %" PRIu64 " checks\n", cases, checks);
     return 0;
 }

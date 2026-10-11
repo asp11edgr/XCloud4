@@ -1,0 +1,761 @@
+{
+  "version": "0.7.35",
+  "baseline_commit": "6d26bce474c0022c91d6c460f3caee374b41c819",
+  "native_runtime_source_id": "8425f615c09af4a4d796157922968635fbcad89b",
+  "source_identity_kind": "First40 hex digits of SHA256 over the named runtime inputs; not a Git commit or console result",
+  "native_runtime_input_hashes": [
+    {
+      "path": "Makefile",
+      "bytes": 3733,
+      "sha256": "075bd985505008c6deaa82c046da6eba54e6e409de7e0bf28f6e655630abd7cd"
+    },
+    {
+      "path": "scripts/empaquetar.sh",
+      "bytes": 4023,
+      "sha256": "3bcd1329e711e592ac90fb38396dd6ef1e462969ebcd033e47f955a6ae4318dc"
+    },
+    {
+      "path": "scripts/webrtc/build_native.sh",
+      "bytes": 5079,
+      "sha256": "7238f30204c0ca9928ad6812ac86c0b9a0840d9fed5bd991ba134f4305517c99"
+    },
+    {
+      "path": "scripts/webrtc/export_source.sh",
+      "bytes": 12613,
+      "sha256": "1c3e0fbc945fc743d51ca1d7f7dcfdf901551d58ab1234520968ea8ac29872f5"
+    },
+    {
+      "path": "scripts/webrtc/mbedtls-user-config.h",
+      "bytes": 545,
+      "sha256": "4a3a20459ef6e24a8177285ec9c0225100d21d842bfec580a3b23a1e7da04e03"
+    },
+    {
+      "path": "scripts/webrtc/openorbis.cmake",
+      "bytes": 969,
+      "sha256": "7b22e05e043feca875ba08cd42e147f31cb84ce2803dbe42aafc08ee81eb67fa"
+    },
+    {
+      "path": "scripts/webrtc/prepare_port.py",
+      "bytes": 45570,
+      "sha256": "3063d4d059b392a31cafed245acc2d8a7dd1e1e06593113adbe2182c03f114f5"
+    },
+    {
+      "path": "scripts/webrtc/prepare_receive_diagnostics.py",
+      "bytes": 19594,
+      "sha256": "cf9664257ff733cebc2f8580d7d5adbcc23b739fef3eefaab7f91d199f9559ad"
+    },
+    {
+      "path": "scripts/webrtc/prepare_receiver_nack.py",
+      "bytes": 12480,
+      "sha256": "80bba97b6ed21f49b509df4982608ca6f0f2e39e990ac18ea79a7234772f9d07"
+    },
+    {
+      "path": "src/audio/README.md",
+      "bytes": 1079,
+      "sha256": "268bdd3cc880628822c83b01217428ef48c594f31cef30bed017870c80e97d39"
+    },
+    {
+      "path": "src/audio/demo_audio.c",
+      "bytes": 4273,
+      "sha256": "83a18886420a47686fedb282060ef79cce62ebaf98e03b4cf6e35c2d61f25a28"
+    },
+    {
+      "path": "src/audio/demo_audio.h",
+      "bytes": 414,
+      "sha256": "814a45241f25312790021f173fe05dbf1c18a200dafd07ff7365619600ee79ce"
+    },
+    {
+      "path": "src/audio/live_audio.c",
+      "bytes": 8029,
+      "sha256": "78a34abe6942ae19b4d9a0b62f3ac22cce601f832b7d401cd34af7f44570d67d"
+    },
+    {
+      "path": "src/audio/live_audio.h",
+      "bytes": 640,
+      "sha256": "9205ad82926ec61bd0879398881aa8065c5f3053cdd6f1fe252ca2b63e3e2169"
+    },
+    {
+      "path": "src/auth/README.md",
+      "bytes": 1943,
+      "sha256": "2770197bce3f9be6f6e11637ab62df30f7e868b50e575812cf55d620b53301fd"
+    },
+    {
+      "path": "src/auth/auth_profile.h",
+      "bytes": 1406,
+      "sha256": "72edab15f05fcc4dd1dd2258af18fbcc231f42b7fecd6cbb078378429d77fd7c"
+    },
+    {
+      "path": "src/auth/device_auth.c",
+      "bytes": 50403,
+      "sha256": "2ddf59ebff44a5a2dbb5f02c97e49339b94aba9c908cff7c76b3e6b2b6d41a42"
+    },
+    {
+      "path": "src/auth/device_auth.h",
+      "bytes": 6412,
+      "sha256": "2bdcdaacd94a48410d26820b41ae88eafc49d3645d49806affe5cd4c0f4b91e8"
+    },
+    {
+      "path": "src/auth/http_client.c",
+      "bytes": 33379,
+      "sha256": "11e41b2c302f934f57876e9343089c027a0661fcedae2c233fcfb609a8466b53"
+    },
+    {
+      "path": "src/auth/http_client.h",
+      "bytes": 5178,
+      "sha256": "31428107f09c05345553537f1d86586e664fa8929be3b914775c1de46fd3ecd1"
+    },
+    {
+      "path": "src/auth/json.c",
+      "bytes": 12972,
+      "sha256": "5eb23760041270d414782179fccbbb2cc4c33ae351d3aa8d29d26be7ed879a0e"
+    },
+    {
+      "path": "src/auth/json.h",
+      "bytes": 1929,
+      "sha256": "1637cee14330b2e64ca3618367d2f6342097ee9d9a44b6694180951acbe0f2ad"
+    },
+    {
+      "path": "src/auth/xbox_catalog.h",
+      "bytes": 723,
+      "sha256": "7d4b66e4b4782b3d25faa8deda1a09dfa0270341ae795aca50b59179597c533f"
+    },
+    {
+      "path": "src/auth/xbox_live.c",
+      "bytes": 109697,
+      "sha256": "020f9852d9cf59a551c7cea01340f2b927cc54731de9c69ca31023a69e68b9a7"
+    },
+    {
+      "path": "src/auth/xbox_live.h",
+      "bytes": 3482,
+      "sha256": "83f4eb93ad7f4f69f18cef997808946b9a76ce4f68af5d44a998ca631701728b"
+    },
+    {
+      "path": "src/auth/xbox_session.h",
+      "bytes": 3154,
+      "sha256": "3f7a31c060f1092dbbc0d380d3c839d2c3e9cbf79c9d980405d422aff92414e1"
+    },
+    {
+      "path": "src/core/lifecycle.c",
+      "bytes": 790,
+      "sha256": "55cb791e204bf4d6c334923da2e4dc0804bd0745a88c74cc70512e6eea21d4a4"
+    },
+    {
+      "path": "src/core/lifecycle.h",
+      "bytes": 111,
+      "sha256": "655f267103ceb3293dd2f35c93ebcc6c45ae820420e0d2526367b40314bfd446"
+    },
+    {
+      "path": "src/core/main.c",
+      "bytes": 25536,
+      "sha256": "318866f8b14324c392d1ae703f0a1aaa1b431d43daf19fbda2b42299227c7b3d"
+    },
+    {
+      "path": "src/core/module.c",
+      "bytes": 7247,
+      "sha256": "f2d3d903e8f7928d77c07db0033fbffdbf4c09f4dfb4dbe5e56e56344eb2ec34"
+    },
+    {
+      "path": "src/core/module.h",
+      "bytes": 183,
+      "sha256": "2498ce818120d8c2d32e9a335bc360a10229582a953c5b82d0c7b248735e67b4"
+    },
+    {
+      "path": "src/input/README.md",
+      "bytes": 551,
+      "sha256": "2c1bcc398e880eb89a7c283cec7d262031b8f078f92ee37925775ae35f04b77d"
+    },
+    {
+      "path": "src/input/controller.c",
+      "bytes": 3365,
+      "sha256": "31135ab761b74d531e5ea4e77bc96c518f58e2fa27d6b4567525be79570a75dd"
+    },
+    {
+      "path": "src/input/controller.h",
+      "bytes": 588,
+      "sha256": "f65829c18042abe393aa88080f8ad85ce988b12bb57acf95c7c964d4ce350c81"
+    },
+    {
+      "path": "src/input/gamepad.h",
+      "bytes": 1242,
+      "sha256": "ac6cd80e56b69fdf3891ef1f1455a0f65c55331729b76b1e2cbe09339954fd13"
+    },
+    {
+      "path": "src/input/rumble.c",
+      "bytes": 8324,
+      "sha256": "88b3fda8fe283b485c8fad2af8b88a7e39eaf215efcfe7008e7f5b08e5374b1f"
+    },
+    {
+      "path": "src/input/rumble.h",
+      "bytes": 2662,
+      "sha256": "cfcdaf79fb40fac7de8df4ff0dbdc375d4632bb64080786ed915ed5b43c36c83"
+    },
+    {
+      "path": "src/media/README.md",
+      "bytes": 743,
+      "sha256": "01795d9f3371ba6730e0ec89778eacc42738446a013c383beb1e970111b3ab1c"
+    },
+    {
+      "path": "src/media/live_media.c",
+      "bytes": 90988,
+      "sha256": "4f62a68ea044d32e2297cb036c64d388661c58001fd47699fb05fd3586d2a9f3"
+    },
+    {
+      "path": "src/media/live_media.h",
+      "bytes": 12461,
+      "sha256": "f5f76f5171b400075e6ebf88e0fdfacc8c0b1981027b3beb3221b03448b36959"
+    },
+    {
+      "path": "src/media/live_monitor.c",
+      "bytes": 58409,
+      "sha256": "727863d5fa61b9d211fae83fd1ee65c90b3945f41c79f78343a46dd0580c85e1"
+    },
+    {
+      "path": "src/media/live_monitor.h",
+      "bytes": 11587,
+      "sha256": "69c8308079900662ffaaabd40a6c6c2c537278d33a73d97f317f6061e1aa14f9"
+    },
+    {
+      "path": "src/media/live_trace.c",
+      "bytes": 25533,
+      "sha256": "d67031a734a803abe6c840506b4f81c57452e214b363f7ba2cbcc1ddbb7ec6c6"
+    },
+    {
+      "path": "src/media/live_trace.h",
+      "bytes": 6930,
+      "sha256": "8c04c6a42709998b5d1dfcbaa5dcfe8e6fb86c3ca247a05f895cbe62ee50c25b"
+    },
+    {
+      "path": "src/media/nack_grace.c",
+      "bytes": 14937,
+      "sha256": "fc0023fbdab8220ac13ed38a9f516a5020d5ba4d8c3485172353c32dbd671fa1"
+    },
+    {
+      "path": "src/media/nack_grace.h",
+      "bytes": 8348,
+      "sha256": "b0d2a01c23e0958931304587780b594b21f22eef7cec0967764c860381364840"
+    },
+    {
+      "path": "src/media/nack_sequence_binding.c",
+      "bytes": 7129,
+      "sha256": "bbb5e7dddd99e962d8114b525d9fc9737f782c78fbe54091917fcf63d5538874"
+    },
+    {
+      "path": "src/media/nack_sequence_binding.h",
+      "bytes": 2889,
+      "sha256": "9026434d9a33a6224a2d8e7816fab68601f25a264e59f776dcf62569d57de359"
+    },
+    {
+      "path": "src/media/rtp_reorder.c",
+      "bytes": 4544,
+      "sha256": "edb4b9869329ce38a67cefd685b7755f2fd96aedbbbc6821412e4a8a7478b5a7"
+    },
+    {
+      "path": "src/media/video_ingress.c",
+      "bytes": 9972,
+      "sha256": "d3eca5d977335924bb3f7618e9e3c04fa6943faa593d720861e5027f2a6586f7"
+    },
+    {
+      "path": "src/media/video_ingress.h",
+      "bytes": 3153,
+      "sha256": "d2fce59bd13a3667b54b4d8ba39e9dc39e8c1e471a1e067c70e91d303d4108f5"
+    },
+    {
+      "path": "src/streaming/README.md",
+      "bytes": 264,
+      "sha256": "ea2cd834b880abbdebf40e387b1d7e0da02248233f99d250a7eaf9fe8dbd11eb"
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.c",
+      "bytes": 4546,
+      "sha256": "2f7b59dce71d3ffb6dc9e85b790530d47a30c72ca053e71ca33efe6739acd8ee"
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.h",
+      "bytes": 1168,
+      "sha256": "918abd09476317a76354408f9e3378666e68c105f3b5803c161677c5f0dde4de"
+    },
+    {
+      "path": "src/streaming/nack_sequence.h",
+      "bytes": 1082,
+      "sha256": "8fc9018464e44be9a526559288f50f4b14573285734869682e4d35b527598ca7"
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.c",
+      "bytes": 12050,
+      "sha256": "f342f83d7309338fd5c1487cdb59df4292dd4a36c6327c3eda2f30355c398720"
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.h",
+      "bytes": 8004,
+      "sha256": "40e8d2d29b15c8257c5c6375c68e478bf36a20d3e9f45092dff73273766a3218"
+    },
+    {
+      "path": "src/streaming/rtc_clock.c",
+      "bytes": 1335,
+      "sha256": "a2cb8a0d1927bf8f131e140d750be9a5fdc20f8a3f3ac2e0d8139d74dc5d142f"
+    },
+    {
+      "path": "src/streaming/rtc_condition_variable.cpp",
+      "bytes": 2791,
+      "sha256": "39d39fc245662b760c7c74a29218eeb8c66805996dc00e25e1e77693e53a77a5"
+    },
+    {
+      "path": "src/streaming/rtc_native.c",
+      "bytes": 7093,
+      "sha256": "24265ffa7d255b39b22a5b2ce0a8cb2086a31f794da5a6f9bb1b8b050aaf7972"
+    },
+    {
+      "path": "src/streaming/rtc_native.h",
+      "bytes": 350,
+      "sha256": "31c516f7414af917f72dff4bc756d150f962c66a3e87058d91a6405de1f9344b"
+    },
+    {
+      "path": "src/streaming/rtc_net.c",
+      "bytes": 9325,
+      "sha256": "da76ec200d3337a41cf95ab04deccd3b4fad1e34753dbef1ffcb0412ba3300d7"
+    },
+    {
+      "path": "src/streaming/rtc_pthread.c",
+      "bytes": 4430,
+      "sha256": "73a1abc26d7f172a73d2bfa0da678edcca5c73713ec40d0af9c99c890ec4076d"
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.c",
+      "bytes": 9940,
+      "sha256": "839b5a30fe12de4f2fe17083a90e4d7b7bae712cbc51d3be2652af7b7a09e36f"
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.h",
+      "bytes": 6889,
+      "sha256": "243f9b60cccb3331030a127d2df9629e76238606e3b0e94f4b40112b6d918b5a"
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.cpp",
+      "bytes": 21726,
+      "sha256": "7760a9a7bdcb44757c06e40ce00df8b8d32f3851dad9b848dbd256b91d6b161e"
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.hpp",
+      "bytes": 2734,
+      "sha256": "8777872e8f6d67088d33995ba99d1be77c68b563c1e7e7f90db33a34c6be4c20"
+    },
+    {
+      "path": "src/streaming/rtc_transport.c",
+      "bytes": 43777,
+      "sha256": "63026fd2bf03b131ccec5c1068b9bce561657976f305807dea5dfbc8231907c4"
+    },
+    {
+      "path": "src/streaming/rtc_transport.h",
+      "bytes": 2769,
+      "sha256": "7db15ad6fe86b8769fa327abe4c9c25a16d5e5b50215b1bd3a092a47a0a00b5f"
+    },
+    {
+      "path": "src/ui/README.md",
+      "bytes": 464,
+      "sha256": "e2a9cac6897fca14660273427d7bfdceb0c486561b2ff97bdcba5187153c53d4"
+    },
+    {
+      "path": "src/ui/canvas.c",
+      "bytes": 3832,
+      "sha256": "c362b0b346c63db9868c3786207d0bbc37f44735587fec2c327d47508e6382ba"
+    },
+    {
+      "path": "src/ui/canvas.h",
+      "bytes": 426,
+      "sha256": "aafe20c1c0ed56110f1940474b33fb6b758b6fd745548550f26c10086483d2c0"
+    },
+    {
+      "path": "src/ui/catalog_browser.c",
+      "bytes": 7070,
+      "sha256": "d684b344c3e8b8768bcb975ae4d4bba80af66f39e71998e420dd66fe875851f4"
+    },
+    {
+      "path": "src/ui/catalog_browser.h",
+      "bytes": 2857,
+      "sha256": "8ce5a127e55601b4c1900ed3047fd6b1e050c818b96663f87acd40b63035d8fe"
+    },
+    {
+      "path": "src/ui/screen.c",
+      "bytes": 21652,
+      "sha256": "8c15febbaba196152e87979be1578c794349cc443ecc963362770c40b43f2a87"
+    },
+    {
+      "path": "src/ui/screen.h",
+      "bytes": 1331,
+      "sha256": "601ebc85d254cd10b18c24460f52b4baddfb9326b78c695c6d77efc7c3b3ba9f"
+    },
+    {
+      "path": "src/video/README.md",
+      "bytes": 1348,
+      "sha256": "5c80027edb1ffd498c1ce6546ce69a709b60bf51459b58e93783a101fe4b5aae"
+    },
+    {
+      "path": "src/video/display.c",
+      "bytes": 4774,
+      "sha256": "6f6d5d6b43f837cd7cb28565b462cd456b83132c1866b6d8c27909b0d2d49fcc"
+    },
+    {
+      "path": "src/video/display.h",
+      "bytes": 855,
+      "sha256": "0e5252e5cbf38293bf4524db8b77ec3952d2db1d0af736e18b8f773b1b4fd64d"
+    },
+    {
+      "path": "src/video/h264_demo.c",
+      "bytes": 11090,
+      "sha256": "41e39b873de221f66ea208edc322fb591cb50b8a359fbf8be4e5c16b7b39dad0"
+    },
+    {
+      "path": "src/video/h264_demo.h",
+      "bytes": 396,
+      "sha256": "4b869df45957f115609b331f0f13047cbb440970d863f9208d409fba1fca696d"
+    },
+    {
+      "path": "src/video/live_h264.c",
+      "bytes": 38724,
+      "sha256": "1d326426594d64c187d5731725afbe75ce857e3abef79c00be8811732af9f876"
+    },
+    {
+      "path": "src/video/live_h264.h",
+      "bytes": 2584,
+      "sha256": "fdae73bcbfd9dca31dd8e66fb79846556eb0ed56f5c6a3b4b66de47ca14710ca"
+    },
+    {
+      "path": "src/video/videodec2_abi.h",
+      "bytes": 3428,
+      "sha256": "3b5942ee1c2015603544a0cb5c9249b98d202ffa30140a375b6934a7af926504"
+    },
+    {
+      "path": "src/core/build_identity.h",
+      "bytes": 557,
+      "sha256": "ce0824eb7a4451f65096bdf1878f2a0164dda1a5c99fe9be875f0895539a7e47"
+    }
+  ],
+  "host_checks": [
+    {
+      "name": "test_nack_grace-gcc",
+      "status": "PASS",
+      "log_sha256": "eaf7ac4a0992056994a11f0b378e98569b85f6e15d4b2b838294f5b1cb2db3e1",
+      "retained_pass_summaries": [
+        "PASS 23 cases, 531181 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_nack_grace_inbox-gcc",
+      "status": "PASS",
+      "log_sha256": "3218a8d1b4ccc9312b94418d3013d73870eef9ac61106c23c14b5a5dfc5c1a19",
+      "retained_pass_summaries": [],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_nack_grace_reorder-gcc",
+      "status": "PASS",
+      "log_sha256": "0da517296fc9efbf7b6f7d7745e356123b3b4fc7aac59bbf9e0eb70b0f288775",
+      "retained_pass_summaries": [
+        "PASS actual reorder + grace: 19 cases, 420 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_nack_sequence_binding-gcc",
+      "status": "PASS",
+      "log_sha256": "70250bd69ba5c78d4ed36037755e3ba066a171307b17894854f39635405f2b87",
+      "retained_pass_summaries": [
+        "PASS actual binding helper: 6 cases, 145 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_progress_monitor-gcc",
+      "status": "PASS",
+      "log_sha256": "e8d264e72b9509b5ff1b2cd1ba4d6fcfefd3fa712e83198417e35726dae9c83f",
+      "retained_pass_summaries": [],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_receiver_nack_handler-gcc",
+      "status": "PASS",
+      "log_sha256": "7fe661b8af9cdde8ab8657dfb4b9c39a0c75128b3dd90683cde374e74dbdd773",
+      "retained_pass_summaries": [
+        "PASS receiver NACK production handler: 24 cases, 582 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_receiver_nack_pipeline-gcc",
+      "status": "PASS",
+      "log_sha256": "b49b36dd7d9792c1c7004857d5b1b13ee304d9a066a25d6a368d7c90c14f94e3",
+      "retained_pass_summaries": [
+        "PASS production NACK pipeline: 17 cases, 29741 checks; local post-AUTH host scope",
+        "PASS production NACK pipeline: 2 cases, 1555 checks; local post-AUTH host scope"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_receiver_nack_state-gcc",
+      "status": "PASS",
+      "log_sha256": "f19eb7ee79424623d4d66f77cd171117e9dd7ace0af0b310169a50f9a9e053c1",
+      "retained_pass_summaries": [
+        "PASS receiver NACK state: 26 cases, 164385 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_receiver_nack_wire-gcc",
+      "status": "PASS",
+      "log_sha256": "4049cc703ebc80f8e47932fd7e15de73182587339bf89f360d8dd8ea3da85f52",
+      "retained_pass_summaries": [
+        "PASS receiver NACK production wire: 13 cases, 54672 checks"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_rtc_receive_diag-gcc",
+      "status": "PASS",
+      "log_sha256": "4d9a1091a5dc4bed47f4b6dc9750337b030a6cf6781c2085aab11582c370b903",
+      "retained_pass_summaries": [
+        "8 receive bridge cases passed"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_video_ingress-gcc",
+      "status": "PASS",
+      "log_sha256": "50e5da426b982317cd0df1f62239438bd24191816d8e7325de8ed04be9e3b054",
+      "retained_pass_summaries": [
+        "PASS video ingress host harness; no console/app execution"
+      ],
+      "sanitizer_unavailable_not_pass": []
+    },
+    {
+      "name": "test_nack_grace-clang",
+      "status": "PASS",
+      "log_sha256": "739fa48c3f3c2c6f892d6eb2b8dfffb02752856a98e0403c7646631735bd1981",
+      "retained_pass_summaries": [
+        "PASS 23 cases, 531181 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan build; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_nack_grace_inbox-clang",
+      "status": "PASS",
+      "log_sha256": "c4bd627a5efb6ed600f52ac7842f2cc7905e5290075f7012b565f58f35af9f1a",
+      "retained_pass_summaries": [],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan build; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_nack_grace_reorder-clang",
+      "status": "PASS",
+      "log_sha256": "7f58f6afe9125203196719cb983206e2eb98fb65e2c148df1f32fff73fc7cc83",
+      "retained_pass_summaries": [
+        "PASS actual reorder + grace: 19 cases, 420 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan toolchain; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_nack_sequence_binding-clang",
+      "status": "PASS",
+      "log_sha256": "c8aacd62de8280331da83f0d598c0996d1dbc6bddf31e476db518a361f711958",
+      "retained_pass_summaries": [
+        "PASS actual binding helper: 6 cases, 145 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan toolchain; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_progress_monitor-clang",
+      "status": "PASS",
+      "log_sha256": "5464c150d10b1da40b676077c637a0b1300d605aa90407fdaea4f9a069c839f9",
+      "retained_pass_summaries": [],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE monitor ASan/UBSan build; not a sanitizer pass",
+        "UNAVAILABLE monitor TSan build; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_receiver_nack_handler-clang",
+      "status": "PASS",
+      "log_sha256": "35182b48411e564511151a75eba2fef7e275827fa186100a660d10cd4a8ed729",
+      "retained_pass_summaries": [
+        "PASS receiver NACK production handler: 24 cases, 582 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan host build; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_receiver_nack_pipeline-clang",
+      "status": "PASS",
+      "log_sha256": "20e60af760d19a622173752710452e1ed0288ff11f5ecd996a2e19511847f647",
+      "retained_pass_summaries": [
+        "PASS production NACK pipeline: 17 cases, 29741 checks; local post-AUTH host scope",
+        "PASS production NACK pipeline: 2 cases, 1555 checks; local post-AUTH host scope"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan toolchain; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_receiver_nack_state-clang",
+      "status": "PASS",
+      "log_sha256": "49566943d319032eb44bca3e8fb57bae7905c5fe6bb18580adac9f37b232f5f3",
+      "retained_pass_summaries": [
+        "PASS receiver NACK state: 26 cases, 164385 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan host build; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_receiver_nack_wire-clang",
+      "status": "PASS",
+      "log_sha256": "a550e17b61e6c8fcabba05d52b0ea3268466e81f77a7b5854d832bbcd54500c1",
+      "retained_pass_summaries": [
+        "PASS receiver NACK production wire: 13 cases, 54672 checks"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE ASan/UBSan compiler/runtime probe; not a sanitizer pass"
+      ]
+    },
+    {
+      "name": "test_rtc_receive_diag-clang",
+      "status": "PASS",
+      "log_sha256": "59430b35023f6893b484eb08e43251bbfcbfd3df6c5123a905af47676104fd6f",
+      "retained_pass_summaries": [
+        "8 receive bridge cases passed"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE sanitizer address,undefined: compiler/runtime not installed",
+        "UNAVAILABLE sanitizer thread: compiler/runtime not installed"
+      ]
+    },
+    {
+      "name": "test_video_ingress-clang",
+      "status": "PASS",
+      "log_sha256": "5c1ba0360f6a6b71853ccaf0b151b7edfa3428ccdd6f9aadfe18520b9d6124be",
+      "retained_pass_summaries": [
+        "PASS video ingress host harness; no console/app execution"
+      ],
+      "sanitizer_unavailable_not_pass": [
+        "UNAVAILABLE baseline ASan/UBSan host build; not a sanitizer pass",
+        "UNAVAILABLE baseline TSan host build; not a sanitizer pass",
+        "UNAVAILABLE candidate ASan/UBSan host build; not a sanitizer pass",
+        "UNAVAILABLE candidate TSan host build; not a sanitizer pass"
+      ]
+    }
+  ],
+  "current_pipeline": {
+    "cases": 17,
+    "checks_per_run": 29741,
+    "GCC_plain": "PASS",
+    "GCC_ASan_UBSan": "PASS",
+    "Clang_plain": "PASS",
+    "Clang_sanitizers": "UNAVAILABLE"
+  },
+  "historical_source_pipeline": {
+    "commit": "6d26bce474c0022c91d6c460f3caee374b41c819",
+    "archive_sha256": "f8202fcfcd7112fab8e01cf30fef5a74b86d61a238921c4d5eb46897aa52d7ca",
+    "cases": 2,
+    "checks": 1555,
+    "GCC_plain": "PASS",
+    "Clang_plain": "PASS",
+    "scope": "Historical production units with current zero-default Message metadata ABI, not an old native binary"
+  },
+  "reader_final": {
+    "tests": 134,
+    "status": "PASS",
+    "parser_sha256": "d96fdac65db10957c14371c3611e9086889efd953dbdd3e0face8d3139b80499",
+    "fixture_sha256": "4eeab6819eaf6a06042d99879f18f8f30447e040a2945465035c3b413222fa6c",
+    "log_sha256": "507e911f47ba392bc5030d4493897b3600215a962945064967a5888c428fb2bb",
+    "non_native_post_campaign_delta": "Unclassified rejection fields use generic names; checked separately after native freeze"
+  },
+  "profiles": [
+    {
+      "profile": "grace-off",
+      "build_id": "8425f615c09af4a4d796157922968635fbcad89b-n1-g0-r0",
+      "flags": {
+        "X4_INGRESS_MODE": "mpsc",
+        "X4_RECEIVER_NACK": 1,
+        "X4_NACK_GRACE_MS": 0,
+        "X4_RUMBLE": 0
+      },
+      "package": {
+        "name": "XCloud4-0.7.35-grace-off.pkg",
+        "bytes": 9043968,
+        "sha256": "eaf1dbc939a569ea909b70c0c1bd929289e8a42ac607807ff2ca9669867d4cb9"
+      },
+      "native_ELF": {
+        "bytes": 6995736,
+        "sha256": "e7cd2cedadfca51a5716c606d48081048f15b708cfab874683b2527e1b0f8867"
+      },
+      "native_OELF": {
+        "bytes": 7211640,
+        "sha256": "97adf4e4fb140e4e0b3f023de0da9144925362016d086cb522fa0bf4c186515f"
+      },
+      "selected_linked_import_inspection": "PASS",
+      "console_result": "UNMEASURED"
+    },
+    {
+      "profile": "grace-45",
+      "build_id": "8425f615c09af4a4d796157922968635fbcad89b-n1-g45-r0",
+      "flags": {
+        "X4_INGRESS_MODE": "mpsc",
+        "X4_RECEIVER_NACK": 1,
+        "X4_NACK_GRACE_MS": 45,
+        "X4_RUMBLE": 0
+      },
+      "package": {
+        "name": "XCloud4-0.7.35-grace-45.pkg",
+        "bytes": 9043968,
+        "sha256": "aafaed996db8e661caa91b900febf2a58af40f798081dbd8ae0c54c7ed9aac9a"
+      },
+      "native_ELF": {
+        "bytes": 6995688,
+        "sha256": "6050849af81a6bb863853ac5cc0fb8078fabdc3e91ac017c54f251d0c986d5be"
+      },
+      "native_OELF": {
+        "bytes": 7211592,
+        "sha256": "13077a25de22b654a081f71e90426e34f5475ddfa7a871d8795d4f30d10f1420"
+      },
+      "selected_linked_import_inspection": "PASS",
+      "console_result": "UNMEASURED"
+    }
+  ],
+  "original_dependency_sources": {
+    "archive_sha256": "2e35a6f311d7ac41cf559eefb2304d49a6a883643d1be1b1553cfebeb6d0655e",
+    "archive_bytes": 83636667,
+    "manifest_files_verified": 9387
+  },
+  "dependency_source_export": "Original selection and source hashes verified; private tar/gzip streaming wrapper avoided temporary disk exhaustion without changing product sources",
+  "actual_claude_review": {
+    "model": "claude-opus-5-5",
+    "selected_source_review_s": 411.688322,
+    "Read_calls": 32,
+    "full_files_returned": 23,
+    "full_selection_returned": false,
+    "targeted_delta_review_s": 79.524,
+    "delta_Read_calls": 5,
+    "qualified_result": "PASS with documented liveness and diagnostic limits; no tests or console run by reviewer"
+  },
+  "PS4_transfer": {
+    "status": "PASS",
+    "profiles": 2,
+    "exact_independent_readbacks_per_package": 2,
+    "installation_or_launch": false
+  },
+  "console_experiment": "PENDING fresh G0/G45 sessions; no0.7.35 pause reduction or real retransmission inferred",
+  "limitations": [
+    "Host authentication/time/kernel/feed doubles do not validate SRTP, server retransmission or native decoder/RGB/presentation.",
+    "Selected static inspection does not prove every indirect path or console scheduling.",
+    "Missing/unproven anchor can leave grace unavailable for the remaining session; no arbitrary epoch acceptance.",
+    "Absolute deadline, bounded capacity and delayed queued-return admission remain unchanged.",
+    "No output PTS association; local API success is not wire delivery or server receipt."
+  ]
+}

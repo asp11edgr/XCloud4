@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Bounded observations for a single original-video receiver NACK experiment. */
 #pragma once
+#include "nack_sequence.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -71,6 +72,9 @@ typedef struct {
     uint64_t extended_sequence;
     X4ReceiverNackGap gap;
     X4ReceiverNackArrival arrival;
+    /* Immutable anchor for the current observed epoch, not rebind authority.
+     * Transport epoch and anchor RTP timestamp belong to the caller. */
+    X4NackSequenceTag sequence_tag;
 } X4ReceiverNackObservation;
 
 typedef struct {
@@ -138,6 +142,14 @@ typedef struct {
     bool enabled;
     bool bound;
     bool closed;
+    X4NackSequenceTag sequence_tag;
+    /* A local omission invalidates continuity but preserves the last raw
+     * origin for the next authenticated epoch descriptor. Repeated omissions
+     * before that next packet must not overwrite this snapshot with zero. */
+    uint64_t rebase_high_extended;
+    uint32_t rebase_previous_epoch;
+    uint32_t rebase_previous_ssrc;
+    bool rebase_pending;
 } X4ReceiverNackState;
 
 /* One context per fresh transport session, owned/serialized by exactly one
@@ -160,6 +172,13 @@ typedef struct {
  * watches and starts a separately numbered sequence_epoch without a request.
  * Backwards observations before that epoch are marked unknown, never wrapped
  * into a fictitious future. Normal forward 65535 -> 0 wrap remains continuous.
+ * The output sequence_tag repeats the immutable first-observation anchor for
+ * every valid packet in the epoch, including backwards observations. It has
+ * the caller-supplied monotonic anchor time, prior epoch/raw high and reason;
+ * transport_epoch and anchor_rtp_timestamp remain zero for the handler to
+ * supply. INITIAL, OMISSION, SOURCE_CHANGE, AMBIGUOUS and OVERFLOW describe
+ * observation state only. None authorizes a worker rebind, canonical mapping
+ * or renewed request/grace deadline. Wrong-PT and closed outputs have no tag.
  *
  * A matched later arrival is an authenticated observation, NOT proof that a
  * NACK reached the server or that the packet was retransmitted rather than

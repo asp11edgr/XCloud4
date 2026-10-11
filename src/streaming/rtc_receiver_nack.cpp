@@ -133,10 +133,45 @@ void X4ReceiverNack::graceControl(const X4ReceiverNackGap &gap, unsigned kind,
     (void)x4_rtc_nack_grace_control(&control);
 }
 
+void X4ReceiverNack::resetObserver(unsigned locus) {
+    // Serialized, including a dirty consumed by poll. The old state remains
+    // exported separately from a later authenticated anchor; no REQUEST may
+    // authorize the worker to learn a new epoch on its own.
+    x4_rtc_nack_event(31, 16u | (locus << 8), identity(mState.sequence_epoch),
+        sourceKey(mState.ssrc), mState.high_extended, mState.sequence_epoch, 0);
+    x4_receiver_nack_discontinuity(&mState);
+    mExtra[8].fetch_add(1, std::memory_order_relaxed);
+}
+void X4ReceiverNack::sequenceControl(uint32_t ssrc, const X4NackSequenceTag &sequence) {
+    X4NackGraceControl control{};
+    control.identity = identity(sequence.sequence_epoch);
+    control.source = sourceKey(ssrc);
+    control.sequence_epoch = sequence.sequence_epoch;
+    control.first_extended = sequence.anchor_extended;
+    control.original_mask = sequence.previous_high_extended;
+    control.selected_mask = sequence.previous_epoch;
+    control.detected_us = sequence.anchor_us;
+    control.attempt_start_us = sequence.anchor_rtp_timestamp;
+    control.kind = X4_NACK_GRACE_SEQUENCE;
+    control.reason = sequence.reason;
+    if (!x4_rtc_nack_grace_control(&control))
+        mExtra[7].fetch_add(1, std::memory_order_relaxed);
+    x4_rtc_nack_event(31, 13u | (sequence.reason << 8), control.identity, control.source,
+        sequence.anchor_extended, sequence.previous_high_extended, sequence.previous_epoch);
+    x4_rtc_nack_event(31, 14u, control.identity, control.source,
+        sequence.anchor_us, sequence.anchor_rtp_timestamp, 0);
+}
+
 void X4ReceiverNack::incoming(message_vector &messages, const message_callback &send) {
     (void)send; // Observation only: no transport send or allocation on this path.
     for (auto &message : messages) {
         if (message->type != Message::Binary) continue;
+        // Provenance must be produced by THIS owner, never retained from a
+        // message reused by a host fixture or a previous handler invocation.
+        message->x4NackSequence = {};
+        message->x4NackIdentity = message->x4NackSource = message->x4NackExtended = 0;
+        message->x4NackRtpTimestamp = message->x4NackReturnFlags = 0;
+        message->x4NackAuthenticated = 0;
         if (!(message->x4DiagFlags & X4_RD_AUTHENTICATED) ||
             (message->x4DiagFlags & (X4_RD_RETRANSMISSION | X4_RD_RTX_NORMALIZED))) {
             mExtra[2].fetch_add(1, std::memory_order_relaxed); continue;
@@ -148,14 +183,32 @@ void X4ReceiverNack::incoming(message_vector &messages, const message_callback &
         if (mClosing.load(std::memory_order_acquire)) continue;
         if (mGate.test_and_set(std::memory_order_acquire)) {
             mExtra[0].fetch_add(1, std::memory_order_relaxed);
-            mDirty.store(true, std::memory_order_release); continue;
+            mDirty.store(true, std::memory_order_release);
+            // Do not read worker/state fields without the gate. This is an
+            // observed local omission, independent of trace-store omissions.
+            x4_rtc_nack_event(31, 15u, identity(0), sourceKey(ssrc), sequence, timestamp, 1);
+            continue;
         }
         if (mDirty.exchange(false, std::memory_order_acq_rel))
-            x4_receiver_nack_discontinuity(&mState);
+            resetObserver(1);
         mState.enabled = mEnabled && mFeedback.load(std::memory_order_acquire);
         X4ReceiverNackObservation observation{};
         x4_receiver_nack_observe(&mState, ssrc, pt, sequence,
             x4_rtc_receive_clock(), &observation);
+        if (pt == X4_RECEIVER_NACK_VIDEO_PT && observation.sequence_tag.sequence_epoch &&
+            !(observation.flags & X4_NACK_OBS_BEFORE_EPOCH)) {
+            bool newAnchor = observation.flags & (X4_NACK_OBS_INITIAL | X4_NACK_OBS_AMBIGUOUS);
+            if (newAnchor) mAnchorTimestamp = timestamp;
+            auto tag = observation.sequence_tag;
+            tag.transport_epoch = mEpoch;
+            tag.anchor_rtp_timestamp = mAnchorTimestamp;
+            message->x4NackSequence = tag;
+            message->x4NackSource = sourceKey(ssrc);
+            message->x4NackExtended = observation.extended_sequence;
+            message->x4NackRtpTimestamp = timestamp;
+            message->x4NackAuthenticated = x4_rtc_receive_clock();
+            if (newAnchor) sequenceControl(ssrc, tag);
+        }
         if (observation.gap.present) {
             const auto &gap = observation.gap;
             x4_rtc_nack_event(Detect, mState.enabled ? 1u : 0u, identity(gap.gap_id),
@@ -275,7 +328,7 @@ int X4ReceiverNack::poll(const std::function<bool(message_ptr)> &send) {
         mExtra[4].fetch_add(1, std::memory_order_relaxed); return 0;
     }
     if (mDirty.exchange(false, std::memory_order_acq_rel))
-        x4_receiver_nack_discontinuity(&mState);
+        resetObserver(2);
     X4ReceiverNackGap gap{}; uint64_t pending = 0; bool selected = false;
     for (unsigned checked = 0; checked < mRequests.size(); ++checked) {
         auto &slot = mRequests[mNextDispatch++ % mRequests.size()];
@@ -343,7 +396,8 @@ void X4ReceiverNack::counters() {
         x4_rtc_nack_event(Counter, 0, identity(0), sourceKey(mState.ssrc), i, values[i], mEpoch);
     for (unsigned i = 0; i < mExtra.size(); ++i)
         x4_rtc_nack_event(Counter, 0, identity(0), sourceKey(mState.ssrc),
-            100 + i, mExtra[i].load(std::memory_order_relaxed), mEpoch);
+            i < 7 ? 100 + i : 110 + i - 7,
+            mExtra[i].load(std::memory_order_relaxed), mEpoch);
 }
 int X4ReceiverNack::close() {
     mClosing.store(true, std::memory_order_release);

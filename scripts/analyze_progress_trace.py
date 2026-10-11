@@ -108,7 +108,8 @@ NACK_EXTRA_COUNTERS = {100: 'state_gate_omissions', 101: 'invalid_RTP',
     102: 'non_authenticated_or_RTX_flagged', 103: 'dispatch_queue_full', 104: 'dispatch_gated',
     105: 'handler_duplicates', 106: 'undispatched_on_close',
     107: 'AU_ticket_omissions', 108: 'reorder_ticket_omissions',
-    109: 'delivery_ticket_set_get_operation_omissions'}
+    109: 'delivery_ticket_set_get_operation_omissions',
+    110: 'sequence_control_inbox_omissions', 111: 'observer_resets_consumed'}
 NACK_AU_STAGES = ('in_progress_packet_contribution', 'structurally_complete',
     'accepted_by_recovery_for_Decode', 'recovery_filter_rejected', 'discarded')
 NACK_SUPPRESS = {1: 'experiment_disabled', 2: 'range_cap', 3: 'session_request_cap',
@@ -117,7 +118,11 @@ NACK_SUPPRESS = {1: 'experiment_disabled', 2: 'range_cap', 3: 'session_request_c
 NACK_REORDER = {0: 'stored', 1: 'late_or_occupied_slot', 2: 'window_jump'}
 NACK_GRACE_SUBKINDS = {1: 'CONTROL_REQUEST', 2: 'CONTROL_OUTCOME', 3: 'OFFER',
     4: 'RELEASE', 5: 'CALLBACK', 6: 'QUEUE_POP', 7: 'WORKER_ACCEPT',
-    8: 'WORK_COST', 9: 'QUEUE_AGE', 10: 'COUNTER', 11: 'HOLD_BEGIN', 12: 'ABANDON'}
+    8: 'WORK_COST', 9: 'QUEUE_AGE', 10: 'COUNTER', 11: 'HOLD_BEGIN', 12: 'ABANDON',
+    13: 'SEQUENCE_ANNOUNCE', 14: 'SEQUENCE_ANCHOR_CLOCK',
+    15: 'OBSERVER_OMISSION', 16: 'OBSERVER_RESET',
+    17: 'BIND_CANDIDATE', 18: 'BIND_PROOF', 19: 'BIND_COMMIT',
+    20: 'BIND_OR_CONTROL_REJECT', 21: 'REQUEST_CANONICAL_MAP'}
 NACK_GRACE_OFFER = ('admitted disabled stale_session closed invalid duplicate '
     'stale_source expired active_cap overlap clock deadline_overflow').split()
 NACK_GRACE_RELEASE = ('none accepted deadline capacity passed source_or_reorder_reset close '
@@ -127,7 +132,12 @@ NACK_GRACE_COUNTERS = {100: 'control_inbox_admitted', 101: 'control_inbox_omitte
     105: 'ranges_admitted', 106: 'accepted_worker_positions', 107: 'deadline_ranges',
     108: 'capacity_ranges', 109: 'completed_ranges', 110: 'stale_source_offers',
     111: 'expired_offers', 112: 'overlap_positions', 113: 'active_cap_offers',
-    114: 'configured_grace_ms', 115: 'configured_rumble'}
+    114: 'configured_grace_ms', 115: 'configured_rumble',
+    116: 'binding_announcements', 117: 'binding_candidates', 118: 'binding_commits',
+    119: 'binding_duplicates', 120: 'binding_stale', 121: 'binding_invalid',
+    122: 'binding_proofs', 123: 'binding_unproven', 124: 'binding_mapping_checks',
+    125: 'binding_unmapped_provenance', 126: 'binding_offer_maps',
+    127: 'binding_repeated_detail_suppressed', 128: 'control_fifo_pending_at_close'}
 T_COUNTER = ('packet_observations bytes last_us RTP_header_metadata_observations '
     'other_or_invalid_metadata_observations gap_events forward_skipped_positions '
     'backward_observations duplicate_observations sequence_gate_omitted '
@@ -228,7 +238,10 @@ def parse_critical(r):
     for _ in range(ch[5]):
         t, identity, encoded, source, a, b, c, ordinal = r.words(8)
         event, stage, provenance = encoded & 65535, (encoded >> 16) & 65535, encoded >> 32
-        if event >= 32 or (stage >= 16 and stage != 65535):
+        # critical31 stage is a bounded grace/binding subkind, not a transport
+        # location. The existing v2 record/counter capacities stay unchanged.
+        stage_limit = 22 if event == 31 else 16
+        if event >= 32 or (stage >= stage_limit and stage != 65535):
             raise ValueError('Invalid critical type/stage')
         records.append(dict(t_us=t, identity=identity, event=event, stage=stage,
             flags=provenance, source=source, a=a, b=b, c=c, ordinal=ordinal))
@@ -1058,6 +1071,48 @@ def nack_grace_record(row):
         if reason == 5:
             out.update(reason5_is_shared_source_or_reorder_reset=True,
                 SSRC_change_established_by_reason5=False)
+    elif 13 <= kind <= 20:
+        out.update(transport_epoch=row['identity'] >> 32,
+            sequence_epoch=row['identity'] & 0xffffffff,
+            identity_is_request=False, request_ordinal=None,
+            observer_record_not_worker_binding=kind <= 16)
+        if kind == 13:
+            out.update(anchor_raw_extended=row['a'], previous_raw_high=row['b'],
+                previous_sequence_epoch=row['c'], sequence_reason=row['flags'],
+                transition_is_announcement_only=True)
+        elif kind == 14:
+            out.update(anchor_observed_us=row['a'], anchor_RTP_timestamp=row['b'])
+        elif kind == 15:
+            out.update(omitted_observation_wire_sequence=row['a'], RTP_timestamp=row['b'],
+                omitted_observations=row['c'], functional_gate_contention=True,
+                diagnostic_retention_omission=False, packet_discard_established=False)
+        elif kind == 16:
+            out.update(previous_raw_high=row['a'], previous_sequence_epoch=row['b'],
+                dirty_consumed_by={1: 'incoming', 2: 'poll'}.get(row['flags'], 'unknown'))
+        elif kind == 17:
+            out.update(anchor_raw_extended=row['a'], previous_raw_high=row['b'],
+                previous_sequence_epoch=row['c'], sequence_reason=row['flags'],
+                transition_is_announcement_only=True)
+        elif kind == 18:
+            out.update(anchor_raw_extended=row['a'], anchor_RTP_timestamp=row['b'],
+                authenticated_observed_us=row['c'], exact_anchor_STORED_observed=True,
+                announcement_still_required=True)
+        elif kind == 19:
+            out.update(anchor_raw_extended=row['a'], anchor_canonical_extended=row['b'],
+                canonical_offset=row['c'], sequence_reason=row['flags'],
+                worker_binding_commit_observed=True,
+                new_epoch_does_not_renew_request_deadline=True)
+        else:
+            out.update(sequence_epoch=None, identity_is_request=None,
+                identity_low32_unclassified=row['identity'] & 0xffffffff,
+                binding_result=row['flags'] & 255, sequence_reason=row['flags'] >> 8,
+                anchor_or_control_raw_extended=row['a'], rejection_payload_b=row['b'],
+                rejection_payload_c=row['c'], rejection_payload_layout_unclassified=True,
+                identity_role='transition_or_rejected_control',
+                packet_discard_established=False)
+    elif kind == 21:
+        out.update(first_raw_extended=row['a'], first_canonical_extended=row['b'],
+            sequence_epoch=row['c'], map_is_request_not_binding_permission=True)
     return out
 
 
@@ -1069,7 +1124,8 @@ def nack_grace_analysis(cr, timeline):
             'experiment_enabled': None, 'coverage': {'attempts': 0, 'omitted': 0, 'retained': 0}}
     grouped = {}
     for row in rows:
-        if (row['grace_subkind_id'] != 10 and 0 < row['request_ordinal'] <= 64 and
+        if (row['grace_subkind_id'] in tuple(range(1, 10)) + (11, 12, 21) and
+                row['request_ordinal'] is not None and 0 < row['request_ordinal'] <= 64 and
                 row['source_metadata_available'] and row['payload_type'] == 102 and row['ssrc'] != 0):
             grouped.setdefault((row['source'], row['identity']), []).append(row)
     ranges = []
@@ -1079,6 +1135,7 @@ def nack_grace_analysis(cr, timeline):
         releases = [r for r in members if r['grace_subkind_id'] == 4]
         holds = [r for r in members if r['grace_subkind_id'] == 11]
         abandons = [r for r in members if r['grace_subkind_id'] == 12]
+        canonical_maps = [r for r in members if r['grace_subkind_id'] == 21]
         request = requests[0] if len(requests) == 1 else None
         offer = offers[0] if len(offers) == 1 else None
         sequence_rows = [r for r in members if r['grace_subkind_id'] in (5, 6, 7)]
@@ -1133,6 +1190,7 @@ def nack_grace_analysis(cr, timeline):
             'retained_position_chronology': per_position,
             'retained_worker_STORED_observations': [r for r in members if r['grace_subkind_id'] == 7 and r['stored_without_jump']],
             'retained_sequence_and_work_chronology': members,
+            'retained_canonical_request_maps': canonical_maps,
             'AUTH_does_not_complete_grace': True,
             'AU_reconstruction_native_picture_and_presentation_established': False})
     counters, latest = [r for r in rows if r['grace_subkind_id'] == 10], {}
@@ -1155,6 +1213,7 @@ def nack_grace_analysis(cr, timeline):
             'control_inbox_coverage_scope': 'latest cumulative snapshot; distinct from critical record admission',
             'source_or_control_inbox_completeness_not_established_by_critical_coverage': True},
         'retained_subkind_counts': dict(Counter(r['grace_subkind'] for r in rows)),
+        'retained_sequence_binding_chronology': [r for r in rows if 13 <= r['grace_subkind_id'] <= 20],
         'range_correlations': ranges, 'retained_timeline': rows,
         'retained_ordinary_worker_ABANDON_observations': [r for r in rows if r['grace_subkind_id'] == 12 and
             r['ordinary_worker_advance_observation']],
