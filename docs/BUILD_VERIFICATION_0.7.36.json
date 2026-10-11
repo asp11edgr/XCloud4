@@ -1,0 +1,1747 @@
+{
+  "version": "0.7.36 UI",
+  "verified_at_utc": "2026-10-11T09:18:24.840147+00:00",
+  "baseline_head": "46be5fec49122e2ad51486c3468a4b113846acf0",
+  "source_id": "5755881046bc173055a9fa2b5f82c1271f49a373",
+  "build_id": "5755881046bc173055a9fa2b5f82c1271f49a373-n1-g45-r0",
+  "source_identity_method": "First 40 hex of SHA256 over compact ordered JSON path/bytes/sha256 records; X4_SOURCE_ID value is masked to 40 zeroes; raw input bytes otherwise retained.",
+  "source_inputs_verified": 126,
+  "source_inputs": [
+    {
+      "path": "LICENSE",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "Makefile",
+      "bytes": 3733,
+      "sha256": "075bd985505008c6deaa82c046da6eba54e6e409de7e0bf28f6e655630abd7cd"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 36879,
+      "sha256": "2c4b1b85ae9e124beed6b36416a5dac175eee1efd5da6345decdf2dc541f77fa"
+    },
+    {
+      "path": "assets/fonts/ATLAS.json",
+      "bytes": 635,
+      "sha256": "abc5b9cc3f6b31e2fa0d05db8ee8d1d07dc83f082ef5f33e697da64df30dd926"
+    },
+    {
+      "path": "assets/fonts/NotoSans-Regular.ttf",
+      "bytes": 569208,
+      "sha256": "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5"
+    },
+    {
+      "path": "assets/fonts/NotoSans-SemiBold.ttf",
+      "bytes": 572924,
+      "sha256": "87a8b90ece1e89746b544e4e086f85a3710e41485a8078f9be874837dfad45d5"
+    },
+    {
+      "path": "assets/fonts/OFL.txt",
+      "bytes": 4377,
+      "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+    },
+    {
+      "path": "assets/fonts/README.md",
+      "bytes": 1959,
+      "sha256": "0b259125101ae26c1f99b7a3f9781ad70cd5ffdfb1b03a8c51b1af9ba1a45e30"
+    },
+    {
+      "path": "assets/fonts/SOURCE.json",
+      "bytes": 1025,
+      "sha256": "6d40dca70bb98915d8fe9fa05ed6db15df0a5e6aaf2689e899c9e6ee4ea55d42"
+    },
+    {
+      "path": "assets/fonts/font_fallback.h",
+      "bytes": 961291,
+      "sha256": "634b55beb07aff0145f5a6888e468adf71ba1413b4390eaa864f515a94900aad"
+    },
+    {
+      "path": "assets/fonts/noto_sans.x4font",
+      "bytes": 3346263,
+      "sha256": "d52d9dfc72809e566b87634547fde0f88201b50db2af84dfc3888ffe78983b50"
+    },
+    {
+      "path": "assets/icon0.png",
+      "bytes": 4183,
+      "sha256": "b3627d6ebf2a1e1bc8e4c61ca22bc8ed94f51a6853abd3d6c1856d0bbb7898c0"
+    },
+    {
+      "path": "assets/sample.h264",
+      "bytes": 807915,
+      "sha256": "fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31"
+    },
+    {
+      "path": "docs/licenses/LLVM-libcxx-11-LICENSE.TXT",
+      "bytes": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "path": "docs/licenses/LLVM-libcxxabi-11-LICENSE.TXT",
+      "bytes": 16706,
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "path": "docs/licenses/MbedTLS-dual-license.txt",
+      "bytes": 29852,
+      "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+    },
+    {
+      "path": "docs/licenses/MbedTLS-everest-README.md",
+      "bytes": 1098,
+      "sha256": "96a16739f1453480c84b1c787f0d48ea15c1d307af0a2e9baea4d98b0f1d83f2"
+    },
+    {
+      "path": "docs/licenses/MbedTLS-framework-LICENSE.txt",
+      "bytes": 29861,
+      "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
+    },
+    {
+      "path": "docs/licenses/MbedTLS-p256-m-README.md",
+      "bytes": 1002,
+      "sha256": "9708f7be7a7775254eacf8d7b3b2961e0905d203bda67c8be95e61c471664e39"
+    },
+    {
+      "path": "docs/licenses/NotoSans-OFL.txt",
+      "bytes": 4377,
+      "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+    },
+    {
+      "path": "docs/licenses/OpenOrbis-GPL-3.0.txt",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "docs/licenses/Opus-BSD-3-Clause.txt",
+      "bytes": 1945,
+      "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+    },
+    {
+      "path": "docs/licenses/README.md",
+      "bytes": 3478,
+      "sha256": "654f169b34f486f579e165726b47e343ac8238efd297961888c8e367d0a4f5d3"
+    },
+    {
+      "path": "docs/licenses/libdatachannel-MPL-2.0.txt",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "path": "docs/licenses/libjuice-MPL-2.0.txt",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "path": "docs/licenses/libsrtp-LICENSE.txt",
+      "bytes": 1614,
+      "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"
+    },
+    {
+      "path": "docs/licenses/nlohmann-json-MIT.txt",
+      "bytes": 1076,
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "path": "docs/licenses/p256-m-upstream-README.md",
+      "bytes": 24023,
+      "sha256": "ad5c8b957fd06e7969fa4a0f8831de6c29cc8c94efa73dc536922d636a9f862e"
+    },
+    {
+      "path": "docs/licenses/plog-MIT.txt",
+      "bytes": 1071,
+      "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"
+    },
+    {
+      "path": "docs/licenses/stb_image-MIT.txt",
+      "bytes": 1084,
+      "sha256": "349ae087e598496e4f3d7444c2e8dff398c9c622108f847fa1f78187270d0739"
+    },
+    {
+      "path": "docs/licenses/usrsctp-LICENSE.md",
+      "bytes": 1500,
+      "sha256": "fa53711b25af4b9a9b8dadfea3cb38166ec4b96760c8d62b284055554537d9ef"
+    },
+    {
+      "path": "scripts/empaquetar.sh",
+      "bytes": 4956,
+      "sha256": "283f8651c5a745ec828ceb8755310544d71b4fc36b7c0d0407490e6cad5e5a0d"
+    },
+    {
+      "path": "src/audio/README.md",
+      "bytes": 1079,
+      "sha256": "268bdd3cc880628822c83b01217428ef48c594f31cef30bed017870c80e97d39"
+    },
+    {
+      "path": "src/audio/demo_audio.c",
+      "bytes": 4273,
+      "sha256": "83a18886420a47686fedb282060ef79cce62ebaf98e03b4cf6e35c2d61f25a28"
+    },
+    {
+      "path": "src/audio/demo_audio.h",
+      "bytes": 414,
+      "sha256": "814a45241f25312790021f173fe05dbf1c18a200dafd07ff7365619600ee79ce"
+    },
+    {
+      "path": "src/audio/live_audio.c",
+      "bytes": 8029,
+      "sha256": "78a34abe6942ae19b4d9a0b62f3ac22cce601f832b7d401cd34af7f44570d67d"
+    },
+    {
+      "path": "src/audio/live_audio.h",
+      "bytes": 640,
+      "sha256": "9205ad82926ec61bd0879398881aa8065c5f3053cdd6f1fe252ca2b63e3e2169"
+    },
+    {
+      "path": "src/auth/README.md",
+      "bytes": 1943,
+      "sha256": "2770197bce3f9be6f6e11637ab62df30f7e868b50e575812cf55d620b53301fd"
+    },
+    {
+      "path": "src/auth/auth_profile.h",
+      "bytes": 1406,
+      "sha256": "72edab15f05fcc4dd1dd2258af18fbcc231f42b7fecd6cbb078378429d77fd7c"
+    },
+    {
+      "path": "src/auth/device_auth.c",
+      "bytes": 56055,
+      "sha256": "2526bef198177b0f7621b35f76044aadf42b1694b12e452d15cb9bc00d06da83"
+    },
+    {
+      "path": "src/auth/device_auth.h",
+      "bytes": 6971,
+      "sha256": "7e6177e36c65f4430ca1fb3df7a775ca1cc942bdcb9dc31024bcaa2f50b30e2e"
+    },
+    {
+      "path": "src/auth/http_client.c",
+      "bytes": 35409,
+      "sha256": "41d038b159f8c2dfd83104ebc82b864c457d1a805bf331345cea99f6d2e8666c"
+    },
+    {
+      "path": "src/auth/http_client.h",
+      "bytes": 5821,
+      "sha256": "039f87c2fc69a50f261f955857acab026de0ce2571dc39235a2a6d48bfec4e8f"
+    },
+    {
+      "path": "src/auth/json.c",
+      "bytes": 14225,
+      "sha256": "afd3eed138b543dc458fbb1953adbba7814a114f3a65dcf2df01053b066975ac"
+    },
+    {
+      "path": "src/auth/json.h",
+      "bytes": 2223,
+      "sha256": "f26f338d361b4a8c2ce0b5ee1bff0dc75a146a7a92bbd5ccdee22980f1e23b76"
+    },
+    {
+      "path": "src/auth/public_image_policy.c",
+      "bytes": 1054,
+      "sha256": "a2ae827d5b9107cf5c759041047735e6a2dbcf16c8c5c6f2eccfa6c4fdd44980"
+    },
+    {
+      "path": "src/auth/xbox_catalog.h",
+      "bytes": 1176,
+      "sha256": "d26eb649904ba4a28e5f904cfaf741ff95b2320287b73e5a6747f296ba8a882a"
+    },
+    {
+      "path": "src/auth/xbox_live.c",
+      "bytes": 114758,
+      "sha256": "491aef3c9bdbfe70019d9da29bd19be89e4e154d3ed978d1b83517fffed79b14"
+    },
+    {
+      "path": "src/auth/xbox_live.h",
+      "bytes": 4107,
+      "sha256": "d6f8494987dc88899ad1afcf36acc6b1522ce823734ce6ffd1bafdd975014db1"
+    },
+    {
+      "path": "src/auth/xbox_recent.c",
+      "bytes": 1495,
+      "sha256": "74753c91fd00c8ae65f23cb54fcee4b001498bab3de8abafd2416975cb20886a"
+    },
+    {
+      "path": "src/auth/xbox_recent.h",
+      "bytes": 371,
+      "sha256": "8b9f4a0d118f753fae676908a0ce6f966542a8052e4086628872ab89e9358b03"
+    },
+    {
+      "path": "src/auth/xbox_session.h",
+      "bytes": 3154,
+      "sha256": "3f7a31c060f1092dbbc0d380d3c839d2c3e9cbf79c9d980405d422aff92414e1"
+    },
+    {
+      "path": "src/core/build_identity.h",
+      "bytes": 557,
+      "sha256": "ada1c0e1967f92f4ee7b845fadd181341570bd0965f0fdc53c4fe05a2ef57e7e"
+    },
+    {
+      "path": "src/core/lifecycle.c",
+      "bytes": 790,
+      "sha256": "55cb791e204bf4d6c334923da2e4dc0804bd0745a88c74cc70512e6eea21d4a4"
+    },
+    {
+      "path": "src/core/lifecycle.h",
+      "bytes": 111,
+      "sha256": "655f267103ceb3293dd2f35c93ebcc6c45ae820420e0d2526367b40314bfd446"
+    },
+    {
+      "path": "src/core/main.c",
+      "bytes": 32469,
+      "sha256": "476badacbb357c6f9f5914f32be0dfca95fd748204c4b6d94102fa9be4e19bb1"
+    },
+    {
+      "path": "src/core/module.c",
+      "bytes": 7247,
+      "sha256": "f2d3d903e8f7928d77c07db0033fbffdbf4c09f4dfb4dbe5e56e56344eb2ec34"
+    },
+    {
+      "path": "src/core/module.h",
+      "bytes": 183,
+      "sha256": "2498ce818120d8c2d32e9a335bc360a10229582a953c5b82d0c7b248735e67b4"
+    },
+    {
+      "path": "src/input/README.md",
+      "bytes": 551,
+      "sha256": "2c1bcc398e880eb89a7c283cec7d262031b8f078f92ee37925775ae35f04b77d"
+    },
+    {
+      "path": "src/input/controller.c",
+      "bytes": 3365,
+      "sha256": "31135ab761b74d531e5ea4e77bc96c518f58e2fa27d6b4567525be79570a75dd"
+    },
+    {
+      "path": "src/input/controller.h",
+      "bytes": 588,
+      "sha256": "f65829c18042abe393aa88080f8ad85ce988b12bb57acf95c7c964d4ce350c81"
+    },
+    {
+      "path": "src/input/gamepad.h",
+      "bytes": 1242,
+      "sha256": "ac6cd80e56b69fdf3891ef1f1455a0f65c55331729b76b1e2cbe09339954fd13"
+    },
+    {
+      "path": "src/input/rumble.c",
+      "bytes": 8324,
+      "sha256": "88b3fda8fe283b485c8fad2af8b88a7e39eaf215efcfe7008e7f5b08e5374b1f"
+    },
+    {
+      "path": "src/input/rumble.h",
+      "bytes": 2662,
+      "sha256": "cfcdaf79fb40fac7de8df4ff0dbdc375d4632bb64080786ed915ed5b43c36c83"
+    },
+    {
+      "path": "src/media/README.md",
+      "bytes": 743,
+      "sha256": "01795d9f3371ba6730e0ec89778eacc42738446a013c383beb1e970111b3ab1c"
+    },
+    {
+      "path": "src/media/live_media.c",
+      "bytes": 90988,
+      "sha256": "4f62a68ea044d32e2297cb036c64d388661c58001fd47699fb05fd3586d2a9f3"
+    },
+    {
+      "path": "src/media/live_media.h",
+      "bytes": 12461,
+      "sha256": "f5f76f5171b400075e6ebf88e0fdfacc8c0b1981027b3beb3221b03448b36959"
+    },
+    {
+      "path": "src/media/live_monitor.c",
+      "bytes": 58409,
+      "sha256": "727863d5fa61b9d211fae83fd1ee65c90b3945f41c79f78343a46dd0580c85e1"
+    },
+    {
+      "path": "src/media/live_monitor.h",
+      "bytes": 11587,
+      "sha256": "69c8308079900662ffaaabd40a6c6c2c537278d33a73d97f317f6061e1aa14f9"
+    },
+    {
+      "path": "src/media/live_trace.c",
+      "bytes": 25533,
+      "sha256": "d67031a734a803abe6c840506b4f81c57452e214b363f7ba2cbcc1ddbb7ec6c6"
+    },
+    {
+      "path": "src/media/live_trace.h",
+      "bytes": 6930,
+      "sha256": "8c04c6a42709998b5d1dfcbaa5dcfe8e6fb86c3ca247a05f895cbe62ee50c25b"
+    },
+    {
+      "path": "src/media/nack_grace.c",
+      "bytes": 14937,
+      "sha256": "fc0023fbdab8220ac13ed38a9f516a5020d5ba4d8c3485172353c32dbd671fa1"
+    },
+    {
+      "path": "src/media/nack_grace.h",
+      "bytes": 8348,
+      "sha256": "b0d2a01c23e0958931304587780b594b21f22eef7cec0967764c860381364840"
+    },
+    {
+      "path": "src/media/nack_sequence_binding.c",
+      "bytes": 7129,
+      "sha256": "bbb5e7dddd99e962d8114b525d9fc9737f782c78fbe54091917fcf63d5538874"
+    },
+    {
+      "path": "src/media/nack_sequence_binding.h",
+      "bytes": 2889,
+      "sha256": "9026434d9a33a6224a2d8e7816fab68601f25a264e59f776dcf62569d57de359"
+    },
+    {
+      "path": "src/media/rtp_reorder.c",
+      "bytes": 4544,
+      "sha256": "edb4b9869329ce38a67cefd685b7755f2fd96aedbbbc6821412e4a8a7478b5a7"
+    },
+    {
+      "path": "src/media/video_ingress.c",
+      "bytes": 9972,
+      "sha256": "d3eca5d977335924bb3f7618e9e3c04fa6943faa593d720861e5027f2a6586f7"
+    },
+    {
+      "path": "src/media/video_ingress.h",
+      "bytes": 3153,
+      "sha256": "d2fce59bd13a3667b54b4d8ba39e9dc39e8c1e471a1e067c70e91d303d4108f5"
+    },
+    {
+      "path": "src/streaming/README.md",
+      "bytes": 264,
+      "sha256": "ea2cd834b880abbdebf40e387b1d7e0da02248233f99d250a7eaf9fe8dbd11eb"
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.c",
+      "bytes": 4546,
+      "sha256": "2f7b59dce71d3ffb6dc9e85b790530d47a30c72ca053e71ca33efe6739acd8ee"
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.h",
+      "bytes": 1168,
+      "sha256": "918abd09476317a76354408f9e3378666e68c105f3b5803c161677c5f0dde4de"
+    },
+    {
+      "path": "src/streaming/nack_sequence.h",
+      "bytes": 1082,
+      "sha256": "8fc9018464e44be9a526559288f50f4b14573285734869682e4d35b527598ca7"
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.c",
+      "bytes": 12050,
+      "sha256": "f342f83d7309338fd5c1487cdb59df4292dd4a36c6327c3eda2f30355c398720"
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.h",
+      "bytes": 8004,
+      "sha256": "40e8d2d29b15c8257c5c6375c68e478bf36a20d3e9f45092dff73273766a3218"
+    },
+    {
+      "path": "src/streaming/rtc_clock.c",
+      "bytes": 1335,
+      "sha256": "a2cb8a0d1927bf8f131e140d750be9a5fdc20f8a3f3ac2e0d8139d74dc5d142f"
+    },
+    {
+      "path": "src/streaming/rtc_condition_variable.cpp",
+      "bytes": 2791,
+      "sha256": "39d39fc245662b760c7c74a29218eeb8c66805996dc00e25e1e77693e53a77a5"
+    },
+    {
+      "path": "src/streaming/rtc_native.c",
+      "bytes": 7093,
+      "sha256": "24265ffa7d255b39b22a5b2ce0a8cb2086a31f794da5a6f9bb1b8b050aaf7972"
+    },
+    {
+      "path": "src/streaming/rtc_native.h",
+      "bytes": 350,
+      "sha256": "31c516f7414af917f72dff4bc756d150f962c66a3e87058d91a6405de1f9344b"
+    },
+    {
+      "path": "src/streaming/rtc_net.c",
+      "bytes": 9325,
+      "sha256": "da76ec200d3337a41cf95ab04deccd3b4fad1e34753dbef1ffcb0412ba3300d7"
+    },
+    {
+      "path": "src/streaming/rtc_pthread.c",
+      "bytes": 4430,
+      "sha256": "73a1abc26d7f172a73d2bfa0da678edcca5c73713ec40d0af9c99c890ec4076d"
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.c",
+      "bytes": 9940,
+      "sha256": "839b5a30fe12de4f2fe17083a90e4d7b7bae712cbc51d3be2652af7b7a09e36f"
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.h",
+      "bytes": 6889,
+      "sha256": "243f9b60cccb3331030a127d2df9629e76238606e3b0e94f4b40112b6d918b5a"
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.cpp",
+      "bytes": 21726,
+      "sha256": "7760a9a7bdcb44757c06e40ce00df8b8d32f3851dad9b848dbd256b91d6b161e"
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.hpp",
+      "bytes": 2734,
+      "sha256": "8777872e8f6d67088d33995ba99d1be77c68b563c1e7e7f90db33a34c6be4c20"
+    },
+    {
+      "path": "src/streaming/rtc_transport.c",
+      "bytes": 43777,
+      "sha256": "63026fd2bf03b131ccec5c1068b9bce561657976f305807dea5dfbc8231907c4"
+    },
+    {
+      "path": "src/streaming/rtc_transport.h",
+      "bytes": 2769,
+      "sha256": "7db15ad6fe86b8769fa327abe4c9c25a16d5e5b50215b1bd3a092a47a0a00b5f"
+    },
+    {
+      "path": "src/ui/README.md",
+      "bytes": 464,
+      "sha256": "e2a9cac6897fca14660273427d7bfdceb0c486561b2ff97bdcba5187153c53d4"
+    },
+    {
+      "path": "src/ui/canvas.c",
+      "bytes": 1208,
+      "sha256": "3c3b580999034b3d762240bca440786be2896d2ad8872c0bf32db2af58918337"
+    },
+    {
+      "path": "src/ui/canvas.h",
+      "bytes": 444,
+      "sha256": "4a3cb51ac6082875aef70f6954a32029db1d98c0beeaa7286d0b2c0f49a7ea3f"
+    },
+    {
+      "path": "src/ui/catalog_assets.c",
+      "bytes": 12933,
+      "sha256": "070f9f84725b37d1d40384a586ddbf0c7535204d6a1204ddd2ae4763bafb3dda"
+    },
+    {
+      "path": "src/ui/catalog_assets.h",
+      "bytes": 2662,
+      "sha256": "fe269be4c4409bdc6103ff07584ce5093a250e5982d6c03cd0c128f2db1a8592"
+    },
+    {
+      "path": "src/ui/catalog_browser.c",
+      "bytes": 16531,
+      "sha256": "92d018b73633f7d4789f0b67a595f6f4a4d15cd59db790e4dbc20fc6db9437d1"
+    },
+    {
+      "path": "src/ui/catalog_browser.h",
+      "bytes": 5486,
+      "sha256": "14ef39e88f2221042f70696c3c34e0dab0ae80353de6eac018e63430648003c5"
+    },
+    {
+      "path": "src/ui/catalog_gui.c",
+      "bytes": 11015,
+      "sha256": "3bf94255051fb97bb36158e0ab2cf1080465ae79d0eea213a35800d019165a7e"
+    },
+    {
+      "path": "src/ui/catalog_gui.h",
+      "bytes": 634,
+      "sha256": "d0ee3bf616393d259599aac103b55f01af98285ed87e05bc13c6a941623b4f6f"
+    },
+    {
+      "path": "src/ui/catalog_presentation.c",
+      "bytes": 6467,
+      "sha256": "4d1a1db890e4a4b628eac586abf471df2735c3d5c972fd637fe112b94583a4a8"
+    },
+    {
+      "path": "src/ui/catalog_presentation.h",
+      "bytes": 1899,
+      "sha256": "d0eb40a7919cb7fa955a521152770811b93d7edd4d89f5aaf3366c9f8b4d5713"
+    },
+    {
+      "path": "src/ui/font.c",
+      "bytes": 13653,
+      "sha256": "f6911cffd4b3de7505b94ba576bb4366c9b50eb5685b560e1d02900f9ba4a795"
+    },
+    {
+      "path": "src/ui/font.h",
+      "bytes": 1575,
+      "sha256": "462aa629502e98ae2ec8a465109a03a6512049554f1664012b2650ed5dd506d1"
+    },
+    {
+      "path": "src/ui/product_metadata.c",
+      "bytes": 9439,
+      "sha256": "aebed4db864aabd97b7d627bafd79be27680be064783e26be573ad66785acfaa"
+    },
+    {
+      "path": "src/ui/product_metadata.h",
+      "bytes": 1340,
+      "sha256": "f8f8344d04c39244155e7b87db65508394781dfc482ddc1f55cb710db091ef33"
+    },
+    {
+      "path": "src/ui/recent_games.c",
+      "bytes": 4695,
+      "sha256": "e44b8c468c500aad6e0554d83422e4e4be6c507be30091f0443d6aef5e3d6e64"
+    },
+    {
+      "path": "src/ui/recent_games.h",
+      "bytes": 1952,
+      "sha256": "00ef028f794dc21363210a0bab697ba90895bce8bd5654d11ec1701c751380b9"
+    },
+    {
+      "path": "src/ui/screen.c",
+      "bytes": 15166,
+      "sha256": "a50cfa977b2c175663d81a1a68b428ef07fa3c9ced47177326d89c3b75d46f42"
+    },
+    {
+      "path": "src/ui/screen.h",
+      "bytes": 1210,
+      "sha256": "b083234abda3e083d4376ee2e2970825c9b69d797604cf950080621e62694912"
+    },
+    {
+      "path": "src/video/README.md",
+      "bytes": 1348,
+      "sha256": "5c80027edb1ffd498c1ce6546ce69a709b60bf51459b58e93783a101fe4b5aae"
+    },
+    {
+      "path": "src/video/display.c",
+      "bytes": 4774,
+      "sha256": "6f6d5d6b43f837cd7cb28565b462cd456b83132c1866b6d8c27909b0d2d49fcc"
+    },
+    {
+      "path": "src/video/display.h",
+      "bytes": 855,
+      "sha256": "0e5252e5cbf38293bf4524db8b77ec3952d2db1d0af736e18b8f773b1b4fd64d"
+    },
+    {
+      "path": "src/video/h264_demo.c",
+      "bytes": 11090,
+      "sha256": "41e39b873de221f66ea208edc322fb591cb50b8a359fbf8be4e5c16b7b39dad0"
+    },
+    {
+      "path": "src/video/h264_demo.h",
+      "bytes": 396,
+      "sha256": "4b869df45957f115609b331f0f13047cbb440970d863f9208d409fba1fca696d"
+    },
+    {
+      "path": "src/video/live_h264.c",
+      "bytes": 38724,
+      "sha256": "1d326426594d64c187d5731725afbe75ce857e3abef79c00be8811732af9f876"
+    },
+    {
+      "path": "src/video/live_h264.h",
+      "bytes": 2584,
+      "sha256": "fdae73bcbfd9dca31dd8e66fb79846556eb0ed56f5c6a3b4b66de47ca14710ca"
+    },
+    {
+      "path": "src/video/videodec2_abi.h",
+      "bytes": 3428,
+      "sha256": "3b5942ee1c2015603544a0cb5c9249b98d202ffa30140a375b6934a7af926504"
+    },
+    {
+      "path": "third_party/stb/LICENSE",
+      "bytes": 2510,
+      "sha256": "bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63"
+    },
+    {
+      "path": "third_party/stb/SOURCE.json",
+      "bytes": 475,
+      "sha256": "bb9d78e20d1a22cbe435e4bb3f6afa8ff68ba0c4a40c34e6991774bd555c5cb4"
+    },
+    {
+      "path": "third_party/stb/stb_image.h",
+      "bytes": 284733,
+      "sha256": "38e08c1c5ab8869ae8d605ddaefa85ad3fea24a2964fd63a099c0c0f79c70bcc"
+    }
+  ],
+  "protected_runtime_files": [
+    {
+      "path": "src/audio/README.md",
+      "sha256_lf": "268bdd3cc880628822c83b01217428ef48c594f31cef30bed017870c80e97d39",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/audio/demo_audio.c",
+      "sha256_lf": "83a18886420a47686fedb282060ef79cce62ebaf98e03b4cf6e35c2d61f25a28",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/audio/demo_audio.h",
+      "sha256_lf": "814a45241f25312790021f173fe05dbf1c18a200dafd07ff7365619600ee79ce",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/audio/live_audio.c",
+      "sha256_lf": "78a34abe6942ae19b4d9a0b62f3ac22cce601f832b7d401cd34af7f44570d67d",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/audio/live_audio.h",
+      "sha256_lf": "9205ad82926ec61bd0879398881aa8065c5f3053cdd6f1fe252ca2b63e3e2169",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/README.md",
+      "sha256_lf": "2c1bcc398e880eb89a7c283cec7d262031b8f078f92ee37925775ae35f04b77d",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/controller.c",
+      "sha256_lf": "31135ab761b74d531e5ea4e77bc96c518f58e2fa27d6b4567525be79570a75dd",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/controller.h",
+      "sha256_lf": "f65829c18042abe393aa88080f8ad85ce988b12bb57acf95c7c964d4ce350c81",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/gamepad.h",
+      "sha256_lf": "ac6cd80e56b69fdf3891ef1f1455a0f65c55331729b76b1e2cbe09339954fd13",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/rumble.c",
+      "sha256_lf": "88b3fda8fe283b485c8fad2af8b88a7e39eaf215efcfe7008e7f5b08e5374b1f",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/input/rumble.h",
+      "sha256_lf": "cfcdaf79fb40fac7de8df4ff0dbdc375d4632bb64080786ed915ed5b43c36c83",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/README.md",
+      "sha256_lf": "01795d9f3371ba6730e0ec89778eacc42738446a013c383beb1e970111b3ab1c",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_media.c",
+      "sha256_lf": "4f62a68ea044d32e2297cb036c64d388661c58001fd47699fb05fd3586d2a9f3",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_media.h",
+      "sha256_lf": "f5f76f5171b400075e6ebf88e0fdfacc8c0b1981027b3beb3221b03448b36959",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_monitor.c",
+      "sha256_lf": "727863d5fa61b9d211fae83fd1ee65c90b3945f41c79f78343a46dd0580c85e1",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_monitor.h",
+      "sha256_lf": "69c8308079900662ffaaabd40a6c6c2c537278d33a73d97f317f6061e1aa14f9",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_trace.c",
+      "sha256_lf": "d67031a734a803abe6c840506b4f81c57452e214b363f7ba2cbcc1ddbb7ec6c6",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/live_trace.h",
+      "sha256_lf": "8c04c6a42709998b5d1dfcbaa5dcfe8e6fb86c3ca247a05f895cbe62ee50c25b",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/nack_grace.c",
+      "sha256_lf": "fc0023fbdab8220ac13ed38a9f516a5020d5ba4d8c3485172353c32dbd671fa1",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/nack_grace.h",
+      "sha256_lf": "b0d2a01c23e0958931304587780b594b21f22eef7cec0967764c860381364840",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/nack_sequence_binding.c",
+      "sha256_lf": "bbb5e7dddd99e962d8114b525d9fc9737f782c78fbe54091917fcf63d5538874",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/nack_sequence_binding.h",
+      "sha256_lf": "9026434d9a33a6224a2d8e7816fab68601f25a264e59f776dcf62569d57de359",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/rtp_reorder.c",
+      "sha256_lf": "edb4b9869329ce38a67cefd685b7755f2fd96aedbbbc6821412e4a8a7478b5a7",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/video_ingress.c",
+      "sha256_lf": "d3eca5d977335924bb3f7618e9e3c04fa6943faa593d720861e5027f2a6586f7",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/media/video_ingress.h",
+      "sha256_lf": "d2fce59bd13a3667b54b4d8ba39e9dc39e8c1e471a1e067c70e91d303d4108f5",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/README.md",
+      "sha256_lf": "ea2cd834b880abbdebf40e387b1d7e0da02248233f99d250a7eaf9fe8dbd11eb",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.c",
+      "sha256_lf": "2f7b59dce71d3ffb6dc9e85b790530d47a30c72ca053e71ca33efe6739acd8ee",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/nack_grace_inbox.h",
+      "sha256_lf": "918abd09476317a76354408f9e3378666e68c105f3b5803c161677c5f0dde4de",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/nack_sequence.h",
+      "sha256_lf": "8fc9018464e44be9a526559288f50f4b14573285734869682e4d35b527598ca7",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.c",
+      "sha256_lf": "f342f83d7309338fd5c1487cdb59df4292dd4a36c6327c3eda2f30355c398720",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/receiver_nack_state.h",
+      "sha256_lf": "40e8d2d29b15c8257c5c6375c68e478bf36a20d3e9f45092dff73273766a3218",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_clock.c",
+      "sha256_lf": "a2cb8a0d1927bf8f131e140d750be9a5fdc20f8a3f3ac2e0d8139d74dc5d142f",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_condition_variable.cpp",
+      "sha256_lf": "39d39fc245662b760c7c74a29218eeb8c66805996dc00e25e1e77693e53a77a5",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_native.c",
+      "sha256_lf": "24265ffa7d255b39b22a5b2ce0a8cb2086a31f794da5a6f9bb1b8b050aaf7972",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_native.h",
+      "sha256_lf": "31c516f7414af917f72dff4bc756d150f962c66a3e87058d91a6405de1f9344b",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_net.c",
+      "sha256_lf": "da76ec200d3337a41cf95ab04deccd3b4fad1e34753dbef1ffcb0412ba3300d7",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_pthread.c",
+      "sha256_lf": "73a1abc26d7f172a73d2bfa0da678edcca5c73713ec40d0af9c99c890ec4076d",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.c",
+      "sha256_lf": "839b5a30fe12de4f2fe17083a90e4d7b7bae712cbc51d3be2652af7b7a09e36f",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_receive_diag.h",
+      "sha256_lf": "243f9b60cccb3331030a127d2df9629e76238606e3b0e94f4b40112b6d918b5a",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.cpp",
+      "sha256_lf": "7760a9a7bdcb44757c06e40ce00df8b8d32f3851dad9b848dbd256b91d6b161e",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_receiver_nack.hpp",
+      "sha256_lf": "8777872e8f6d67088d33995ba99d1be77c68b563c1e7e7f90db33a34c6be4c20",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_transport.c",
+      "sha256_lf": "63026fd2bf03b131ccec5c1068b9bce561657976f305807dea5dfbc8231907c4",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/streaming/rtc_transport.h",
+      "sha256_lf": "7db15ad6fe86b8769fa327abe4c9c25a16d5e5b50215b1bd3a092a47a0a00b5f",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/README.md",
+      "sha256_lf": "5c80027edb1ffd498c1ce6546ce69a709b60bf51459b58e93783a101fe4b5aae",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/display.c",
+      "sha256_lf": "6f6d5d6b43f837cd7cb28565b462cd456b83132c1866b6d8c27909b0d2d49fcc",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/display.h",
+      "sha256_lf": "0e5252e5cbf38293bf4524db8b77ec3952d2db1d0af736e18b8f773b1b4fd64d",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/h264_demo.c",
+      "sha256_lf": "41e39b873de221f66ea208edc322fb591cb50b8a359fbf8be4e5c16b7b39dad0",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/h264_demo.h",
+      "sha256_lf": "4b869df45957f115609b331f0f13047cbb440970d863f9208d409fba1fca696d",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/live_h264.c",
+      "sha256_lf": "1d326426594d64c187d5731725afbe75ce857e3abef79c00be8811732af9f876",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/live_h264.h",
+      "sha256_lf": "fdae73bcbfd9dca31dd8e66fb79846556eb0ed56f5c6a3b4b66de47ca14710ca",
+      "unchanged_from_head": true
+    },
+    {
+      "path": "src/video/videodec2_abi.h",
+      "sha256_lf": "3b5942ee1c2015603544a0cb5c9249b98d202ffa30140a375b6934a7af926504",
+      "unchanged_from_head": true
+    }
+  ],
+  "xbox_session_implementation_unchanged": true,
+  "xbox_session_implementation_sha256_lf": "a1b3477574989e6a00f8a88c86e7ee765e3a39ae52590a9f84fdfb70da21520b",
+  "native_build": {
+    "state": "PASS",
+    "exit_code": 0,
+    "parameters": {
+      "ingress": "mpsc",
+      "nack": 1,
+      "grace_ms": 45,
+      "rumble": 0
+    },
+    "original_receipt": "work/ui-source-frozen-native-20261011T090415Z/receipt.json",
+    "source_inputs_unchanged_after_package": true,
+    "dependency_archives_unchanged": true,
+    "dependencies_before": [
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/build-datachannel/libdatachannel-static.a",
+        "bytes": 5709128,
+        "sha256": "8ed32d6d4e92f41a96c098fe2f0b2fbfd937db09be65b663c98d6324d24ac6f0"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/build-datachannel/deps/libjuice/libjuice-static.a",
+        "bytes": 327798,
+        "sha256": "0e2e9d3ad0604667e0bc65102f0c0075f2d845410f18b688502df6e674a45307"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/build-datachannel/deps/usrsctp/usrsctplib/libusrsctp.a",
+        "bytes": 734378,
+        "sha256": "7dc5d999719fac1886f3c5186880db220c3596a46a59921ca62b6569963c8769"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/build-datachannel/deps/libsrtp/libsrtp2.a",
+        "bytes": 143768,
+        "sha256": "958bf70fdb1bbcd4f8a2c01dff6527212a4be30f9ed33c2948a6021918ce4ec9"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libmbedtls.a",
+        "bytes": 542476,
+        "sha256": "13d59b2a3bf27e23ba9bafde28162bfff6bac3fd43c0764e205879e35c1663b9"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libmbedx509.a",
+        "bytes": 110460,
+        "sha256": "3d9506dc1d0ef1fc8937d578e2a13ba13ac99f758cd79670dc1ed4bcc59e7b2c"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libmbedcrypto.a",
+        "bytes": 981282,
+        "sha256": "eb9119d9ba0c4bfa1e9448e7a1f0ffb702e0529917a665309971b7a4fcb2fb6c"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libeverest.a",
+        "bytes": 2372,
+        "sha256": "0e3b50c1ef2d812c62eedf380084f7f71817bb8efc6514207d0cdf00db303b97"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libp256m.a",
+        "bytes": 1652,
+        "sha256": "55ecc462576d934dff9ea1e8c8306e9aa605000d45d82538ff0a11054597dffa"
+      },
+      {
+        "path": "/home/edgarg/.local/share/xcloud4/webrtc/prefix/lib/libopus.a",
+        "bytes": 845920,
+        "sha256": "0aeae7c6576aea6d48d6512228667f98914d30a2ce4229767437fdf22b83f863"
+      }
+    ],
+    "environment": "Existing OpenOrbis SDK v0.5.4 and fixed WebRTC archive paths; no dependency rebuild",
+    "elf_build_identity_verified": true,
+    "eboot_build_identity_verified": true
+  },
+  "package": {
+    "path": "dist/XCloud4-0.7.36-ui.pkg",
+    "bytes": 13107200,
+    "sha256": "e309ab56fdcde99b3127b4acd3c89f7df27eb8901d5b72cb4b63896a9d30ec06",
+    "host_readback_verified": true,
+    "sfo_fields": {
+      "APP_TYPE": 1,
+      "APP_VER": "01.04",
+      "ATTRIBUTE": 0,
+      "CATEGORY": "gd",
+      "CONTENT_ID": "IV0000-XCLD00001_00-XCLOUD4APP000000",
+      "DOWNLOAD_DATA_SIZE": 0,
+      "PUBTOOLINFO": "c_date=20261011,img0_l0_size=13,img0_l1_size=0,img0_sc_ksize=512,img0_pc_ksize=832",
+      "PUBTOOLVER": 42532864,
+      "SYSTEM_VER": 0,
+      "TITLE": "XCloud4",
+      "TITLE_ID": "XCLD00001",
+      "VERSION": "01.04"
+    },
+    "staging_sfo_fields": {
+      "APP_TYPE": 1,
+      "APP_VER": "01.04",
+      "ATTRIBUTE": 0,
+      "CATEGORY": "gd",
+      "CONTENT_ID": "IV0000-XCLD00001_00-XCLOUD4APP000000",
+      "DOWNLOAD_DATA_SIZE": 0,
+      "SYSTEM_VER": 0,
+      "TITLE": "XCloud4",
+      "TITLE_ID": "XCLD00001",
+      "VERSION": "01.04"
+    },
+    "prepackage_inventory_verified": true,
+    "payload_extraction_verified": true,
+    "payload_extraction": {
+      "state": "PASS",
+      "validator_ok_checks": 28,
+      "gp4_targets": 31,
+      "exact_byte_matches": 30,
+      "sfo_transformed_by_packager": true,
+      "sfo_original_fields_match": 11,
+      "actual_sfo_bytes": 1076,
+      "actual_sfo_sha256": "ab60157bae879dff2682cfda5a8579f945e76834db6e45fc868cada46afeacc4",
+      "actual_embedded_build_id_verified": true,
+      "inventory": "docs/ui/0.7.36/verification/package-actual-extracted-inventory.json",
+      "receipt": "docs/ui/0.7.36/verification/package-inspection-receipt.json",
+      "scope": "Installed fake-PKG tool integrity and extraction checks, not a console runtime or retail authorization test"
+    },
+    "input_files": [
+      {
+        "path": "LICENSE.txt",
+        "bytes": 35149,
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      {
+        "path": "THIRD_PARTY_NOTICES.md",
+        "bytes": 36879,
+        "sha256": "2c4b1b85ae9e124beed6b36416a5dac175eee1efd5da6345decdf2dc541f77fa"
+      },
+      {
+        "path": "assets/fonts/ATLAS.json",
+        "bytes": 635,
+        "sha256": "abc5b9cc3f6b31e2fa0d05db8ee8d1d07dc83f082ef5f33e697da64df30dd926"
+      },
+      {
+        "path": "assets/fonts/OFL.txt",
+        "bytes": 4377,
+        "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+      },
+      {
+        "path": "assets/fonts/README.md",
+        "bytes": 1959,
+        "sha256": "0b259125101ae26c1f99b7a3f9781ad70cd5ffdfb1b03a8c51b1af9ba1a45e30"
+      },
+      {
+        "path": "assets/fonts/SOURCE.json",
+        "bytes": 1025,
+        "sha256": "6d40dca70bb98915d8fe9fa05ed6db15df0a5e6aaf2689e899c9e6ee4ea55d42"
+      },
+      {
+        "path": "assets/fonts/noto_sans.x4font",
+        "bytes": 3346263,
+        "sha256": "d52d9dfc72809e566b87634547fde0f88201b50db2af84dfc3888ffe78983b50"
+      },
+      {
+        "path": "assets/sample.h264",
+        "bytes": 807915,
+        "sha256": "fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31"
+      },
+      {
+        "path": "eboot.bin",
+        "bytes": 4967888,
+        "sha256": "fbf2d96943393e4e45659500d05ef01b84cba732f54922d82b2db5d8b4e61d70"
+      },
+      {
+        "path": "licenses/LLVM-libcxx-11-LICENSE.TXT",
+        "bytes": 16703,
+        "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+      },
+      {
+        "path": "licenses/LLVM-libcxxabi-11-LICENSE.TXT",
+        "bytes": 16706,
+        "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+      },
+      {
+        "path": "licenses/MbedTLS-dual-license.txt",
+        "bytes": 29852,
+        "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+      },
+      {
+        "path": "licenses/MbedTLS-everest-README.md",
+        "bytes": 1098,
+        "sha256": "96a16739f1453480c84b1c787f0d48ea15c1d307af0a2e9baea4d98b0f1d83f2"
+      },
+      {
+        "path": "licenses/MbedTLS-framework-LICENSE.txt",
+        "bytes": 29861,
+        "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
+      },
+      {
+        "path": "licenses/MbedTLS-p256-m-README.md",
+        "bytes": 1002,
+        "sha256": "9708f7be7a7775254eacf8d7b3b2961e0905d203bda67c8be95e61c471664e39"
+      },
+      {
+        "path": "licenses/NotoSans-OFL.txt",
+        "bytes": 4377,
+        "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+      },
+      {
+        "path": "licenses/OpenOrbis-GPL-3.0.txt",
+        "bytes": 35149,
+        "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+      },
+      {
+        "path": "licenses/Opus-BSD-3-Clause.txt",
+        "bytes": 1945,
+        "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+      },
+      {
+        "path": "licenses/README.md",
+        "bytes": 3478,
+        "sha256": "654f169b34f486f579e165726b47e343ac8238efd297961888c8e367d0a4f5d3"
+      },
+      {
+        "path": "licenses/libdatachannel-MPL-2.0.txt",
+        "bytes": 16726,
+        "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+      },
+      {
+        "path": "licenses/libjuice-MPL-2.0.txt",
+        "bytes": 16726,
+        "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+      },
+      {
+        "path": "licenses/libsrtp-LICENSE.txt",
+        "bytes": 1614,
+        "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"
+      },
+      {
+        "path": "licenses/nlohmann-json-MIT.txt",
+        "bytes": 1076,
+        "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+      },
+      {
+        "path": "licenses/p256-m-upstream-README.md",
+        "bytes": 24023,
+        "sha256": "ad5c8b957fd06e7969fa4a0f8831de6c29cc8c94efa73dc536922d636a9f862e"
+      },
+      {
+        "path": "licenses/plog-MIT.txt",
+        "bytes": 1071,
+        "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"
+      },
+      {
+        "path": "licenses/stb_image-MIT.txt",
+        "bytes": 1084,
+        "sha256": "349ae087e598496e4f3d7444c2e8dff398c9c622108f847fa1f78187270d0739"
+      },
+      {
+        "path": "licenses/usrsctp-LICENSE.md",
+        "bytes": 1500,
+        "sha256": "fa53711b25af4b9a9b8dadfea3cb38166ec4b96760c8d62b284055554537d9ef"
+      },
+      {
+        "path": "sce_module/libSceFios2.prx",
+        "bytes": 52816,
+        "sha256": "3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01"
+      },
+      {
+        "path": "sce_module/libc.prx",
+        "bytes": 52800,
+        "sha256": "39ad53672bb0b14895f8465eb1619478ab935f5afe5dbf69c15f02cfc0a75ce6"
+      },
+      {
+        "path": "sce_sys/icon0.png",
+        "bytes": 4183,
+        "sha256": "b3627d6ebf2a1e1bc8e4c61ca22bc8ed94f51a6853abd3d6c1856d0bbb7898c0"
+      },
+      {
+        "path": "sce_sys/param.sfo",
+        "bytes": 504,
+        "sha256": "6142a6959e21f3cd0c34fbe59a92c75b723ffc2786c4291b76f7212d934ce53d"
+      },
+      {
+        "path": "xcloud4.gp4",
+        "bytes": 3769,
+        "sha256": "9515f5f69ea1a52c283e4d4fddba84f826749227b43fbc0ef95ec297a1bea2ca"
+      }
+    ]
+  },
+  "host_tests": [
+    {
+      "name": "font",
+      "state": "PASS",
+      "checks": 2075185,
+      "cases": null,
+      "modes": [
+        {
+          "name": "font-gcc-plain",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/font-font-gcc-plain.log",
+          "sha256": "d1d97f54c776bacf5fbe67c53b4e4cc7a1e7a9f3c8ff57e2bdc919a41669fbc5"
+        },
+        {
+          "name": "font-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/font-font-gcc-asan-ubsan.log",
+          "sha256": "d1d97f54c776bacf5fbe67c53b4e4cc7a1e7a9f3c8ff57e2bdc919a41669fbc5"
+        },
+        {
+          "name": "font-clang-plain",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/font-font-clang-plain.log",
+          "sha256": "d1d97f54c776bacf5fbe67c53b4e4cc7a1e7a9f3c8ff57e2bdc919a41669fbc5"
+        }
+      ],
+      "original_receipt": "work/ui-font-retest-20261011T081828Z/receipt.json",
+      "pixel_checks": 2073600,
+      "non_pixel_checks": 1585,
+      "clang_asan_ubsan": "UNAVAILABLE: compiler-rt is absent; not counted as PASS"
+    },
+    {
+      "name": "browser",
+      "state": "PASS",
+      "checks": 501,
+      "cases": 12,
+      "modes": [
+        {
+          "name": "browser-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/browser-browser-gcc.log",
+          "sha256": "3a5a33d08a88f31f86bb5f0c36c63d4abcbe14556e057ec7ca732171be77387a"
+        },
+        {
+          "name": "browser-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/browser-browser-clang.log",
+          "sha256": "cc3300d4b5c421cc560c6937f04b370749a8edd2b73e742f29d195af63ee2eb0"
+        }
+      ],
+      "original_receipt": "work/ui-reviewed-capture-native-20261011T084658Z/receipt.json",
+      "gcc_script_modes": [
+        "GCC normal",
+        "GCC ASan/UBSan"
+      ],
+      "scope": "production helpers with host adapters; not integrated main scheduling"
+    },
+    {
+      "name": "presentation",
+      "state": "PASS",
+      "checks": 521,
+      "cases": 6,
+      "modes": [
+        {
+          "name": "catalog_presentation-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/presentation-catalog_presentation-gcc.log",
+          "sha256": "41888dd6b0ead93f43b843c38db928921d16e658af97dfbcd4bb398c2227ec6a"
+        },
+        {
+          "name": "catalog_presentation-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/presentation-catalog_presentation-clang.log",
+          "sha256": "1a5af1ed7609af32c595ecb0078ac4f8546b165b77bf06283ccedd54b75302a2"
+        }
+      ],
+      "original_receipt": "work/ui-presentation-mru-tests-20261011T082349Z/receipt.json",
+      "gcc_script_modes": [
+        "GCC normal",
+        "GCC ASan/UBSan"
+      ],
+      "scope": "production helpers with host adapters; not integrated main scheduling"
+    },
+    {
+      "name": "public_assets",
+      "state": "PASS",
+      "checks": 288,
+      "cases": null,
+      "modes": [
+        {
+          "name": "catalog_assets-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/public_assets-catalog_assets-gcc.log",
+          "sha256": "613c6148d13ac326da62661ebe358e5acd9d39c4df4e4a896618ae2383e80e53"
+        },
+        {
+          "name": "catalog_assets-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/public_assets-catalog_assets-clang.log",
+          "sha256": "613c6148d13ac326da62661ebe358e5acd9d39c4df4e4a896618ae2383e80e53"
+        },
+        {
+          "name": "catalog_assets-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/public_assets-catalog_assets-gcc-asan-ubsan.log",
+          "sha256": "613c6148d13ac326da62661ebe358e5acd9d39c4df4e4a896618ae2383e80e53"
+        }
+      ],
+      "original_receipt": "work/ui-final-capture-native-20261011T083910Z/receipt.json"
+    },
+    {
+      "name": "private_mru_exchange",
+      "state": "PASS",
+      "checks": 199,
+      "cases": null,
+      "modes": [
+        {
+          "name": "xbox_recent_exchange-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/private_mru_exchange-xbox_recent_exchange-gcc.log",
+          "sha256": "5e73c0447fe83c09fa1c3056b3d6eabe77542da2ec3ff78a7bebe9e7e8723b10"
+        },
+        {
+          "name": "xbox_recent_exchange-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/private_mru_exchange-xbox_recent_exchange-clang.log",
+          "sha256": "5e73c0447fe83c09fa1c3056b3d6eabe77542da2ec3ff78a7bebe9e7e8723b10"
+        },
+        {
+          "name": "xbox_recent_exchange-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/private_mru_exchange-xbox_recent_exchange-gcc-asan-ubsan.log",
+          "sha256": "5e73c0447fe83c09fa1c3056b3d6eabe77542da2ec3ff78a7bebe9e7e8723b10"
+        }
+      ],
+      "original_receipt": "work/ui-final-capture-native-20261011T083910Z/receipt.json"
+    },
+    {
+      "name": "mru_parser",
+      "state": "PASS",
+      "checks": 41,
+      "cases": null,
+      "modes": [
+        {
+          "name": "xbox_recent-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/mru_parser-xbox_recent-gcc.log",
+          "sha256": "4289a3bd313ed7c7d8e09f37c1cd6d18b2a6fb50c1f7640b4ac13912c82d6125"
+        },
+        {
+          "name": "xbox_recent-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/mru_parser-xbox_recent-clang.log",
+          "sha256": "4289a3bd313ed7c7d8e09f37c1cd6d18b2a6fb50c1f7640b4ac13912c82d6125"
+        },
+        {
+          "name": "xbox_recent-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/mru_parser-xbox_recent-gcc-asan-ubsan.log",
+          "sha256": "4289a3bd313ed7c7d8e09f37c1cd6d18b2a6fb50c1f7640b4ac13912c82d6125"
+        }
+      ],
+      "original_receipt": "work/ui-presentation-mru-tests-20261011T082349Z/receipt.json"
+    },
+    {
+      "name": "auth_mru_lifecycle",
+      "state": "PASS",
+      "checks": 58,
+      "cases": null,
+      "modes": [
+        {
+          "name": "auth_recent_lifecycle-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/auth_mru_lifecycle-auth_recent_lifecycle-gcc.log",
+          "sha256": "5f56abe3a72f951ae06d882c80af54670fabd4a233bf5084570392267a51e92c"
+        },
+        {
+          "name": "auth_recent_lifecycle-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/auth_mru_lifecycle-auth_recent_lifecycle-clang.log",
+          "sha256": "5f56abe3a72f951ae06d882c80af54670fabd4a233bf5084570392267a51e92c"
+        },
+        {
+          "name": "auth_recent_lifecycle-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/auth_mru_lifecycle-auth_recent_lifecycle-gcc-asan-ubsan.log",
+          "sha256": "5f56abe3a72f951ae06d882c80af54670fabd4a233bf5084570392267a51e92c"
+        }
+      ],
+      "original_receipt": "work/ui-gui-tests-20261011T082725Z/receipt.json"
+    },
+    {
+      "name": "http_mru_policy",
+      "state": "PASS",
+      "checks": 14,
+      "cases": null,
+      "modes": [
+        {
+          "name": "http_mru_policy-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/http_mru_policy-http_mru_policy-gcc.log",
+          "sha256": "7275a5ef93a05d4c73f630b7374c5215493fe38a72cf6b03943abbdc40fc4caa"
+        },
+        {
+          "name": "http_mru_policy-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/http_mru_policy-http_mru_policy-clang.log",
+          "sha256": "7275a5ef93a05d4c73f630b7374c5215493fe38a72cf6b03943abbdc40fc4caa"
+        }
+      ],
+      "original_receipt": "work/ui-gui-tests-20261011T082725Z/receipt.json"
+    },
+    {
+      "name": "production_gui",
+      "state": "PASS",
+      "checks": null,
+      "cases": 6,
+      "modes": [
+        {
+          "name": "gui-gcc",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/production_gui-gui-gcc.log",
+          "sha256": "9858695e9aa98e0cbe9f6117c29350f00f9b5a45624cb17a82898e110e4b79e6"
+        },
+        {
+          "name": "gui-clang",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/production_gui-gui-clang.log",
+          "sha256": "8fae83e0148a3316b49bfa0a1b797c8d0ad2f8700c4f72091be2c424a12579f5"
+        },
+        {
+          "name": "gui-gcc-asan-ubsan",
+          "exit_code": 0,
+          "log": "docs/ui/0.7.36/verification/production_gui-gui-gcc-asan-ubsan.log",
+          "sha256": "cfba3214d841eb5bfbea667e2317542cb8ff268e037d132df7c31a2acddf754d"
+        }
+      ],
+      "original_receipt": "work/ui-reviewed-capture-native-20261011T084658Z/receipt.json"
+    }
+  ],
+  "packaging_xml_tests": {
+    "state": "PASS",
+    "cases": 9,
+    "checks": 39,
+    "log": "docs/ui/0.7.36/verification/package-directories.log"
+  },
+  "captures": [
+    {
+      "file": "01-catalog.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "253b2cb5d8aa42652b44abb5f4b53f10eee5b17e704135cead6b9a76745a29fe",
+      "png_sha256": "dadb755dfea478be62a9234a968c37934e32767f9a21a8ae0ed53875f65df2ba",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "253b2cb5d8aa42652b44abb5f4b53f10eee5b17e704135cead6b9a76745a29fe",
+        "gui-gcc-asan-ubsan": "253b2cb5d8aa42652b44abb5f4b53f10eee5b17e704135cead6b9a76745a29fe"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    },
+    {
+      "file": "02-server-recents.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "aa4524d3aac6a7e5e5716d1c9820e3045a8134eebcf2f193f55e0ecd07f6ba03",
+      "png_sha256": "6340d0d05a5d4c6fc5cb45397f16215770a6861fb06f8b1f19f3e5eadb3867ee",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "aa4524d3aac6a7e5e5716d1c9820e3045a8134eebcf2f193f55e0ecd07f6ba03",
+        "gui-gcc-asan-ubsan": "aa4524d3aac6a7e5e5716d1c9820e3045a8134eebcf2f193f55e0ecd07f6ba03"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    },
+    {
+      "file": "03-search.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "fd7a308b54d24285a48ad301223a44660373a607459ea2e20ec7fd8431b5f74c",
+      "png_sha256": "f10fb126e6f89d29a87c0a0f496c0e542c27fe95c46d81e40bf454f3da08ab1f",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "fd7a308b54d24285a48ad301223a44660373a607459ea2e20ec7fd8431b5f74c",
+        "gui-gcc-asan-ubsan": "fd7a308b54d24285a48ad301223a44660373a607459ea2e20ec7fd8431b5f74c"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    },
+    {
+      "file": "04-incomplete.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "9e927901d48dbb9974977b74c4612ed41874c2778918ab130e3866994a688017",
+      "png_sha256": "acb27021eb71142a64e701c65c91a49e3237e85120a5201a28be25a52de21e5b",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "9e927901d48dbb9974977b74c4612ed41874c2778918ab130e3866994a688017",
+        "gui-gcc-asan-ubsan": "9e927901d48dbb9974977b74c4612ed41874c2778918ab130e3866994a688017"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    },
+    {
+      "file": "05-utf8-missing-cover.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "83e2a525c391be09ee366bfcb431adf6272848f7aab42cc4cfb0eb5429ed5a4e",
+      "png_sha256": "d80075e3d52ab7983cbfed68d92470268cf04707c9710f5e8ddc3734b1a17b64",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "83e2a525c391be09ee366bfcb431adf6272848f7aab42cc4cfb0eb5429ed5a4e",
+        "gui-gcc-asan-ubsan": "83e2a525c391be09ee366bfcb431adf6272848f7aab42cc4cfb0eb5429ed5a4e"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    },
+    {
+      "file": "06-empty-error.png",
+      "dimensions": [
+        1920,
+        1080
+      ],
+      "rgb_sha256": "b3b6d2de07634b9ab53f522619c0baaec626bd71ca4877b703ddc58b6ea1876e",
+      "png_sha256": "258352dd17c070662eaf81d2c3b49eea8e8921577ccc6aeece58973e8d5a9f3f",
+      "identical_compiler_sanitizer_pixels": {
+        "gui-clang": "b3b6d2de07634b9ab53f522619c0baaec626bd71ca4877b703ddc58b6ea1876e",
+        "gui-gcc-asan-ubsan": "b3b6d2de07634b9ab53f522619c0baaec626bd71ca4877b703ddc58b6ea1876e"
+      },
+      "public_products": "work/ui-0736-public-fixtures/source.json; actual HTTPS-fetched product metadata/covers",
+      "access_and_mru": "explicit synthetic fixture, not measured account state",
+      "scope": "production CPU/font GUI renderer on host, not PS4 visual validation"
+    }
+  ],
+  "visual_review": {
+    "state": "Host captures reviewed",
+    "count": 6,
+    "production_renderer": true,
+    "current_account_data": false,
+    "ps4_screenshots": false
+  },
+  "claude_review": {
+    "model": "claude-opus-5-5",
+    "exit_code": 0,
+    "elapsed_seconds": 93.703,
+    "bundle_sha256": "fd2ff9f4e9b02b907b09a9acdb7e0e31533cd6e4b86f8f931422d41cc532c0e7",
+    "scope": "focused read-only seven-file UI/API bundle",
+    "tools": "Read only; no outside reads or mutations",
+    "finding": "Pending X could be consumed on metadata-completion frame; fixed by deferral while retaining validated ID.",
+    "verification": "helper composition regression plus independent static review; not integrated main scheduling or console validation",
+    "original_receipt": "work/ui-claude-focus-review-20261011T083543Z/receipt.json"
+  },
+  "dependencies_and_licenses": [
+    {
+      "name": "Noto Sans Regular/Semibold",
+      "commit": "ffebf8c1ee449e544955a7e813c54f9b73848eac",
+      "license": "SIL OFL 1.1",
+      "source": "assets/fonts/SOURCE.json"
+    },
+    {
+      "name": "stb_image JPEG/PNG",
+      "commit": "5736b15f7ea0ffb08dd38af21067c314d6a3aae9",
+      "license": "MIT alternative",
+      "source": "docs/licenses/stb_image-MIT.txt"
+    },
+    {
+      "name": "Greenlight",
+      "commit": "07a3f01cba527c9c8287f90ef326c5e89c64687b",
+      "role": "protocol reference only, no copied runtime code",
+      "current_account_response_verified": false
+    }
+  ],
+  "vm_storage": {
+    "old_capacity_gib": 16,
+    "new_capacity_gib": 18,
+    "verified_available_bytes": 2209857536,
+    "storage_receipt": "work/ui-vm-storage-growth/verified.json",
+    "snapshot_utc": "2026-10-11T09:02:51Z",
+    "preservation": {
+      "source_id": "709722adf12741450c0264e189234a419c09945a",
+      "source_inputs_unchanged": 126,
+      "dependency_archives_unchanged": 10,
+      "eboot_sha256": "a713e41dc1f6e43ae4015d7e257aa9eb3d401dd89524e5878da88c884bd50845",
+      "eboot_bytes": 4967888,
+      "preserved_paths": [
+        "/home/edgarg/.config/xcloud4/env.sh",
+        "/home/edgarg/.local/share/xcloud4/webrtc",
+        "/home/edgarg/Projects/XCloud4",
+        "/home/edgarg/Projects/XCloud4-0736-ui-host",
+        "/home/edgarg/.local/share/xcloud4/OpenOrbis/PS4Toolchain"
+      ],
+      "filesystem": "Filesystem       1B-blocks        Used  Available Use% Mounted on\n/dev/sda1      18909732864 15738302464 2209857536  88% /\n",
+      "blockdevices": {
+        "blockdevices": [
+          {
+            "name": "sda",
+            "path": "/dev/sda",
+            "size": 19327352832,
+            "type": "disk",
+            "fstype": null,
+            "mountpoints": [],
+            "fsavail": null,
+            "children": [
+              {
+                "name": "sda1",
+                "path": "/dev/sda1",
+                "size": 19326287360,
+                "type": "part",
+                "fstype": "ext4",
+                "mountpoints": [
+                  "/"
+                ],
+                "fsavail": 2209857536
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "note": "Storage preservation snapshot predates final packaging-only source identity. Final native build used the final identity above."
+  },
+  "prior_failed_or_unavailable_attempts": [
+    {
+      "state": "FAILED then corrected",
+      "scope": "font asset directory handling",
+      "final_receipt": "work/ui-font-retest-20261011T081828Z/receipt.json"
+    },
+    {
+      "state": "FAILED then corrected",
+      "scope": "early GUI fixture/compiler run",
+      "receipt": "work/ui-gui-tests-20261011T082725Z/receipt.json",
+      "note": "Only lifecycle/HTTP passes from this receipt are selected above; early GUI failures are not counted as PASS."
+    },
+    {
+      "state": "FAILED",
+      "scope": "GUI ASan capture attempt with full VM disk",
+      "exit_code": 134,
+      "receipt": "work/ui-final-capture-native-20261011T083910Z/receipt.json",
+      "note": "Empty sanitizer log and failed fixture write; no memory defect diagnosis inferred. Subsequent final renderer passed."
+    },
+    {
+      "state": "BLOCKED at packaging",
+      "scope": "intermediate combined native/package command",
+      "exit_code": 2,
+      "receipt": "work/ui-reviewed-capture-native-20261011T084658Z/receipt.json",
+      "note": "Native compilation completed; package stopped because X4_RUNTIME_MODULES had not been exported. Final run used the established module directory."
+    },
+    {
+      "state": "BLOCKED before package creation",
+      "scope": "initial SDK GP4 directory assumption",
+      "note": "Corrected exact XML transform passed 9 cases/39 checks; final source includes it."
+    },
+    {
+      "state": "UNAVAILABLE",
+      "scope": "Clang ASan/UBSan",
+      "note": "compiler-rt absent; GCC ASan/UBSan passes are independent."
+    },
+    {
+      "state": "TIMED OUT",
+      "scope": "earlier broad Claude read-only attempt",
+      "note": "No verdict counted; focused seven-file review above completed."
+    }
+  ],
+  "changed_and_new_files": [
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "assets/fonts/ATLAS.json",
+    "assets/fonts/NotoSans-Regular.ttf",
+    "assets/fonts/NotoSans-SemiBold.ttf",
+    "assets/fonts/OFL.txt",
+    "assets/fonts/README.md",
+    "assets/fonts/SOURCE.json",
+    "assets/fonts/font_fallback.h",
+    "assets/fonts/noto_sans.x4font",
+    "docs/BUILD_VERIFICATION_0.7.36.json",
+    "docs/UI_PUBLIC_ASSETS.md",
+    "docs/UI_REPORT_0.7.36.md",
+    "docs/UI_SERVER_RECENTS.md",
+    "docs/licenses/NotoSans-OFL.txt",
+    "docs/licenses/README.md",
+    "docs/licenses/stb_image-MIT.txt",
+    "docs/ui/0.7.36/01-catalog.png",
+    "docs/ui/0.7.36/02-server-recents.png",
+    "docs/ui/0.7.36/03-search.png",
+    "docs/ui/0.7.36/04-incomplete.png",
+    "docs/ui/0.7.36/05-utf8-missing-cover.png",
+    "docs/ui/0.7.36/06-empty-error.png",
+    "docs/ui/0.7.36/verification/package-actual-extracted-inventory.json",
+    "docs/ui/0.7.36/verification/package-inspection-receipt.json",
+    "scripts/empaquetar.sh",
+    "scripts/generate_font_assets.py",
+    "scripts/test_auth_recent_lifecycle.sh",
+    "scripts/test_catalog_assets.sh",
+    "scripts/test_catalog_browser.sh",
+    "scripts/test_catalog_gui.sh",
+    "scripts/test_catalog_presentation.sh",
+    "scripts/test_font.sh",
+    "scripts/test_http_mru_policy.py",
+    "scripts/test_package_directories.py",
+    "scripts/test_xbox_recent.sh",
+    "scripts/test_xbox_recent_exchange.sh",
+    "src/auth/device_auth.c",
+    "src/auth/device_auth.h",
+    "src/auth/http_client.c",
+    "src/auth/http_client.h",
+    "src/auth/json.c",
+    "src/auth/json.h",
+    "src/auth/public_image_policy.c",
+    "src/auth/xbox_catalog.h",
+    "src/auth/xbox_live.c",
+    "src/auth/xbox_live.h",
+    "src/auth/xbox_recent.c",
+    "src/auth/xbox_recent.h",
+    "src/core/build_identity.h",
+    "src/core/main.c",
+    "src/ui/canvas.c",
+    "src/ui/canvas.h",
+    "src/ui/catalog_assets.c",
+    "src/ui/catalog_assets.h",
+    "src/ui/catalog_browser.c",
+    "src/ui/catalog_browser.h",
+    "src/ui/catalog_gui.c",
+    "src/ui/catalog_gui.h",
+    "src/ui/catalog_presentation.c",
+    "src/ui/catalog_presentation.h",
+    "src/ui/font.c",
+    "src/ui/font.h",
+    "src/ui/product_metadata.c",
+    "src/ui/product_metadata.h",
+    "src/ui/recent_games.c",
+    "src/ui/recent_games.h",
+    "src/ui/screen.c",
+    "src/ui/screen.h",
+    "tests/auth_recent_lifecycle_test.c",
+    "tests/catalog_assets_test.c",
+    "tests/catalog_browser_test.c",
+    "tests/catalog_gui_capture.c",
+    "tests/catalog_presentation_test.c",
+    "tests/fixtures/public_product_displaycatalog.json",
+    "tests/fixtures/public_product_displaycatalog.source.json",
+    "tests/fixtures/ui_color_layout.png",
+    "tests/fixtures/ui_synthetic_cover.jpg",
+    "tests/fixtures/ui_synthetic_cover.png",
+    "tests/font_test.c",
+    "tests/xbox_recent_exchange_test.c",
+    "tests/xbox_recent_test.c",
+    "third_party/stb/LICENSE",
+    "third_party/stb/SOURCE.json",
+    "third_party/stb/stb_image.h"
+  ],
+  "git_diff_check": {
+    "exit_code": 0
+  },
+  "not_done": [
+    "PS4 installation or visual/network validation",
+    "Current-account authenticated MRU response validation",
+    "Cloud game/streaming or G0/G45 comparison",
+    "Repository push or publication"
+  ]
+}

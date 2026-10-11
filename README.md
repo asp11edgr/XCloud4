@@ -12,6 +12,25 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
+## Graphical catalog beta reports: 0.7.36
+
+The [graphical catalog report](docs/UI_REPORT_0.7.36.md) describes the six-card
+TV layout, precomputed Noto Sans atlas, bounded asynchronous public artwork,
+progressive names, search and server xCloud recently played titles. The MRU
+credential stays inside the existing auth worker; only the exact required
+regional route was added. No local play-history file or delete-history action
+is introduced.
+
+This is a **documentation-only beta checkpoint**. The 0.7.36 runtime source,
+font assets, tests and installer remain local; the beta tag is not a buildable
+0.7.36 source release. See the [beta report index](docs/RELEASE_NOTES_0.7.36-beta.1.md).
+Streaming experiments are paused. The owner
+manually installed 0.7.36 and confirmed the graphical catalog works well:
+2,734 titles were retained, covers are visible, and the actual account MRU
+returned HTTP 200 with 25 valid entries. Detailed navigation/account-switch
+and exit checks remain pending. See the [console UI evidence](docs/CONSOLE_UI_REPORT_0.7.36.md)
+and the separate [host/build verification receipt](docs/BUILD_VERIFICATION_0.7.36.json).
+
 ## Latest console continuity experiment: 0.7.35
 
 The [validated NACK sequence resynchronization](docs/NACK_SEQUENCE_RESYNC_0.7.35.md) preserves the 0.7.34 grace/reorder/worker/media settings and separates observer transitions from REQUEST controls. A matching authenticated anchor actually STORED by the worker is required to bind a new epoch and map its raw origin into the continuous extended domain. Old masks are retired; deadlines and the 64-request budget do not restart. Unproven transitions fail closed.

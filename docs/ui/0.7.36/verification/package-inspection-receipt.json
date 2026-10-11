@@ -1,0 +1,53 @@
+{
+  "scope": "Documented installed CLI; local package integrity/actual extraction only; no PS4 install or publication",
+  "remote_output_directory": "/home/edgarg/Projects/XCloud4-0736-ui-host/work/ui-tests/pkg-extracted-20261011T091305Z",
+  "commands": [
+    {
+      "operation": "pkg_validate",
+      "exit_code": 0,
+      "elapsed_seconds": 0.625,
+      "log": "pkg_validate.log"
+    },
+    {
+      "operation": "pkg_listentries",
+      "exit_code": 0,
+      "elapsed_seconds": 0.266,
+      "log": "pkg_listentries.log"
+    },
+    {
+      "operation": "pkg_extract",
+      "exit_code": 0,
+      "elapsed_seconds": 0.797,
+      "log": "pkg_extract.log"
+    },
+    {
+      "operation": "pkg_extractentry_param",
+      "exit_code": 0,
+      "log": "pkg_extractentry_param.log",
+      "entry": "9"
+    },
+    {
+      "operation": "pkg_extractentry_icon",
+      "exit_code": 0,
+      "log": "pkg_extractentry_icon.log",
+      "entry": "13"
+    },
+    {
+      "operation": "actual_extracted_hash_inventory",
+      "exit_code": 0,
+      "log": "package-actual-inspection.log"
+    }
+  ],
+  "numeric_extractentry_semantics_primary_source": "https://github.com/OpenOrbis/LibOrbisPkg/blob/master/PkgTool/Program.cs#L308-L327",
+  "validator_log_results": {
+    "ok_checks": 28,
+    "warnings": 0,
+    "errors": 0
+  },
+  "extracted_inventory": "package-actual-extracted-inventory.json",
+  "actual_extracted_sfo": {
+    "file": "param-actual-extracted.sfo",
+    "bytes": 1076,
+    "sha256": "ab60157bae879dff2682cfda5a8579f945e76834db6e45fc868cada46afeacc4"
+  }
+}

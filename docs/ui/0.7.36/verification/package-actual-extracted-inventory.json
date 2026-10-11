@@ -1,0 +1,557 @@
+{
+  "scope": "Actual extracted local PKG bytes; no install, publication or console runtime test",
+  "extract_directory": "/home/edgarg/Projects/XCloud4-0736-ui-host/work/ui-tests/pkg-extracted-20261011T091305Z",
+  "source_id": "5755881046bc173055a9fa2b5f82c1271f49a373",
+  "build_id": "5755881046bc173055a9fa2b5f82c1271f49a373-n1-g45-r0",
+  "pkg": {
+    "bytes": 13107200,
+    "sha256": "e309ab56fdcde99b3127b4acd3c89f7df27eb8901d5b72cb4b63896a9d30ec06"
+  },
+  "extracted_file_count": 32,
+  "file_inventory": [
+    {
+      "path": "entries/sce_sys/icon0.png",
+      "bytes": 4183,
+      "sha256": "b3627d6ebf2a1e1bc8e4c61ca22bc8ed94f51a6853abd3d6c1856d0bbb7898c0"
+    },
+    {
+      "path": "entries/sce_sys/param.sfo",
+      "bytes": 1076,
+      "sha256": "ab60157bae879dff2682cfda5a8579f945e76834db6e45fc868cada46afeacc4"
+    },
+    {
+      "path": "uroot/LICENSE.txt",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "uroot/THIRD_PARTY_NOTICES.md",
+      "bytes": 36879,
+      "sha256": "2c4b1b85ae9e124beed6b36416a5dac175eee1efd5da6345decdf2dc541f77fa"
+    },
+    {
+      "path": "uroot/assets/fonts/ATLAS.json",
+      "bytes": 635,
+      "sha256": "abc5b9cc3f6b31e2fa0d05db8ee8d1d07dc83f082ef5f33e697da64df30dd926"
+    },
+    {
+      "path": "uroot/assets/fonts/OFL.txt",
+      "bytes": 4377,
+      "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+    },
+    {
+      "path": "uroot/assets/fonts/README.md",
+      "bytes": 1959,
+      "sha256": "0b259125101ae26c1f99b7a3f9781ad70cd5ffdfb1b03a8c51b1af9ba1a45e30"
+    },
+    {
+      "path": "uroot/assets/fonts/SOURCE.json",
+      "bytes": 1025,
+      "sha256": "6d40dca70bb98915d8fe9fa05ed6db15df0a5e6aaf2689e899c9e6ee4ea55d42"
+    },
+    {
+      "path": "uroot/assets/fonts/noto_sans.x4font",
+      "bytes": 3346263,
+      "sha256": "d52d9dfc72809e566b87634547fde0f88201b50db2af84dfc3888ffe78983b50"
+    },
+    {
+      "path": "uroot/assets/sample.h264",
+      "bytes": 807915,
+      "sha256": "fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31"
+    },
+    {
+      "path": "uroot/eboot.bin",
+      "bytes": 4967888,
+      "sha256": "fbf2d96943393e4e45659500d05ef01b84cba732f54922d82b2db5d8b4e61d70"
+    },
+    {
+      "path": "uroot/licenses/LLVM-libcxx-11-LICENSE.TXT",
+      "bytes": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "path": "uroot/licenses/LLVM-libcxxabi-11-LICENSE.TXT",
+      "bytes": 16706,
+      "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+    },
+    {
+      "path": "uroot/licenses/MbedTLS-dual-license.txt",
+      "bytes": 29852,
+      "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+    },
+    {
+      "path": "uroot/licenses/MbedTLS-everest-README.md",
+      "bytes": 1098,
+      "sha256": "96a16739f1453480c84b1c787f0d48ea15c1d307af0a2e9baea4d98b0f1d83f2"
+    },
+    {
+      "path": "uroot/licenses/MbedTLS-framework-LICENSE.txt",
+      "bytes": 29861,
+      "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
+    },
+    {
+      "path": "uroot/licenses/MbedTLS-p256-m-README.md",
+      "bytes": 1002,
+      "sha256": "9708f7be7a7775254eacf8d7b3b2961e0905d203bda67c8be95e61c471664e39"
+    },
+    {
+      "path": "uroot/licenses/NotoSans-OFL.txt",
+      "bytes": 4377,
+      "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+    },
+    {
+      "path": "uroot/licenses/OpenOrbis-GPL-3.0.txt",
+      "bytes": 35149,
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "path": "uroot/licenses/Opus-BSD-3-Clause.txt",
+      "bytes": 1945,
+      "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+    },
+    {
+      "path": "uroot/licenses/README.md",
+      "bytes": 3478,
+      "sha256": "654f169b34f486f579e165726b47e343ac8238efd297961888c8e367d0a4f5d3"
+    },
+    {
+      "path": "uroot/licenses/libdatachannel-MPL-2.0.txt",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "path": "uroot/licenses/libjuice-MPL-2.0.txt",
+      "bytes": 16726,
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+    },
+    {
+      "path": "uroot/licenses/libsrtp-LICENSE.txt",
+      "bytes": 1614,
+      "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"
+    },
+    {
+      "path": "uroot/licenses/nlohmann-json-MIT.txt",
+      "bytes": 1076,
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+    },
+    {
+      "path": "uroot/licenses/p256-m-upstream-README.md",
+      "bytes": 24023,
+      "sha256": "ad5c8b957fd06e7969fa4a0f8831de6c29cc8c94efa73dc536922d636a9f862e"
+    },
+    {
+      "path": "uroot/licenses/plog-MIT.txt",
+      "bytes": 1071,
+      "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"
+    },
+    {
+      "path": "uroot/licenses/stb_image-MIT.txt",
+      "bytes": 1084,
+      "sha256": "349ae087e598496e4f3d7444c2e8dff398c9c622108f847fa1f78187270d0739"
+    },
+    {
+      "path": "uroot/licenses/usrsctp-LICENSE.md",
+      "bytes": 1500,
+      "sha256": "fa53711b25af4b9a9b8dadfea3cb38166ec4b96760c8d62b284055554537d9ef"
+    },
+    {
+      "path": "uroot/sce_module/libSceFios2.prx",
+      "bytes": 52816,
+      "sha256": "3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01"
+    },
+    {
+      "path": "uroot/sce_module/libc.prx",
+      "bytes": 52800,
+      "sha256": "39ad53672bb0b14895f8465eb1619478ab935f5afe5dbf69c15f02cfc0a75ce6"
+    },
+    {
+      "path": "uroot/sce_sys/keystone",
+      "bytes": 96,
+      "sha256": "d09eb8ab5f3b700164fc8ad85c54c2acbad71244e942aeedf7e3e7eb56408aac"
+    }
+  ],
+  "gp4_target_checks": [
+    {
+      "target": "LICENSE.txt",
+      "matches": [
+        {
+          "path": "uroot/LICENSE.txt",
+          "bytes": 35149,
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "THIRD_PARTY_NOTICES.md",
+      "matches": [
+        {
+          "path": "uroot/THIRD_PARTY_NOTICES.md",
+          "bytes": 36879,
+          "sha256": "2c4b1b85ae9e124beed6b36416a5dac175eee1efd5da6345decdf2dc541f77fa"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/fonts/ATLAS.json",
+      "matches": [
+        {
+          "path": "uroot/assets/fonts/ATLAS.json",
+          "bytes": 635,
+          "sha256": "abc5b9cc3f6b31e2fa0d05db8ee8d1d07dc83f082ef5f33e697da64df30dd926"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/fonts/OFL.txt",
+      "matches": [
+        {
+          "path": "uroot/assets/fonts/OFL.txt",
+          "bytes": 4377,
+          "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/fonts/README.md",
+      "matches": [
+        {
+          "path": "uroot/assets/fonts/README.md",
+          "bytes": 1959,
+          "sha256": "0b259125101ae26c1f99b7a3f9781ad70cd5ffdfb1b03a8c51b1af9ba1a45e30"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/fonts/SOURCE.json",
+      "matches": [
+        {
+          "path": "uroot/assets/fonts/SOURCE.json",
+          "bytes": 1025,
+          "sha256": "6d40dca70bb98915d8fe9fa05ed6db15df0a5e6aaf2689e899c9e6ee4ea55d42"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/fonts/noto_sans.x4font",
+      "matches": [
+        {
+          "path": "uroot/assets/fonts/noto_sans.x4font",
+          "bytes": 3346263,
+          "sha256": "d52d9dfc72809e566b87634547fde0f88201b50db2af84dfc3888ffe78983b50"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "assets/sample.h264",
+      "matches": [
+        {
+          "path": "uroot/assets/sample.h264",
+          "bytes": 807915,
+          "sha256": "fc920497b038586e8611b65accc0cd9bb81eb0f768332e37e95462119c473a31"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "eboot.bin",
+      "matches": [
+        {
+          "path": "uroot/eboot.bin",
+          "bytes": 4967888,
+          "sha256": "fbf2d96943393e4e45659500d05ef01b84cba732f54922d82b2db5d8b4e61d70"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/LLVM-libcxx-11-LICENSE.TXT",
+      "matches": [
+        {
+          "path": "uroot/licenses/LLVM-libcxx-11-LICENSE.TXT",
+          "bytes": 16703,
+          "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/LLVM-libcxxabi-11-LICENSE.TXT",
+      "matches": [
+        {
+          "path": "uroot/licenses/LLVM-libcxxabi-11-LICENSE.TXT",
+          "bytes": 16706,
+          "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/MbedTLS-dual-license.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/MbedTLS-dual-license.txt",
+          "bytes": 29852,
+          "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/MbedTLS-everest-README.md",
+      "matches": [
+        {
+          "path": "uroot/licenses/MbedTLS-everest-README.md",
+          "bytes": 1098,
+          "sha256": "96a16739f1453480c84b1c787f0d48ea15c1d307af0a2e9baea4d98b0f1d83f2"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/MbedTLS-framework-LICENSE.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/MbedTLS-framework-LICENSE.txt",
+          "bytes": 29861,
+          "sha256": "11402351e38392230bb8934ba1095c0c0049a296c0f8821f76e4672dff54b490"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/MbedTLS-p256-m-README.md",
+      "matches": [
+        {
+          "path": "uroot/licenses/MbedTLS-p256-m-README.md",
+          "bytes": 1002,
+          "sha256": "9708f7be7a7775254eacf8d7b3b2961e0905d203bda67c8be95e61c471664e39"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/NotoSans-OFL.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/NotoSans-OFL.txt",
+          "bytes": 4377,
+          "sha256": "0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/OpenOrbis-GPL-3.0.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/OpenOrbis-GPL-3.0.txt",
+          "bytes": 35149,
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/Opus-BSD-3-Clause.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/Opus-BSD-3-Clause.txt",
+          "bytes": 1945,
+          "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/README.md",
+      "matches": [
+        {
+          "path": "uroot/licenses/README.md",
+          "bytes": 3478,
+          "sha256": "654f169b34f486f579e165726b47e343ac8238efd297961888c8e367d0a4f5d3"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/libdatachannel-MPL-2.0.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/libdatachannel-MPL-2.0.txt",
+          "bytes": 16726,
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/libjuice-MPL-2.0.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/libjuice-MPL-2.0.txt",
+          "bytes": 16726,
+          "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/libsrtp-LICENSE.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/libsrtp-LICENSE.txt",
+          "bytes": 1614,
+          "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/nlohmann-json-MIT.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/nlohmann-json-MIT.txt",
+          "bytes": 1076,
+          "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/p256-m-upstream-README.md",
+      "matches": [
+        {
+          "path": "uroot/licenses/p256-m-upstream-README.md",
+          "bytes": 24023,
+          "sha256": "ad5c8b957fd06e7969fa4a0f8831de6c29cc8c94efa73dc536922d636a9f862e"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/plog-MIT.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/plog-MIT.txt",
+          "bytes": 1071,
+          "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/stb_image-MIT.txt",
+      "matches": [
+        {
+          "path": "uroot/licenses/stb_image-MIT.txt",
+          "bytes": 1084,
+          "sha256": "349ae087e598496e4f3d7444c2e8dff398c9c622108f847fa1f78187270d0739"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "licenses/usrsctp-LICENSE.md",
+      "matches": [
+        {
+          "path": "uroot/licenses/usrsctp-LICENSE.md",
+          "bytes": 1500,
+          "sha256": "fa53711b25af4b9a9b8dadfea3cb38166ec4b96760c8d62b284055554537d9ef"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "sce_module/libSceFios2.prx",
+      "matches": [
+        {
+          "path": "uroot/sce_module/libSceFios2.prx",
+          "bytes": 52816,
+          "sha256": "3f8236c5996cf8e9917b8d27706d9743f6603d89de3b9859eacbb9f466b19c01"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "sce_module/libc.prx",
+      "matches": [
+        {
+          "path": "uroot/sce_module/libc.prx",
+          "bytes": 52800,
+          "sha256": "39ad53672bb0b14895f8465eb1619478ab935f5afe5dbf69c15f02cfc0a75ce6"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "sce_sys/icon0.png",
+      "matches": [
+        {
+          "path": "entries/sce_sys/icon0.png",
+          "bytes": 4183,
+          "sha256": "b3627d6ebf2a1e1bc8e4c61ca22bc8ed94f51a6853abd3d6c1856d0bbb7898c0"
+        }
+      ],
+      "matched_staging": true
+    },
+    {
+      "target": "sce_sys/param.sfo",
+      "matches": [
+        {
+          "path": "entries/sce_sys/param.sfo",
+          "bytes": 1076,
+          "sha256": "ab60157bae879dff2682cfda5a8579f945e76834db6e45fc868cada46afeacc4"
+        }
+      ],
+      "matched_staging": false
+    }
+  ],
+  "matched_target_count": 30,
+  "font_files": [
+    "assets/fonts/ATLAS.json",
+    "assets/fonts/OFL.txt",
+    "assets/fonts/README.md",
+    "assets/fonts/SOURCE.json",
+    "assets/fonts/noto_sans.x4font"
+  ],
+  "sfo_entries": {
+    "APP_TYPE": 1,
+    "APP_VER": "01.04",
+    "ATTRIBUTE": 0,
+    "CATEGORY": "gd",
+    "CONTENT_ID": "IV0000-XCLD00001_00-XCLOUD4APP000000",
+    "DOWNLOAD_DATA_SIZE": 0,
+    "PUBTOOLINFO": "c_date=20261011,img0_l0_size=13,img0_l1_size=0,img0_sc_ksize=512,img0_pc_ksize=832",
+    "PUBTOOLVER": 42532864,
+    "SYSTEM_VER": 0,
+    "TITLE": "XCloud4",
+    "TITLE_ID": "XCLD00001",
+    "VERSION": "01.04"
+  },
+  "sfo_staging_semantic_matches": {
+    "APP_TYPE": true,
+    "APP_VER": true,
+    "ATTRIBUTE": true,
+    "CATEGORY": true,
+    "CONTENT_ID": true,
+    "DOWNLOAD_DATA_SIZE": true,
+    "SYSTEM_VER": true,
+    "TITLE": true,
+    "TITLE_ID": true,
+    "VERSION": true
+  },
+  "embedded_build_id": true,
+  "embedded_product_version": "0.7.36",
+  "all_non_sfo_gp4_target_bytes_match_staging": true,
+  "sfo_transformed_by_packager": true,
+  "gp4_target_count": 31,
+  "byte_matched_target_count": 30,
+  "sfo_all_staging_semantics_match": true
+}
