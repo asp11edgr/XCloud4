@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-The implementation, requested host campaign, native rebuild, selected artifact inspection and transfer/readback are **verified**. The fresh console comparison is **pending**. Local host fixtures establish resumed grace and AU assembly for a validated transition; they do not establish real retransmission, a displayed repaired picture or pause reduction on PS4. See the [machine-readable preparation receipt](BUILD_VERIFICATION_0.7.35.json).
+At preparation time, the implementation, requested host campaign, native rebuild, selected artifact inspection and transfer/readback were **verified**, and the fresh console comparison was pending. The subsequent [G0/G45 console report](CONSOLE_REPORT_0.7.35_G0_G45.md) records an exercised rebase with resumed grace/AU utility and similar pause rates in different zones; it does not establish a fluency benefit. Local host fixtures establish resumed grace and AU assembly for a validated transition; they do not establish real retransmission or a displayed repaired picture. The [machine-readable preparation receipt](BUILD_VERIFICATION_0.7.35.json) remains the frozen build-time record.
 
 The baseline is commit `6d26bce`. The [separate 0.7.34 G45 pass](CONSOLE_REPORT_0.7.34_G45_GEARS.md) recorded one local observation-gate omission, an observer rebase and five later `stale_source` grace offers. Their sequence origins differed by 65,536 from the independent upstream observer. That supports a local continuity problem; it does not identify network loss, server retransmission or a new SSRC.
 
@@ -52,7 +52,7 @@ The shared-clock boundary cases also preserve a result unfavorable to G45: with 
 | Correspondence | 85 runtime/build-identity file hashes checked; embedded ELF/OELF profile identities and selected native imports/direct call bodies PASS. |
 | Sources and delivery | 9,387 dependency-source manifest entries verified; both PS4 installers independently read back twice with exact bytes. |
 | Independent review | Actual Claude Code Opus 5.5 selected-source and targeted-delta reviews completed with qualified PASS. Coverage is partial; no reviewer console/performance test. |
-| Fresh console G0/G45 | Pending; no measured 0.7.35 pause rate, real retransmission utility or instrumentation overhead result. |
+| Fresh console G0/G45 | Pending at preparation time. Subsequently completed: see the separate console report for measured cadence, continuity/AU evidence, different-zone and retention limits. Instrumentation overhead and a causal fluency benefit remain unestablished. |
 
 Runtime fingerprint: `8425f615c09af4a4d796157922968635fbcad89b`, a content identity rather than a Git commit. Both profiles use PS4 APP_VER **01.03** and each installer is **9,043,968 bytes**.
 

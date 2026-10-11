@@ -12,13 +12,17 @@ Version 0.6.2 uses, with the owner's authorization, the temporary public OAuth c
 
 The PS4 interface remains **Spanish**. Repository documentation and GitHub content are **English**. The owner authorized **public GitHub publication** on 2026-10-09. Older release notes retain the publication policy in effect at their checkpoints.
 
-## Latest prepared experiment: 0.7.35
+## Latest console continuity experiment: 0.7.35
 
 The [validated NACK sequence resynchronization](docs/NACK_SEQUENCE_RESYNC_0.7.35.md) preserves the 0.7.34 grace/reorder/worker/media settings and separates observer transitions from REQUEST controls. A matching authenticated anchor actually STORED by the worker is required to bind a new epoch and map its raw origin into the continuous extended domain. Old masks are retired; deadlines and the 64-request budget do not restart. Unproven transitions fail closed.
 
 The requested deterministic campaign reproduces five historical `stale_source` offers and proves resumed local grace/AU assembly for a validated rebase, including the 65,536 origin difference. Seventeen current cases, two historical-source cases, eleven GCC/Clang harnesses and 134 reader tests passed. Native **G0/G45**, both rumble OFF, compiled and passed selected artifact inspection and two exact PS4 readbacks each. Actual Claude Opus 5.5 completed qualified source/delta reviews. [Verification receipt](docs/BUILD_VERIFICATION_0.7.35.json).
 
-**The fresh console comparison is pending.** Missing anchor proof can still leave grace unavailable for the rest of a session; capacity, already queued returns, nonpreemptible worker work and short unexplained pauses remain separate problems. Host post-AUTH doubles do not demonstrate cryptographic validation, server retransmission, displayed repair or improved fluency. Historical release assets remain preserved; the PS4 interface has only updated version labels.
+The [fresh G0/G45 console evidence](docs/CONSOLE_REPORT_0.7.35_G0_G45.md) exercised one actual observer contention/rebase in G45. A validated same-source epoch 1→2 transition restored grace: six later offers were admitted with holds and completion, without `stale_source_offers`. After rebase, 75 returned positions contributed to five structurally complete AUs accepted by recovery before Decode. Without output PTS this does not establish five displayed repaired pictures.
+
+Marked stable local NEW cadence was **7 intervals >100 ms / 10.277784 minutes (0.681081/min)** in G0 and **10 / 14.149052 (0.706761/min)** in G45. Both delivered 1280×720. The owner used the same story-mode game in **different zones**, perceived slightly more G45 pauses, and reported occasional interference-like audio in **both** profiles. This pair establishes no causal fluency benefit or regression. Audio admission/Opus/PCM/output diagnostics are not exported yet; reception gaps do not prove the audible cause.
+
+Missing anchor proof can still leave grace unavailable for the rest of a session; capacity, already queued returns, nonpreemptible worker work and short unexplained pauses remain separate problems. Two bounded-capacity and two deadline releases persisted. The next proposed investigation is separate audio-only instrumentation with unchanged playback policy. Host post-AUTH doubles do not demonstrate cryptographic validation or server retransmission. Historical release assets remain preserved; this evidence update changes documentation only.
 
 ## Preserved grace experiment: 0.7.34
 
