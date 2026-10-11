@@ -8,7 +8,7 @@
 enum { X4_INGRESS_PACKET_MAX = 2048, X4_INGRESS_RESERVE_ATTEMPTS = 16 };
 enum { X4_INGRESS_OK, X4_INGRESS_INVALID, X4_INGRESS_CONTENDED,
     X4_INGRESS_FULL, X4_INGRESS_STOPPED };
-typedef struct { uint64_t identity, source, extended_sequence, rtp_timestamp; } X4IngressTicket;
+typedef struct { uint64_t identity, source, extended_sequence, rtp_timestamp, authenticated_us; } X4IngressTicket;
 typedef struct {
     atomic_bool ready;
     uint16_t size;

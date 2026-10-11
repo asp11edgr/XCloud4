@@ -233,6 +233,23 @@ static void bounded_sparse_masks_preserve_exact_positions(void)
         }
     }
 }
+static void authenticated_delivery_metadata_is_preserved_by_message_copy(void)
+{
+    auto original = rtc::make_message(13, rtc::Message::Binary);
+    original->x4NackIdentity = (uint64_t(Epoch) << 32) | 3;
+    original->x4NackSource = (UINT64_C(1) << 63) | (UINT64_C(102) << 32) | 7;
+    original->x4NackExtended = 65536;
+    original->x4NackRtpTimestamp = 12345;
+    original->x4NackReturnFlags = 1;
+    original->x4NackAuthenticated = 987654321;
+    auto copied = rtc::make_message(original->size(), original);
+    CHECK(copied->x4NackIdentity == original->x4NackIdentity);
+    CHECK(copied->x4NackSource == original->x4NackSource);
+    CHECK(copied->x4NackExtended == original->x4NackExtended);
+    CHECK(copied->x4NackRtpTimestamp == original->x4NackRtpTimestamp);
+    CHECK(copied->x4NackReturnFlags == original->x4NackReturnFlags);
+    CHECK(copied->x4NackAuthenticated == original->x4NackAuthenticated);
+}
 
 int main()
 {
@@ -248,6 +265,7 @@ int main()
     CASE(invalid_cname_length_rejected);
     CASE(malformed_descriptor_rejected);
     CASE(bounded_sparse_masks_preserve_exact_positions);
+    CASE(authenticated_delivery_metadata_is_preserved_by_message_copy);
     std::printf("PASS receiver NACK production wire: %u cases, %llu checks\n", cases,
         static_cast<unsigned long long>(checks));
     return 0;

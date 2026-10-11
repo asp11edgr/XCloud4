@@ -72,12 +72,12 @@ int main(void)
     puts("PASS independent reject, settings and delivery clock");
     errno=E2BIG;x4_rtc_nack_event(X4_MON_CR_NACK_REQUEST,0,3,4,5,6,7);
     assert(errno==E2BIG && atomic_load(&nack_calls)==1);
-    x4_rtc_nack_delivery(0x100000002ull,0x8000006612345678ull,65536,789);
+    x4_rtc_nack_delivery(0x100000002ull,0x8000006612345678ull,65536,789,123456);
     X4NackPacket ticket=x4_rtc_nack_delivery_ticket();
     assert(ticket.identity==0x100000002ull && ticket.source==0x8000006612345678ull &&
-        ticket.extended_sequence==65536 && ticket.rtp_timestamp==789);
-    x4_rtc_nack_delivery(0,0,0,0);ticket=x4_rtc_nack_delivery_ticket();
-    assert(!ticket.identity && !ticket.source && !ticket.extended_sequence && !ticket.rtp_timestamp);
+        ticket.extended_sequence==65536 && ticket.rtp_timestamp==789 && ticket.authenticated_us==123456);
+    x4_rtc_nack_delivery(0,0,0,0,0);ticket=x4_rtc_nack_delivery_ticket();
+    assert(!ticket.identity && !ticket.source && !ticket.extended_sequence && !ticket.rtp_timestamp && !ticket.authenticated_us);
     puts("PASS numeric NACK critical observation and clearing of delivery tickets");
     atomic_store(&hold,true);pthread_t writer,closer;
     assert(!pthread_create(&writer,NULL,producer,NULL));while(!atomic_load(&entered))usleep(50);

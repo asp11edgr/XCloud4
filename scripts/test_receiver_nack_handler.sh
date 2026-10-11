@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 # Actual generator + pinned MediaHandler. Test doubles replace validation,
-# entropy and the numeric bridge; this is not SRTP/CAPI/network validation.
+# entropy, diagnostics and control bridge; not SRTP/CAPI/inbox/network proof.
 set -euo pipefail
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 compiler=${CXX:-clang++}

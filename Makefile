@@ -23,6 +23,17 @@ ifneq ($(filter $(X4_RECEIVER_NACK),0 1),$(X4_RECEIVER_NACK))
 $(error X4_RECEIVER_NACK must be 0 or 1)
 endif
 CFLAGS += -DX4_RECEIVER_NACK=$(X4_RECEIVER_NACK)
+X4_NACK_GRACE_MS ?= 0
+ifneq ($(filter $(X4_NACK_GRACE_MS),0 45),$(X4_NACK_GRACE_MS))
+$(error X4_NACK_GRACE_MS must be 0 or 45)
+endif
+ifeq ($(X4_NACK_GRACE_MS),45)
+ifneq ($(X4_RECEIVER_NACK),1)
+$(error Grace45 requires the existing receiver NACK generator ON)
+endif
+endif
+# This intermediate tree has no vibration module; keep metadata115 fixed off.
+CFLAGS += -DX4_NACK_GRACE_MS=$(X4_NACK_GRACE_MS) -DX4_RUMBLE=0
 CXXFLAGS := $(filter-out -std=c23,$(CFLAGS)) -std=c++17 -nostdinc++ -isystem $(SDK)/include/c++/v1
 LDFLAGS := -m elf_x86_64 -pie --script $(SDK)/link.x --eh-frame-hdr -L$(SDK)/lib
 RTC_LIBS := $(X4_WEBRTC_ROOT)/build-datachannel/libdatachannel-static.a \

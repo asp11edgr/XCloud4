@@ -551,7 +551,8 @@ class ReceiverNackReaderTests(unittest.TestCase):
             nack_critical_record(24, t=110100, identity=key, a=65583, c=110010, flags=1)])
         request = out['request_correlations'][0]
         self.assertEqual(request['actually_dispatched_positions'], [65583])
-        self.assertTrue(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertIsNone(request['all_selected_positions_have_first_authenticated_arrival_after_dispatch'])
+        self.assertIsNone(request['successful_local_send_result_observed_us'])
         self.assertFalse(request['all_original_range_positions_observed_in_retained_authenticated_returns'])
 
     def test_close_state_does_not_change_experiment_configuration(self):
@@ -616,7 +617,7 @@ class ReceiverNackReaderTests(unittest.TestCase):
         request = out['request_correlations'][0]
         self.assertIsNone(request['actual_transport_dispatch_reference_us'])
         self.assertIsNone(request['returns_before_dispatch_observations'])
-        self.assertEqual(request['return_dispatch_boundary_kind'], 'later_dispatch_record_clock')
+        self.assertEqual(request['return_dispatch_boundary_kind'], 'unavailable')
 
     def test_shutdown_AU_discard_is_separate_from_recovery_filter(self):
         key = (7 << 32)|1
@@ -670,11 +671,356 @@ class ReceiverNackReaderTests(unittest.TestCase):
                 out = self.analyze([self.state(), self.request(first=100, last=100),
                     nack_critical_record(30, t=110022, identity=key, a=100, b=1, c=110020),
                     nack_critical_record(20, t=110045, identity=key, a=100, b=100, c=110010),
+                    nack_critical_record(23, t=110047, identity=key, a=1, b=30, c=110040),
                     nack_critical_record(24, t=110050, identity=key, a=100, c=110010, flags=flags)])
                 request = out['request_correlations'][0]
                 self.assertEqual(request['retained_authenticated_dispatched_positions_after_dispatch'], [100])
                 self.assertEqual(request['first_authenticated_arrival_positions_after_dispatch'], [])
                 self.assertEqual(request['post_dispatch_unknown_or_conflicting_first_flags'], 1)
+
+
+class ReceiverNackResultBoundaryTests(unittest.TestCase):
+    analyze = ReceiverNackReaderTests.analyze
+    state = ReceiverNackReaderTests.state
+    request = ReceiverNackReaderTests.request
+
+    def rows(self, first=100, last=107, local_status=1, local_flags=0):
+        key = (7 << 32)|1
+        return [self.state(), self.request(first=first, last=last),
+            nack_critical_record(30, t=110032, identity=key, a=first,
+                b=(1 << (last-first+1))-1, c=110020),
+            nack_critical_record(20, t=110110, identity=key, a=first, b=last, c=110010),
+            nack_critical_record(21, t=110045, identity=key, c=110040),
+            nack_critical_record(22, t=110070, identity=key, a=0, c=110040),
+            nack_critical_record(23, t=110100, identity=key,
+                a=local_status & p.U64, c=110040, flags=local_flags)]
+
+    def test_attempt_start_and_two_results_are_distinct_boundaries(self):
+        key = (7 << 32)|1
+        rows = self.rows()
+        times = [110030, 110050, 110070, 110080, 110100, 110101]
+        rows += [nack_critical_record(24, t=t, identity=key, a=100+i, c=110010, flags=1)
+            for i, t in enumerate(times)]
+        request = self.analyze(rows)['request_correlations'][0]
+        self.assertEqual(request['transport_attempt_start_reference_us'], 110040)
+        self.assertEqual(request['successful_SRTCP_result_observed_us'], 110070)
+        self.assertEqual(request['successful_local_send_result_observed_us'], 110100)
+        self.assertTrue(request['protected_local_send_route_success_observed'])
+        self.assertEqual([r['classification'] for r in
+            request['authenticated_return_result_boundary_classification']], [
+            'before_attempt_start', 'before_successful_protection_result',
+            'same_clock_as_protection_result_ambiguous',
+            'between_successful_protection_and_local_result_ambiguous',
+            'same_clock_as_local_result_ambiguous', 'after_successful_local_send_result'])
+        self.assertEqual(request['first_authenticated_arrival_positions_after_successful_local_send_result'], [105])
+        self.assertEqual(request['timings_us']['attempt_start_to_first_authenticated_selected_arrival'], 10)
+        self.assertEqual(request['timings_us']['successful_local_send_result_to_first_authenticated_selected_arrival'], 1)
+        self.assertFalse(request['all_selected_positions_have_first_arrival_after_successful_local_send_result'])
+        self.assertTrue(all(not r['retransmission_causality_established'] for r in
+            request['authenticated_return_result_boundary_classification']))
+
+    def test_only_boolean_one_without_exception_is_local_success(self):
+        key = (7 << 32)|1
+        for status, exception in ((0, 0), (-1, 0), (1, 1), (2, 0)):
+            with self.subTest(status=status, exception=exception):
+                request = self.analyze(self.rows(local_status=status, local_flags=exception)+[
+                    nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=1)
+                ])['request_correlations'][0]
+                self.assertIsNone(request['successful_local_send_result_observed_us'])
+                self.assertEqual(request['local_send_result_observed_us'], 110100)
+                self.assertEqual(request['authenticated_return_result_boundary_classification'][0]['classification'],
+                    'after_unsuccessful_local_result_not_post_success')
+                self.assertIsNone(request['timings_us']['successful_local_send_result_to_first_authenticated_selected_arrival'])
+                self.assertFalse(request['protected_local_send_route_success_observed'])
+
+    def test_missing_local_result_never_uses_dispatch_record_clock(self):
+        key = (7 << 32)|1
+        rows = [r for r in self.rows() if r[2] & 65535 != 23]
+        rows += [nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=1)]
+        request = self.analyze(rows)['request_correlations'][0]
+        self.assertEqual(request['transport_attempt_start_reference_us'], 110040)
+        self.assertIsNone(request['successful_local_send_result_observed_us'])
+        self.assertEqual(request['authenticated_return_result_boundary_classification'][0]['classification'],
+            'after_protection_result_local_result_unavailable')
+        self.assertEqual(request['first_authenticated_arrival_positions_after_successful_local_send_result'], [])
+
+    def test_duplicate_or_conflicting_result_references_do_not_supply_boundary(self):
+        key = (7 << 32)|1
+        for duplicate in (True, False):
+            with self.subTest(duplicate=duplicate):
+                rows = self.rows()
+                rows.append(nack_critical_record(23, t=110115, identity=key, a=1,
+                    c=110040 if duplicate else 110041))
+                rows.append(nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=1))
+                request = self.analyze(rows)['request_correlations'][0]
+                self.assertIsNone(request['successful_local_send_result_observed_us'])
+                self.assertEqual(request['first_authenticated_arrival_positions_after_successful_local_send_result'], [])
+                self.assertFalse(request['protected_local_send_route_success_observed'])
+
+    def test_invalid_ordering_or_zero_attempt_reference_is_unknown(self):
+        key = (7 << 32)|1
+        for mutate in ('zero', 'before_request', 'local_before_protection', 'protection_before_begin'):
+            with self.subTest(mutate=mutate):
+                rows = []
+                for row in self.rows():
+                    changed = list(row)
+                    kind = row[2] & 65535
+                    if kind in (21, 22, 23) and mutate in ('zero', 'before_request'):
+                        changed[6] = 0 if mutate == 'zero' else 110009
+                    if kind == 23 and mutate == 'local_before_protection':
+                        changed[0] = 110060
+                    if kind == 22 and mutate == 'protection_before_begin':
+                        changed[0] = 110042
+                    rows.append(tuple(changed))
+                rows.append(nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=1))
+                request = self.analyze(rows)['request_correlations'][0]
+                self.assertFalse(request['protected_local_send_route_success_observed'])
+                if mutate != 'protection_before_begin':
+                    self.assertIsNone(request['successful_local_send_result_observed_us'])
+                else:
+                    self.assertIsNone(request['successful_SRTCP_result_observed_us'])
+
+    def test_first_before_local_result_then_duplicate_is_not_new_repair(self):
+        key = (7 << 32)|1
+        request = self.analyze(self.rows(first=100, last=100)+[
+            nack_critical_record(24, t=110080, identity=key, a=100, c=110010, flags=5),
+            nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=2)
+        ])['request_correlations'][0]
+        self.assertEqual(request['first_authenticated_arrival_positions_after_successful_local_send_result'], [])
+        self.assertFalse(request['all_selected_positions_have_first_arrival_after_successful_local_send_result'])
+        self.assertEqual(request['authenticated_return_result_boundary_classification'][1]['classification'],
+            'after_successful_local_send_result')
+        self.assertTrue(request['authenticated_return_result_boundary_classification'][1]['duplicate_observation'])
+
+    def test_success_result_cannot_create_selected_positions_without_mask(self):
+        key = (7 << 32)|1
+        rows = [r for r in self.rows() if r[2] & 65535 != 30]
+        request = self.analyze(rows+[
+            nack_critical_record(24, t=110120, identity=key, a=100, c=110010, flags=1)
+        ])['request_correlations'][0]
+        self.assertEqual(request['successful_local_send_result_observed_us'], 110100)
+        self.assertIsNone(request['transport_attempt_start_reference_us'])
+        self.assertIsNone(request['dispatch_mask_selected_positions'])
+        self.assertEqual(request['first_authenticated_arrival_positions_after_successful_local_send_result'], [])
+
+
+class ReceiverNackGraceReaderTests(unittest.TestCase):
+    def analyze(self, rows, omitted=None):
+        numbered = [tuple(row[:7])+(i+1,) for i, row in enumerate(rows)]
+        return p.analyze(fixture_v2(critical=numbered, omitted=omitted))['upstream_diagnostics']['receiver_NACK_grace']
+
+    def row(self, kind, **kwargs):
+        kwargs.setdefault('identity', (7 << 32)|1)
+        kwargs.setdefault('t', 120000+kind)
+        return nack_critical_record(31, stage=kind, **kwargs)
+
+    def test_older_capture_is_unavailable_not_OFF(self):
+        out = self.analyze([])
+        self.assertFalse(out['available'])
+        self.assertIsNone(out['experiment_enabled'])
+
+    def test_all_subkinds_use_stage_as_grace_kind_not_transport_location(self):
+        rows = [self.row(1, a=65535, b=3, c=110000),
+            self.row(2, a=110040, b=110100, c=3, flags=3),
+            self.row(3, a=155000, b=3, c=(32 << 32)),
+            self.row(4, a=155000, b=3, c=44, flags=1),
+            self.row(5, a=65535, b=119990, c=120000, flags=2),
+            self.row(6, a=65535, b=120000, c=119990),
+            self.row(7, a=65535, b=(65535 << 32)|32, c=155000),
+            self.row(8, a=49, b=9, c=3), self.row(9, a=20, b=32, c=16),
+            self.row(10, identity=0, a=101, b=0),
+            self.row(11, a=(65535 << 32)|32, b=155000, c=42),
+            self.row(12, a=(65535 << 32)|2, b=32, c=42, flags=2)]
+        out = self.analyze(rows)
+        self.assertEqual(out['retained_subkind_counts'], {name: 1 for name in (
+            'CONTROL_REQUEST', 'CONTROL_OUTCOME', 'OFFER', 'RELEASE', 'CALLBACK',
+            'QUEUE_POP', 'WORKER_ACCEPT', 'WORK_COST', 'QUEUE_AGE', 'COUNTER', 'HOLD_BEGIN', 'ABANDON')})
+        self.assertTrue(all(r['stage_name'] == 'NACK_GRACE' and not r['stage_is_transport_location']
+            for r in out['retained_timeline']))
+        details = out['range_correlations'][0]
+        self.assertTrue(details['offer_deadline_matches_detect_plus_45ms'])
+        self.assertEqual(details['request']['original_missing_positions'], [65535, 65536])
+        self.assertEqual(details['retained_release_reason_counts'], {'accepted': 1})
+        self.assertFalse(details['AU_reconstruction_native_picture_and_presentation_established'])
+        self.assertTrue(all(not r['output_PTS_association_established'] for r in out['retained_timeline']))
+
+    def test_AUTH_cancellation_outcome_is_not_worker_completion(self):
+        out = self.analyze([self.row(2, a=0, b=0, c=0, flags=(4 << 8))])
+        row = out['retained_timeline'][0]
+        self.assertEqual(row['local_result'], -2)
+        self.assertTrue(row['AUTH_complete_does_not_complete_worker_grace'])
+        self.assertEqual(out['range_correlations'][0]['retained_worker_STORED_observations'], [])
+
+    def test_worker_record_clock_is_separate_from_AUTH_and_queue_pop(self):
+        out = self.analyze([self.row(5, t=140000, a=100, b=139980, c=139990),
+            self.row(6, t=140010, a=100, b=139990, c=139980),
+            self.row(7, t=140020, a=100, b=(100 << 32)|10, c=145000)])
+        position = out['range_correlations'][0]['retained_position_chronology'][0]
+        self.assertEqual(position['retained_AUTH_clocks_us'], [139980])
+        self.assertEqual(position['retained_callback_begin_clocks_us'], [139990])
+        self.assertEqual(position['retained_queue_pop_clocks_us'], [140010])
+        self.assertEqual(position['retained_worker_STORED_record_clocks_us'], [140020])
+        self.assertEqual(position['STORED_record_clock_relative_to_deadline'], ['before'])
+        self.assertTrue(position['record_clock_is_not_proven_actual_insert_instant'])
+        self.assertEqual(out['retained_timeline'][1]['AUTH_to_queue_pop_us'], 30)
+
+    def test_reorder_jump_or_rejection_does_not_complete_worker_mask(self):
+        out = self.analyze([self.row(7, a=100, b=(100 << 32)|32, c=145000, flags=1),
+            self.row(7, a=101, b=(101 << 32)|32, c=145000, flags=2)])
+        self.assertEqual(out['range_correlations'][0]['retained_worker_STORED_observations'], [])
+
+    def test_cumulative_counters_latest_only_and_critical_omissions_explicit(self):
+        omitted = [0]*32; omitted[31] = 2
+        out = self.analyze([self.row(10, t=120000, identity=0, a=101, b=2),
+            self.row(10, t=120001, identity=0, a=101, b=3)], omitted)
+        self.assertEqual(out['latest_retained_counter_snapshots'][0]['value'], 3)
+        self.assertEqual(out['latest_retained_counter_snapshots'][0]['counter_name'], 'control_inbox_omitted')
+        self.assertEqual(out['counter_snapshot_duplicates_not_summed'], 1)
+        self.assertEqual(out['coverage']['omitted'], 2)
+        self.assertFalse(out['coverage']['details_complete'])
+        self.assertFalse(out['coverage']['absent_retained_subkind_establishes_absence'])
+        self.assertEqual(out['coverage']['retained_control_inbox_omissions'], 3)
+
+    def test_explicit_configuration_snapshot_observes_mode_not_held_range(self):
+        for mode, expected in ((0, False), (45, True), (46, None)):
+            with self.subTest(mode=mode):
+                out = self.analyze([self.row(10, identity=0, a=114, b=mode),
+                    self.row(10, identity=0, a=115, b=1)])
+                self.assertEqual(out['experiment_enabled'], expected)
+                self.assertEqual(out['range_correlations'], [])
+                self.assertTrue(out['configured_mode_observation_does_not_prove_runtime_hold'])
+                self.assertEqual(out['latest_retained_counter_snapshots'][1]['counter_name'], 'configured_rumble')
+        out = self.analyze([self.row(10, identity=0, a=114, b=0),
+            self.row(10, identity=0, a=114, b=45)])
+        self.assertIsNone(out['experiment_enabled'])
+
+    def test_deadline_overflow_duplicate_controls_and_source_mismatch_are_unknown(self):
+        request = self.row(1, a=100, b=3, c=p.U64-10)
+        out = self.analyze([request, self.row(3, a=0, b=3, c=0)])
+        self.assertIsNone(out['range_correlations'][0]['offer_deadline_matches_detect_plus_45ms'])
+        out = self.analyze([self.row(1, a=100, b=3, c=110000)]*2)
+        self.assertIsNone(out['range_correlations'][0]['request'])
+        out = self.analyze([self.row(1, a=100, b=3, c=110000),
+            self.row(3, a=155000, b=3, c=0, ssrc=43)])
+        self.assertEqual(len(out['range_correlations']), 2)
+        self.assertTrue(all(r['offer_deadline_matches_detect_plus_45ms'] is None for r in out['range_correlations']))
+
+    def test_state_release_is_separate_from_actual_worker_advance(self):
+        rows = [self.row(11, t=120000, a=(65535 << 32)|32, b=155000, c=42),
+            self.row(4, t=155005, a=155000, b=0, c=32, flags=2)]
+        out = self.analyze(rows)
+        state = out['range_correlations'][0]
+        self.assertTrue(state['grace_held_observation_retained'])
+        self.assertTrue(state['state_end_observation_retained'])
+        self.assertFalse(state['actual_worker_hole_advance_observation_retained'])
+        self.assertIsNone(state['state_end_to_worker_advance_observation_us'])
+        self.assertEqual(state['hold_to_state_end_observation_us'], 35005)
+        self.assertFalse(state['retained_state_end_observations'][0]['actual_worker_hole_advance_established'])
+        out = self.analyze(rows+[self.row(12, t=155010, a=(65535 << 32)|2, b=32, c=42, flags=2)])
+        state = out['range_correlations'][0]
+        self.assertTrue(state['actual_worker_hole_advance_observation_retained'])
+        self.assertEqual(state['state_end_to_worker_advance_observation_us'], 5)
+        self.assertEqual(state['retained_worker_advance_reason_counts'], {'deadline': 1})
+        advance = state['retained_worker_ABANDON_observations'][0]
+        self.assertEqual(advance['pre_expected_wire_sequence'], 65535)
+        self.assertEqual(advance['lost_positions'], 2)
+        self.assertEqual(advance['post_expected_wire_sequence'], 1)
+        self.assertEqual(advance['pre_buffered_packets'], 32)
+        self.assertEqual(advance['pre_furthest_forward_offset'], 42)
+        self.assertFalse(advance['advance_establishes_AU_or_picture'])
+        self.assertFalse(advance['output_PTS_association_established'])
+
+    def test_ABANDON_critical_fact_does_not_require_pause_window_or_release(self):
+        out = self.analyze([self.row(12, t=160000, a=(100 << 32)|3, b=12, c=40, flags=3)])
+        state = out['range_correlations'][0]
+        self.assertFalse(state['state_end_observation_retained'])
+        self.assertFalse(state['grace_held_observation_retained'])
+        self.assertTrue(state['actual_worker_hole_advance_observation_retained'])
+        self.assertEqual(state['retained_worker_advance_reason_counts'], {'capacity': 1})
+        self.assertIsNone(state['state_end_to_worker_advance_observation_us'])
+
+    def test_omitted_ABANDON_or_reason_conflict_does_not_invent_timeline(self):
+        omitted = [0]*32; omitted[31] = 1
+        release = self.row(4, t=155005, a=155000, b=0, c=32, flags=2)
+        out = self.analyze([release], omitted)
+        self.assertFalse(out['range_correlations'][0]['actual_worker_hole_advance_observation_retained'])
+        self.assertFalse(out['coverage']['details_complete'])
+        out = self.analyze([release,self.row(12, t=155010, a=(100 << 32)|1, b=32, c=42, flags=3)])
+        state = out['range_correlations'][0]
+        self.assertEqual(state['retained_release_reason_counts'], {'deadline': 1})
+        self.assertEqual(state['retained_worker_advance_reason_counts'], {'capacity': 1})
+        self.assertIsNone(state['state_end_to_worker_advance_observation_us'])
+
+    def test_invalid_advance_metadata_and_unknown_reason_remain_raw_observations(self):
+        for expected,lost,buffered,furthest in ((65536,1,1,1),(100,0,1,1),
+            (100,128,128,128),(100,2,0,2),(100,2,129,2),(100,2,1,1)):
+            with self.subTest(expected=expected,lost=lost,buffered=buffered,furthest=furthest):
+                out = self.analyze([self.row(12,a=(expected << 32)|lost,b=buffered,c=furthest,flags=2)])
+                self.assertFalse(out['range_correlations'][0]['actual_worker_hole_advance_observation_retained'])
+                self.assertFalse(out['retained_timeline'][0]['advance_metadata_valid'])
+        out = self.analyze([self.row(12,a=(100 << 32)|1,b=1,c=1,flags=99)])
+        self.assertEqual(out['retained_timeline'][0]['grace_end_reason'], 'unknown')
+        self.assertTrue(out['range_correlations'][0]['actual_worker_hole_advance_observation_retained'])
+
+    def test_protected_ABANDON_flag_is_not_release_reason_or_complete_hole(self):
+        out = self.analyze([self.row(4,t=150000,a=145000,b=0,c=32,flags=2),
+            self.row(12,t=150005,a=(100 << 32)|3,b=32,c=8,flags=2|256)])
+        state = out['range_correlations'][0]
+        advance = state['retained_worker_ABANDON_observations'][0]
+        self.assertEqual(advance['grace_end_reason_code'], 2)
+        self.assertEqual(advance['grace_end_reason'], 'deadline')
+        self.assertTrue(advance['protected_boundary_before_active_pending'])
+        self.assertEqual(advance['post_expected_wire_sequence'], 103)
+        self.assertEqual(state['state_end_to_worker_advance_observation_us'], 5)
+        self.assertFalse(advance['packet_emit_established'])
+        self.assertTrue(advance['protected_boundary_does_not_complete_pending_range'])
+
+    def test_ordinary_limited_ABANDON_identity_zero_has_no_request_association(self):
+        out = self.analyze([self.row(12,identity=0,a=(65535 << 32)|1,b=32,c=10,flags=256)])
+        self.assertEqual(out['range_correlations'], [])
+        self.assertEqual(len(out['retained_ordinary_worker_ABANDON_observations']), 1)
+        advance = out['retained_ordinary_worker_ABANDON_observations'][0]
+        self.assertTrue(advance['ordinary_worker_advance_observation'])
+        self.assertFalse(advance['ordinary_advance_has_request_association'])
+        self.assertEqual(advance['grace_end_reason'], 'none')
+        self.assertTrue(advance['protected_boundary_before_active_pending'])
+        self.assertEqual(advance['post_expected_wire_sequence'], 0)
+
+    def test_SOURCE_code5_is_shared_with_reorder_reset_not_proof_of_SSRC_change(self):
+        out = self.analyze([self.row(4,t=150000,a=145000,b=0,c=32,flags=5),
+            self.row(12,t=150005,a=(100 << 32)|3,b=32,c=8,flags=5|256)])
+        state = out['range_correlations'][0]
+        release = state['retained_state_end_observations'][0]
+        advance = state['retained_worker_ABANDON_observations'][0]
+        self.assertEqual(release['release_reason_code'],5)
+        self.assertEqual(advance['grace_end_reason_code'],5)
+        self.assertEqual(release['release_reason'],'source_or_reorder_reset')
+        self.assertEqual(advance['grace_end_reason'],'source_or_reorder_reset')
+        self.assertEqual(release['ssrc'],advance['ssrc'])
+        for row in (release,advance):
+            self.assertTrue(row['reason5_is_shared_source_or_reorder_reset'])
+            self.assertFalse(row['SSRC_change_established_by_reason5'])
+        self.assertIn('window JUMP/reset',out['release_reason_code5_scope'])
+        self.assertEqual(state['state_end_to_worker_advance_observation_us'],5)
+
+    def test_REORDER_HOLE_protected_prefix_preserves_each_existing_reason_bit(self):
+        row = record(150000,0x10c,a=(65535 << 32)|2,b=32,flags=1|2|4|8|16)
+        result = p.analyze(fixture(history=[row]))
+        hole = result['retained_timeline'][0]
+        for name in ('reason_depth32','reason_ordinary_time_expiry',
+            'ordinary_time_expiry_permitted_for_call','reason_forced_grace_release',
+            'reason_advance_limited_before_active_pending'):
+            self.assertTrue(hole[name])
+        self.assertEqual(hole['expected_after_skipped_prefix_wire'], 1)
+        self.assertFalse(hole['packet_emit_established'])
+        self.assertFalse(hole['Decode_feed_established'])
+        self.assertTrue(hole['skipped_prefix_does_not_complete_protected_range'])
+        baseline = p.analyze(fixture(history=[record(150000,0x10c,a=(100 << 32)|1,b=32,flags=1|4)]))
+        hole = baseline['retained_timeline'][0]
+        self.assertTrue(hole['reason_depth32'])
+        self.assertTrue(hole['ordinary_time_expiry_permitted_for_call'])
+        self.assertFalse(hole['reason_ordinary_time_expiry'])
+        self.assertFalse(hole['reason_advance_limited_before_active_pending'])
 
 
 class V2ProgressReaderTests(unittest.TestCase):

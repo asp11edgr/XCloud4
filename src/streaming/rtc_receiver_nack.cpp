@@ -106,6 +106,32 @@ void X4ReceiverNack::suppress(const X4ReceiverNackGap &gap, unsigned reason,
     x4_rtc_nack_event(Suppress, 0, identity(gap.request_id ? gap.request_id : gap.gap_id),
         sourceKey(gap.ssrc), reason, positions, gap.gap_id);
 }
+void X4ReceiverNack::graceControl(const X4ReceiverNackGap &gap, unsigned kind,
+    uint64_t selectedMask, uint64_t attemptStart, uint64_t localReturn,
+    int localResult, unsigned reason) {
+    // This control path is independent of optional diagnostic recording. The
+    // bridge owns a bounded, try-only inbox and accounts omitted controls.
+    // Keep the original request range: AUTH observation does not establish
+    // that the application worker has stored the returning packet.
+    X4NackGraceControl control{};
+    control.identity = identity(gap.request_id);
+    control.source = sourceKey(gap.ssrc);
+    control.sequence_epoch = gap.sequence_epoch;
+    control.first_extended = gap.first_extended;
+    if (gap.missing_count && gap.missing_count <= X4_RECEIVER_NACK_RANGE_MAX)
+        control.original_mask = gap.missing_count == 64 ? UINT64_MAX :
+            (UINT64_C(1) << gap.missing_count) - 1;
+    control.selected_mask = selectedMask;
+    control.detected_us = gap.detected_us;
+    if (gap.detected_us && gap.detected_us <= UINT64_MAX - X4_NACK_GRACE_MAX_US)
+        control.deadline_us = gap.detected_us + X4_NACK_GRACE_MAX_US;
+    control.attempt_start_us = attemptStart;
+    control.local_return_us = localReturn;
+    control.kind = kind;
+    control.local_result = localResult;
+    control.reason = reason;
+    (void)x4_rtc_nack_grace_control(&control);
+}
 
 void X4ReceiverNack::incoming(message_vector &messages, const message_callback &send) {
     (void)send; // Observation only: no transport send or allocation on this path.
@@ -147,6 +173,8 @@ void X4ReceiverNack::incoming(message_vector &messages, const message_callback &
                             range.requested_us = slot.gap.requested_us;
                     x4_rtc_nack_event(RequestCreated, 0, identity(gap.request_id), sourceKey(ssrc),
                         gap.first_extended, gap.last_extended, gap.detected_us);
+                    graceControl(slot.gap, X4_NACK_GRACE_REQUEST, 0, 0, 0,
+                        X4_NACK_GRACE_NOT_ATTEMPTED, X4_NACK_GRACE_ATTEMPT);
                     // Publish only the fully initialized queued request. The
                     // dispatcher can avoid the receive gate when no work is
                     // queued, including OFF and the ordinary idle interval.
@@ -167,6 +195,7 @@ void X4ReceiverNack::incoming(message_vector &messages, const message_callback &
                 message->x4NackExtended = arrival.extended_sequence;
                 message->x4NackRtpTimestamp = timestamp;
                 message->x4NackReturnFlags = flags;
+                message->x4NackAuthenticated = arrival.observed_us;
             }
         }
         mGate.clear(std::memory_order_release);
@@ -261,6 +290,9 @@ int X4ReceiverNack::poll(const std::function<bool(message_ptr)> &send) {
             for (const auto &range : mState.ranges)
                 if (range.used && range.request_id == gap.request_id) retained = true;
             suppress(gap, retained ? 4 : 5, gap.missing_count);
+            graceControl(gap, X4_NACK_GRACE_OUTCOME, 0, 0,
+                x4_rtc_receive_clock(), X4_NACK_GRACE_NOT_ATTEMPTED,
+                retained ? X4_NACK_GRACE_CANCEL_AUTH_COMPLETE : X4_NACK_GRACE_CANCEL_RETIRED);
         } else {
             // Cancellation is exact at this serialized selection boundary.
             // A later arrival can still race packet construction/protection;
@@ -274,16 +306,29 @@ int X4ReceiverNack::poll(const std::function<bool(message_ptr)> &send) {
     mGate.clear(std::memory_order_release);
     if (!selected || !pending) return 0;
     uint64_t dispatchTime = x4_rtc_receive_clock();
-    if (mClosing.load(std::memory_order_acquire)) { suppress(gap, 7, population(pending)); return 0; }
+    if (mClosing.load(std::memory_order_acquire)) {
+        suppress(gap, 7, population(pending));
+        graceControl(gap, X4_NACK_GRACE_OUTCOME, pending, 0,
+            x4_rtc_receive_clock(), X4_NACK_GRACE_NOT_ATTEMPTED, X4_NACK_GRACE_CANCEL_CLOSING);
+        return 0;
+    }
     x4_rtc_nack_event(Dispatch, population(pending), identity(gap.request_id), sourceKey(gap.ssrc),
         gap.first_extended, gap.last_extended, gap.requested_us);
     try {
         auto message = packet(gap, pending, dispatchTime);
         bool result = send(message);
+        // dispatchTime is the attempt reference before construction/send;
+        // this clock observes return, not socket delivery or server receipt.
+        uint64_t returnObserved = x4_rtc_receive_clock();
+        graceControl(gap, X4_NACK_GRACE_OUTCOME, pending, dispatchTime,
+            returnObserved, result ? 1 : 0, X4_NACK_GRACE_ATTEMPT);
         x4_rtc_nack_event(LocalResult, 0, identity(gap.request_id), sourceKey(gap.ssrc),
             result ? 1 : 0, message->size(), dispatchTime);
         return result ? 1 : -1;
     } catch (const std::exception &) {
+        uint64_t returnObserved = x4_rtc_receive_clock();
+        graceControl(gap, X4_NACK_GRACE_OUTCOME, pending, dispatchTime,
+            returnObserved, X4_NACK_GRACE_EXCEPTION, X4_NACK_GRACE_ATTEMPT);
         // Numeric class only; no secret-bearing exception text is exported.
         x4_rtc_nack_event(LocalResult, 1, identity(gap.request_id), sourceKey(gap.ssrc),
             uint64_t(int64_t(-1)), 0, dispatchTime);
@@ -309,6 +354,8 @@ int X4ReceiverNack::close() {
             slot.queued = false; mQueued.fetch_sub(1, std::memory_order_acq_rel);
             mExtra[6].fetch_add(1, std::memory_order_relaxed);
             suppress(slot.gap, 7, slot.gap.missing_count);
+            graceControl(slot.gap, X4_NACK_GRACE_OUTCOME, 0, 0,
+                x4_rtc_receive_clock(), X4_NACK_GRACE_NOT_ATTEMPTED, X4_NACK_GRACE_CANCEL_CLOSING);
         }
         x4_receiver_nack_close(&mState); counters(); mFinalCounters = true;
         x4_rtc_nack_event(State, 8, identity(0), sourceKey(mState.ssrc), 0, 0, 0);

@@ -74,7 +74,7 @@ enum {
     X4_MON_CR_NACK_LOCAL_SEND_RESULT, X4_MON_CR_NACK_AUTH_RETURN,
     X4_MON_CR_NACK_REORDER_RESULT, X4_MON_CR_NACK_AU_CONTRIBUTION,
     X4_MON_CR_NACK_STATE, X4_MON_CR_NACK_SUPPRESS, X4_MON_CR_NACK_COUNTER,
-    X4_MON_CR_NACK_DISPATCH_MASK
+    X4_MON_CR_NACK_DISPATCH_MASK, X4_MON_CR_NACK_GRACE
 };
 enum {
     X4_MON_CR_CAP = 4096, X4_MON_CR_EVENT_CAP = 32,
@@ -89,7 +89,8 @@ typedef struct { uint64_t w[8]; } X4MonitorCritical;
 _Static_assert(sizeof(X4MonitorCritical) == 64, "critical diagnostic ABI");
 _Static_assert(X4_MON_CR_NACK_DETECT == 18 && X4_MON_CR_NACK_COUNTER == 29 &&
     X4_MON_CR_NACK_DISPATCH_MASK == 30 &&
-    (int)X4_MON_CR_NACK_DISPATCH_MASK < (int)X4_MON_CR_EVENT_CAP,
+    X4_MON_CR_NACK_GRACE == 31 &&
+    (int)X4_MON_CR_NACK_GRACE < (int)X4_MON_CR_EVENT_CAP,
     "NACK uses existing v2 event slots");
 /* NACK source: bit63 | (original payload type102 <<32) | SSRC. Request
  * identity: session epoch high32 and session request ordinal low32. The
@@ -112,6 +113,19 @@ _Static_assert(X4_MON_CR_NACK_DETECT == 18 && X4_MON_CR_NACK_COUNTER == 29 &&
  * are invalid. Selection precedes transport dispatch and is not atomic send.
  * STATE is configuration/lifecycle only; flags8 marks closing, not disabled.
  * Local status success establishes neither delivery nor a presented image. */
+/* GRACE31 is a separately session-bound functional policy's observation.
+ * stage1 request(first,mask,detection);2 outcome(attempt,local-return,mask),
+ * flags=(local-result+2)&255 | cancel-reason<<8;3 offer(deadline,grant,
+ * occupancy<<32|result);4 release(deadline,accepted-mask,occupancy),flagsreason;
+ * 5 callback(seq,AUTH,callback),flagsadmission;6 queue-pop(seq,callback,AUTH);
+ * 7 worker decision(seq,expected<<32|preoccupancy,deadline),flagsreorder;
+ * 8 elapsed Decode/copy/convert aggregates from worker offer processing to
+ * release, not the whole detection interval or an input/output association;
+ * 9 queue(oldest-age,depth,max returned dwell);10 counter(id,value,0);
+ * 11 hold-begin(expected<<32|occupancy,deadline,furthest-offset);
+ * 12 actual forced abandonment(expected<<32|lost,preoccupancy,span),flagsreason.
+ * t_us is the event observation, not an inferred remote acknowledgement.
+ * Critical-ring attempts/omissions apply independently to all subkinds. */
 typedef struct {
     uint64_t t_us, a, b;
     uint32_t ordinal;

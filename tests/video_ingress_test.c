@@ -430,14 +430,14 @@ static void concurrent_producers(void)
 static void numeric_ticket_roundtrip(void)
 {
     X4VideoIngress q; uint8_t packet[12]={0}, out[2048]; uint64_t arrival=0;
-    X4IngressTicket sent={0x100000003ull,0x80000066abcdef01ull,65536,1234}, received;
+    X4IngressTicket sent={0x100000003ull,0x80000066abcdef01ull,65536,1234,5678}, received;
     CHECK(x4_video_ingress_init(&q,4)==0);
     CHECK(x4_video_ingress_push_ticket(&q,packet,sizeof(packet),99,NULL,&sent));
     CHECK(x4_video_ingress_pop_ticket(&q,out,&arrival,&received)==sizeof(packet));
     CHECK(arrival==99 && !memcmp(&sent,&received,sizeof(sent)));
     CHECK(x4_video_ingress_push(&q,packet,sizeof(packet),100,NULL));
     CHECK(x4_video_ingress_pop_ticket(&q,out,&arrival,&received)==sizeof(packet));
-    CHECK(!received.identity && !received.source && !received.extended_sequence && !received.rtp_timestamp);
+    CHECK(!received.identity && !received.source && !received.extended_sequence && !received.rtp_timestamp && !received.authenticated_us);
     CHECK(x4_video_ingress_pop_ticket(&q,out,&arrival,&received)==0 && !received.identity);
     dispose(&q); puts("PASS numeric NACK ticket publication and clearing; queue algorithm unchanged");
 }

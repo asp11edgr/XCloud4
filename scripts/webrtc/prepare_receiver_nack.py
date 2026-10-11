@@ -14,7 +14,9 @@ FIELDS = (
     ('uint64_t', 'Last'), ('uint64_t', 'Detected'), ('uint64_t', 'Requested'),
     ('uint64_t', 'Dispatch'), ('uint64_t', 'Extended'),
     ('uint32_t', 'RtpTimestamp'), ('uint32_t', 'ReturnFlags'),
+    ('uint64_t', 'Authenticated'),
 )
+LEGACY_FIELDS = FIELDS[:-1]
 
 
 def replace(text, old, new, label):
@@ -37,19 +39,52 @@ def apply(base):
         text = edits.get(path, path.read_text(encoding='utf-8'))
         edits[path] = replace(text, old, new, relative)
 
+    def known_overlay(relative, anchor, legacy_suffix, suffix, marker, marker_count,
+        legacy_marker_count=None):
+        """Migrate only complete prior overlay blocks, never a short prefix.
+
+        The short receive-diagnostic anchor also occurs inside the old overlay.
+        Replacing that anchor alone would silently duplicate NACK declarations
+        or Track-pop calls. Unknown/partial/duplicate overlays fail before writes.
+        """
+        path = vendor / relative
+        text = edits.get(path, path.read_text(encoding='utf-8'))
+        old, new = anchor + legacy_suffix, anchor + suffix
+        if legacy_marker_count is None:
+            legacy_marker_count = marker_count - 1
+        if text.count(new) == 1 and text.count(marker) == marker_count:
+            pass
+        elif text.count(old) == 1 and text.count(marker) == legacy_marker_count:
+            text = text.replace(old, new, 1)
+        elif marker not in text and text.count(anchor) == 1:
+            text = text.replace(anchor, new, 1)
+        else:
+            raise SystemExit(f'Incomplete or unknown NACK overlay block: {relative}')
+        edits[path] = text
+
     # Keep the complete preceding diagnostic replacements intact so that
     # prepare_receive_diagnostics remains idempotent on the combined overlay.
     old = '\tuint32_t x4DiagFlags = 0; // provenance only\n#endif\n'
     declarations = ''.join(f'\t{kind} x4Nack{name} = 0;\n' for kind, name in FIELDS)
-    patch('include/rtc/message.hpp', old, old + '#ifdef X4_OPENORBIS\n' + declarations + '#endif\n')
+    legacy_declarations = ''.join(f'\t{kind} x4Nack{name} = 0;\n' for kind, name in LEGACY_FIELDS)
+    known_overlay('include/rtc/message.hpp', old,
+        '#ifdef X4_OPENORBIS\n' + legacy_declarations + '#endif\n',
+        '#ifdef X4_OPENORBIS\n' + declarations + '#endif\n', ' x4Nack', len(FIELDS))
     old = '\tmessage->x4DiagFlags = orig->x4DiagFlags;\n#endif\n'
     copies = ''.join(f'\tmessage->x4Nack{name} = orig->x4Nack{name};\n' for _, name in FIELDS)
-    patch('src/message.cpp', old, old + '#ifdef X4_OPENORBIS\n' + copies + '#endif\n')
-    patch('src/impl/track.cpp',
+    legacy_copies = ''.join(f'\tmessage->x4Nack{name} = orig->x4Nack{name};\n' for _, name in LEGACY_FIELDS)
+    known_overlay('src/message.cpp', old,
+        '#ifdef X4_OPENORBIS\n' + legacy_copies + '#endif\n',
+        '#ifdef X4_OPENORBIS\n' + copies + '#endif\n', 'message->x4Nack', len(FIELDS))
+    known_overlay('src/impl/track.cpp',
         'message_variant Track::trackMessageToVariant(message_ptr message) {',
-        'message_variant Track::trackMessageToVariant(message_ptr message) {\n#ifdef X4_OPENORBIS\n'
+        '\n#ifdef X4_OPENORBIS\n'
         '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
-        '\t    message->x4NackExtended, message->x4NackRtpTimestamp);\n#endif')
+        '\t    message->x4NackExtended, message->x4NackRtpTimestamp);\n#endif',
+        '\n#ifdef X4_OPENORBIS\n'
+        '\tx4_rtc_nack_delivery(message->x4NackIdentity, message->x4NackSource,\n'
+        '\t    message->x4NackExtended, message->x4NackRtpTimestamp, message->x4NackAuthenticated);\n#endif',
+        'x4_rtc_nack_delivery', 1, 1)
     old = '\t\t\t\tif (auto locked = weak_this.lock()) {\n\t\t\t\t\tlocked->transportSend(m);\n\t\t\t\t}\n'
     patch('src/impl/track.cpp', old,
         '\t\t\t\tif (auto locked = weak_this.lock()) {\n'

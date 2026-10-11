@@ -93,7 +93,7 @@ CRITICAL = ('UNKNOWN SEQUENCE_GAP LATE_POSITION REJECT RECOVERY_BEGIN RECOVERY_E
     'TRANSPORT_DELAY RTC_SETTING NACK_DETECT NACK_REQUEST NACK_DISPATCH '
     'NACK_SRTCP_BEGIN NACK_SRTCP_RESULT NACK_LOCAL_SEND_RESULT NACK_AUTH_RETURN '
     'NACK_REORDER_RESULT NACK_AU_CONTRIBUTION NACK_STATE NACK_SUPPRESS NACK_COUNTER '
-    'NACK_DISPATCH_MASK').split()
+    'NACK_DISPATCH_MASK NACK_GRACE').split()
 NACK_COUNTERS = ('observations wrong_payload_type observations_after_close sources_started '
     'ssrc_changes forward_packets backward_packets duplicate_packets backward_untracked '
     'before_epoch ambiguous_halfspan extended_overflow gap_ranges missing_positions '
@@ -115,6 +115,19 @@ NACK_SUPPRESS = {1: 'experiment_disabled', 2: 'range_cap', 3: 'session_request_c
     4: 'range_no_longer_pending', 5: 'watch_range_not_retained',
     6: 'feedback_not_confirmed', 7: 'closing', 8: 'dispatch_slot_already_queued'}
 NACK_REORDER = {0: 'stored', 1: 'late_or_occupied_slot', 2: 'window_jump'}
+NACK_GRACE_SUBKINDS = {1: 'CONTROL_REQUEST', 2: 'CONTROL_OUTCOME', 3: 'OFFER',
+    4: 'RELEASE', 5: 'CALLBACK', 6: 'QUEUE_POP', 7: 'WORKER_ACCEPT',
+    8: 'WORK_COST', 9: 'QUEUE_AGE', 10: 'COUNTER', 11: 'HOLD_BEGIN', 12: 'ABANDON'}
+NACK_GRACE_OFFER = ('admitted disabled stale_session closed invalid duplicate '
+    'stale_source expired active_cap overlap clock deadline_overflow').split()
+NACK_GRACE_RELEASE = ('none accepted deadline capacity passed source_or_reorder_reset close '
+    'transport clock explicit').split()
+NACK_GRACE_COUNTERS = {100: 'control_inbox_admitted', 101: 'control_inbox_omitted',
+    102: 'control_inbox_stale', 103: 'worker_controls_consumed', 104: 'offers',
+    105: 'ranges_admitted', 106: 'accepted_worker_positions', 107: 'deadline_ranges',
+    108: 'capacity_ranges', 109: 'completed_ranges', 110: 'stale_source_offers',
+    111: 'expired_offers', 112: 'overlap_positions', 113: 'active_cap_offers',
+    114: 'configured_grace_ms', 115: 'configured_rumble'}
 T_COUNTER = ('packet_observations bytes last_us RTP_header_metadata_observations '
     'other_or_invalid_metadata_observations gap_events forward_skipped_positions '
     'backward_observations duplicate_observations sequence_gate_omitted '
@@ -498,6 +511,24 @@ def sample_analysis(rows):
         'population': 'retained sampler rows; 100ms target is not actual wakeup cadence'}
 
 
+def pipeline_record(row):
+    out = dict(row, name=EVENTS.get(row['event'], 'UNKNOWN_%04x' % row['event']))
+    if row['event'] == 0x10c:
+        expected, lost = row['a'] >> 32, row['a'] & 0xffffffff
+        out.update(pre_expected_wire_sequence=expected, skipped_prefix_positions=lost,
+            expected_after_skipped_prefix_wire=(expected+lost) & 65535,
+            pre_buffered_packets=row['b'], reason_depth32=bool(row['flags'] & 1),
+            reason_ordinary_time_expiry=bool(row['flags'] & 2),
+            ordinary_time_expiry_permitted_for_call=bool(row['flags'] & 4),
+            reason_forced_grace_release=bool(row['flags'] & 8),
+            reason_advance_limited_before_active_pending=bool(row['flags'] & 16),
+            unknown_reason_flag_bits=row['flags'] & ~31,
+            skipped_prefix_does_not_complete_protected_range=True,
+            packet_emit_established=False, Decode_feed_established=False,
+            output_PTS_association_established=False)
+    return out
+
+
 def gap_chronology(cadence, records, sampled, incomplete):
     """Positive retained evidence and sampler slices, never a fabricated cause."""
     times = [row['t_us'] for row in records]
@@ -528,6 +559,7 @@ def gap_chronology(cadence, records, sampled, incomplete):
             'unsampled_or_unretained_lead_possible': True,
             'detail_coverage_incomplete': incomplete,
             'retained_reorder_jump_observations': [r for r in details if r['event'] == 0x602],
+            'retained_reorder_hole_observations': [pipeline_record(r) for r in details if r['event'] == 0x10c],
             'retained_recovery': recovery(details),
             'retained_operation_spans': {name: durations(details, a, b) for name, a, b in
                 (('Decode', 0x200, 0x201), ('copy', 0x206, 0x207), ('conversion', 0x20c, 0x20d))},
@@ -557,13 +589,16 @@ def nack_record(row):
             out['requested_us'] = row['c']
     elif event in (21, 22, 23):
         status = signed(row['a'])
-        out.update(local_status=status, bytes=row['b'], dispatch_us=row['c'],
+        out.update(local_status=status, bytes=row['b'], attempt_start_us=row['c'],
+                   dispatch_us=row['c'],
+                   dispatch_us_compatibility_alias='attempt_start_us; before construction/send, not successful local result',
                    exception_observed=bool(row['flags'] & 1))
         out['byte_count_scope'] = 'protected_copy' if event == 22 else 'plaintext_original_message'
         if event == 22:
             out['SRTCP_local_success'] = status == 0 and not out['exception_observed']
         elif event == 23:
             out.update(local_send_success=status == 1 and not out['exception_observed'],
+                       local_send_result_observed_us=row['t_us'],
                        status_semantics='0 failed, 1 success, -1 unavailable; local API only')
     elif event == 24:
         out.update(sequence_extended=row['a'], RTP_timestamp=row['b'], requested_us=row['c'],
@@ -689,18 +724,22 @@ def nack_analysis(cr, timeline):
             masks[0]['b'] >> request['missing_positions'] == 0 and
             request['t_us'] <= masks[0]['selection_us'] <= masks[0]['t_us']) else None
         dispatched_positions = mask['dispatched_positions'] if mask else None
-        dispatch_references = {r['dispatch_us'] for i in range(21, 24) for r in stages[CRITICAL[i]]}
+        dispatch_references = {r['attempt_start_us'] for i in range(21, 24) for r in stages[CRITICAL[i]]}
         dispatch_reference = next(iter(dispatch_references)) if (len(dispatch_references) == 1 and
-            mask and mask['selection_us'] <= next(iter(dispatch_references)) <= dispatch['t_us']) else None
-        return_dispatch_boundary = dispatch_reference if dispatch_reference is not None else (
-            dispatch['t_us'] if dispatch else None)
+            mask and next(iter(dispatch_references)) > 0 and
+            mask['selection_us'] <= next(iter(dispatch_references)) <= dispatch['t_us']) else None
+        # This embedded clock is taken BEFORE packet construction/send. It
+        # supplies an attempt-start boundary only, never an after-send result.
+        # A DISPATCH record alone is not an alternative send-result boundary.
+        return_dispatch_boundary = dispatch_reference
         returns = stages['NACK_AUTH_RETURN']
         in_range = [r for r in returns if request['a'] <= r['sequence_extended'] <= request['b']]
         valid_returns = [r for r in in_range if r['t_us'] >= request['t_us']]
         first = min(valid_returns, key=lambda r: r['t_us'], default=None)
         returned_positions = sorted({r['sequence_extended'] for r in valid_returns})
         dispatched_returns = [r for r in valid_returns if mask and
-            r['sequence_extended'] in dispatched_positions and r['t_us'] >= return_dispatch_boundary]
+            r['sequence_extended'] in dispatched_positions and return_dispatch_boundary is not None and
+            r['t_us'] >= return_dispatch_boundary]
         first_postdispatch_observation = min(dispatched_returns, key=lambda r: r['t_us'], default=None)
         returned_dispatched_positions = sorted({r['sequence_extended'] for r in dispatched_returns})
         # A duplicate after dispatch cannot become a newly repaired position
@@ -726,6 +765,60 @@ def nack_analysis(cr, timeline):
         sr_span = elapsed(sr_result[0]['t_us'], sr_begin[0]['t_us']) if (
             len(sr_begin) == len(sr_result) == 1 and
             sr_begin[0]['dispatch_us'] == sr_result[0]['dispatch_us']) else None
+        # Observe the successful results themselves. A return between successful
+        # protection and local send-result observations can race transportSend;
+        # it cannot be called a post-send response. Equal clocks are ambiguous.
+        def transport_clock_valid(row):
+            return (len(dispatch_references) == 1 and row['attempt_start_us'] > 0 and
+                row['attempt_start_us'] == next(iter(dispatch_references)) and
+                request['t_us'] <= row['attempt_start_us'] <= row['t_us'] and
+                (mask is None or row['attempt_start_us'] >= mask['selection_us']) and
+                (dispatch is None or row['attempt_start_us'] <= dispatch['t_us']))
+
+        protection_result = sr_result[0] if (len(sr_result) == 1 and
+            sr_result[0]['SRTCP_local_success'] and transport_clock_valid(sr_result[0]) and
+            (not sr_begin or len(sr_begin) == 1 and transport_clock_valid(sr_begin[0]) and
+             sr_begin[0]['t_us'] <= sr_result[0]['t_us'])) else None
+        local_results = stages['NACK_LOCAL_SEND_RESULT']
+        local_result = local_results[0] if (len(local_results) == 1 and
+            transport_clock_valid(local_results[0]) and
+            (protection_result is None or local_results[0]['t_us'] >= protection_result['t_us'])) else None
+        local_success = local_result if local_result and local_result['local_send_success'] else None
+        selected_returns = [r for r in valid_returns if mask and r['sequence_extended'] in dispatched_positions]
+        selected_first = [r for r in selected_returns if r['first_observation'] and not r['duplicate_observation']
+            and not any(prior['first_observation'] and prior['sequence_extended'] == r['sequence_extended']
+                and prior['t_us'] < r['t_us'] for prior in valid_returns)]
+        first_after_success = [r for r in selected_first if local_success and r['t_us'] > local_success['t_us']]
+        first_after_success_row = min(first_after_success, key=lambda r: r['t_us'], default=None)
+        arrival_classification = []
+        for r in valid_returns:
+            t = r['t_us']
+            if dispatch_reference is not None and t < dispatch_reference:
+                category = 'before_attempt_start'
+            elif local_success and t > local_success['t_us']:
+                category = 'after_successful_local_send_result'
+            elif protection_result and t > protection_result['t_us'] and local_result and t < local_result['t_us']:
+                category = 'between_successful_protection_and_local_result_ambiguous'
+            elif local_result and t == local_result['t_us']:
+                category = 'same_clock_as_local_result_ambiguous'
+            elif protection_result and t == protection_result['t_us']:
+                category = 'same_clock_as_protection_result_ambiguous'
+            elif local_result and not local_result['local_send_success'] and t > local_result['t_us']:
+                category = 'after_unsuccessful_local_result_not_post_success'
+            elif protection_result and t < protection_result['t_us']:
+                category = 'before_successful_protection_result'
+            elif protection_result and t > protection_result['t_us']:
+                category = 'after_protection_result_local_result_unavailable'
+            else:
+                category = 'local_result_boundary_unavailable'
+            arrival_classification.append({'sequence_extended': r['sequence_extended'], 'AUTH_us': t,
+                'selected': r in selected_returns, 'first_observation': r['first_observation'],
+                'duplicate_observation': r['duplicate_observation'], 'classification': category,
+                'attempt_start_to_AUTH_us': elapsed(t, dispatch_reference),
+                'protection_result_to_AUTH_us': elapsed(t, protection_result['t_us']) if protection_result else None,
+                'successful_local_send_result_to_AUTH_us': elapsed(t, local_success['t_us']) if local_success and
+                    t > local_success['t_us'] else None,
+                'retransmission_causality_established': False})
         matched_detection = [r for r in detections.get((request['source'], request['request_epoch'],
             request['a'], request['b']), []) if request['detected_us'] <= r['t_us'] <= request['t_us']]
         embedded_request_times = {r['requested_us'] for r in dispatches+returns}
@@ -740,10 +833,26 @@ def nack_analysis(cr, timeline):
             'retained_authenticated_positions': returned_positions,
             'dispatch_mask_association_available': mask is not None,
             'actually_dispatched_positions': dispatched_positions,
+            'dispatch_mask_selected_positions': dispatched_positions,
+            'actually_dispatched_positions_compatibility_alias': 'selected bitmap only; does not prove transport send or server receipt',
             'mask_selection_us': mask['selection_us'] if mask else None,
+            'transport_attempt_start_reference_us': dispatch_reference,
             'actual_transport_dispatch_reference_us': dispatch_reference,
-            'return_dispatch_boundary_kind': 'embedded_transport_dispatch_reference' if dispatch_reference is not None
-                else 'later_dispatch_record_clock' if dispatch else 'unavailable',
+            'actual_transport_dispatch_reference_compatibility_alias': 'transport_attempt_start_reference_us; before construction/send',
+            'return_dispatch_boundary_kind': 'embedded_attempt_start_reference' if dispatch_reference is not None else 'unavailable',
+            'legacy_after_dispatch_fields_semantics': 'After attempt START only, not after successful local send result; no DISPATCH clock fallback',
+            'successful_SRTCP_result_observed_us': protection_result['t_us'] if protection_result else None,
+            'local_send_result_observed_us': local_result['t_us'] if local_result else None,
+            'successful_local_send_result_observed_us': local_success['t_us'] if local_success else None,
+            'protected_local_send_route_success_observed': bool(protection_result and local_success),
+            'authenticated_return_result_boundary_classification': arrival_classification,
+            'result_boundary_observation_counts': dict(Counter(r['classification'] for r in arrival_classification)),
+            'first_authenticated_arrival_positions_after_successful_local_send_result':
+                sorted({r['sequence_extended'] for r in first_after_success}),
+            'first_selected_authenticated_arrival_after_successful_local_send_result': first_after_success_row,
+            'all_selected_positions_have_first_arrival_after_successful_local_send_result':
+                set(r['sequence_extended'] for r in first_after_success) == set(dispatched_positions)
+                if mask and local_success else None,
             'first_authenticated_return_of_dispatched_position_after_dispatch': dispatched_first,
             'first_post_dispatch_authenticated_observation': first_postdispatch_observation,
             'retained_authenticated_dispatched_positions_after_dispatch': returned_dispatched_positions,
@@ -753,7 +862,7 @@ def nack_analysis(cr, timeline):
                 sum(r['first_observation'] == r['duplicate_observation'] for r in dispatched_returns),
             'post_dispatch_completion_requires_first_arrival_flags': True,
             'all_selected_positions_have_first_authenticated_arrival_after_dispatch':
-                set(first_arrival_positions) == set(dispatched_positions) if mask else None,
+                set(first_arrival_positions) == set(dispatched_positions) if mask and dispatch_reference is not None else None,
             'all_original_range_positions_observed_in_retained_authenticated_returns':
                 len(returned_positions) == request['missing_positions'],
             'returns_before_dispatch_observations': len(predispatch_returns) if dispatch_reference is not None else None,
@@ -785,6 +894,12 @@ def nack_analysis(cr, timeline):
                     if first_postdispatch_observation and dispatch else None,
                 'dispatch_timestamp_to_first_authenticated_dispatched_position':
                     elapsed(dispatched_first['t_us'], dispatch_reference) if dispatched_first else None,
+                'attempt_start_to_first_authenticated_selected_arrival':
+                    elapsed(dispatched_first['t_us'], dispatch_reference) if dispatched_first else None,
+                'successful_local_send_result_to_first_authenticated_selected_arrival':
+                    elapsed(first_after_success_row['t_us'], local_success['t_us']) if first_after_success_row else None,
+                'successful_local_send_result_to_selected_first_arrivals_distribution': distribution([
+                    r['t_us']-local_success['t_us'] for r in first_after_success]),
                 'serialized_selection_to_dispatch_reference':
                     elapsed(dispatch_reference, mask['selection_us']) if dispatch_reference is not None and mask else None,
                 'embedded_request_to_first_authenticated_return': elapsed(first['t_us'], first['requested_us']) if first else None,
@@ -838,6 +953,10 @@ def nack_analysis(cr, timeline):
             key=lambda r: (r['counter_epoch'], r['source'], r['counter_id'])),
         'counter_snapshot_duplicates_not_summed': len(counter_rows)-len(latest),
         'limitations': ['NACK request, dispatch, SRTCP result and local send are distinct local observations.',
+            'The embedded c clock is the attempt start before packet construction/send, not transport completion.',
+            'Legacy dispatch-named fields are compatibility aliases for attempt-start observations only; never after-send evidence.',
+            'Post-success candidates compare AUTH strictly after a unique successful local send-result observation; equal clocks and between-stage returns remain ambiguous.',
+            'A DISPATCH record is never a fallback successful local-send boundary when result observations are absent.',
             'A local successful send is not acknowledgment or proof of delivery to the server.',
             'A later authenticated original packet may be delayed/reordered rather than retransmitted.',
             'Only retained validated dispatch-mask bits describe actually selected positions; the original gap can be larger.',
@@ -854,6 +973,205 @@ def nack_analysis(cr, timeline):
             'Reorder code1 also covers occupied slots/invalid input; only its explicit flag1 proves behind worker expected before insertion.',
             'The decoder has no returned PTS; no compressed input is assigned to the latest native output.',
             'Counter snapshots are cumulative per epoch and must not be added as independent deltas.']}
+
+
+def nack_grace_record(row):
+    """Critical31 uses stage as subkind, not a transport-stage location."""
+    kind = row['stage']
+    out = dict(row, grace_subkind=NACK_GRACE_SUBKINDS.get(kind, 'UNKNOWN_%d' % kind),
+        grace_subkind_id=kind, stage_is_transport_location=False,
+        request_epoch=row['identity'] >> 32, request_ordinal=row['identity'] & 0xffffffff,
+        source_metadata_available=bool(row['source'] & (1 << 63)),
+        network_delivery_established=False, output_PTS_association_established=False)
+    if kind == 1:
+        out.update(first_extended=row['a'], original_missing_mask=row['b'], detected_us=row['c'],
+            original_missing_positions=[row['a']+bit for bit in range(64) if row['b'] & (1 << bit)],
+            computed_absolute_deadline_us=row['c']+45000 if row['c'] <= U64-45000 else None,
+            control_is_worker_receipt_not_network_send=True)
+    elif kind == 2:
+        status, reason = (row['flags'] & 255)-2, row['flags'] >> 8
+        out.update(attempt_start_us=row['a'], local_return_observed_us=row['b'],
+            selected_mask=row['c'], local_result=status, outcome_reason=reason,
+            local_boolean_success_observed=status == 1,
+            AUTH_complete_does_not_complete_worker_grace=reason == 4)
+    elif kind == 3:
+        result = row['c'] & 0xffffffff
+        out.update(deadline_us=row['a'], granted_mask=row['b'], occupancy=row['c'] >> 32,
+            offer_result_code=result,
+            offer_result=NACK_GRACE_OFFER[result] if result < len(NACK_GRACE_OFFER) else 'unknown')
+    elif kind == 4:
+        reason = row['flags']
+        out.update(deadline_us=row['a'], accepted_worker_mask=row['b'], occupancy=row['c'],
+            release_reason_code=reason,
+            release_reason=NACK_GRACE_RELEASE[reason] if reason < len(NACK_GRACE_RELEASE) else 'unknown',
+            state_ended_observed=True, actual_worker_hole_advance_established=False,
+            release_establishes_AU_reconstruction=False)
+        if reason == 5:
+            out.update(reason5_is_shared_source_or_reorder_reset=True,
+                SSRC_change_established_by_reason5=False)
+    elif kind == 5:
+        out.update(sequence_extended=row['a'], authenticated_observed_us=row['b'],
+            callback_begin_us=row['c'], admission_reason=row['flags'],
+            callback_establishes_worker_acceptance=False)
+    elif kind == 6:
+        out.update(sequence_extended=row['a'], callback_begin_us=row['b'], authenticated_observed_us=row['c'],
+            queue_pop_us=row['t_us'], callback_to_queue_pop_us=row['t_us']-row['b']
+                if row['b'] and row['t_us'] >= row['b'] else None,
+            AUTH_to_queue_pop_us=row['t_us']-row['c'] if row['c'] and row['t_us'] >= row['c'] else None)
+    elif kind == 7:
+        out.update(sequence_extended=row['a'], expected_wire_sequence=row['b'] >> 32,
+            buffered_packets=row['b'] & 0xffffffff, deadline_us=row['c'],
+            reorder_result=row['flags'], stored_without_jump=row['flags'] == 0,
+            worker_accept_establishes_AU_or_picture=False)
+    elif kind == 8:
+        out.update(Decode_elapsed_cumulative_us=row['a'], copy_elapsed_cumulative_us=row['b'],
+            conversion_elapsed_cumulative_us=row['c'], measured_scope='aggregate work during retained range',
+            values_are_independent_stage_aggregates=True, sums_establish_input_output_association=False)
+    elif kind == 9:
+        out.update(oldest_queue_age_us=row['a'], queue_depth=row['b'], max_returned_packet_dwell_us=row['c'])
+    elif kind == 10:
+        out.update(counter_id=row['a'], value=row['b'], cumulative_snapshot_not_delta=True,
+            counter_name=NACK_GRACE_COUNTERS.get(row['a'], 'unknown_%d' % row['a']))
+    elif kind == 11:
+        out.update(expected_wire_sequence=row['a'] >> 32, buffered_packets=row['a'] & 0xffffffff,
+            deadline_us=row['b'], furthest_forward_offset=row['c'],
+            unchanged_window_capacity=128, held_observed=True,
+            HOLD_establishes_continuous_hold_duration=False, HOLD_establishes_return_utility=False)
+    elif kind == 12:
+        expected, lost = row['a'] >> 32, row['a'] & 0xffffffff
+        reason = row['flags'] & 255
+        valid = expected <= 65535 and 0 < lost < 128 and 0 < row['b'] <= 128 and lost <= row['c'] < 128
+        out.update(pre_expected_wire_sequence=expected, lost_positions=lost,
+            post_expected_wire_sequence=(expected+lost) & 65535,
+            pre_buffered_packets=row['b'], pre_furthest_forward_offset=row['c'],
+            advance_observation_us=row['t_us'], advance_metadata_valid=valid,
+            grace_end_reason_code=reason,
+            grace_end_reason=NACK_GRACE_RELEASE[reason] if reason < len(NACK_GRACE_RELEASE) else 'unknown',
+            protected_boundary_before_active_pending=bool(row['flags'] & 256),
+            unknown_ABANDON_flag_bits=row['flags'] & ~511,
+            ordinary_worker_advance_observation=row['identity'] == 0,
+            ordinary_advance_has_request_association=False if row['identity'] == 0 else None,
+            actual_worker_hole_advance_established=valid,
+            state_release_is_not_this_advance=True, advance_establishes_AU_or_picture=False,
+            protected_boundary_does_not_complete_pending_range=True, packet_emit_established=False,
+            record_clock_is_advance_observation_not_exact_function_entry=True)
+        if reason == 5:
+            out.update(reason5_is_shared_source_or_reorder_reset=True,
+                SSRC_change_established_by_reason5=False)
+    return out
+
+
+def nack_grace_analysis(cr, timeline):
+    rows = sorted((r for r in timeline if r['event'] == 31), key=lambda r: (r['t_us'], r['ordinal']))
+    attempted, omitted = cr['attempted'][31], cr['omitted'][31]
+    if not attempted:
+        return {'available': False, 'reason': 'No critical31 NACK_GRACE hooks observed; older captures unavailable',
+            'experiment_enabled': None, 'coverage': {'attempts': 0, 'omitted': 0, 'retained': 0}}
+    grouped = {}
+    for row in rows:
+        if (row['grace_subkind_id'] != 10 and 0 < row['request_ordinal'] <= 64 and
+                row['source_metadata_available'] and row['payload_type'] == 102 and row['ssrc'] != 0):
+            grouped.setdefault((row['source'], row['identity']), []).append(row)
+    ranges = []
+    for (source, identity), members in grouped.items():
+        requests = [r for r in members if r['grace_subkind_id'] == 1]
+        offers = [r for r in members if r['grace_subkind_id'] == 3]
+        releases = [r for r in members if r['grace_subkind_id'] == 4]
+        holds = [r for r in members if r['grace_subkind_id'] == 11]
+        abandons = [r for r in members if r['grace_subkind_id'] == 12]
+        request = requests[0] if len(requests) == 1 else None
+        offer = offers[0] if len(offers) == 1 else None
+        sequence_rows = [r for r in members if r['grace_subkind_id'] in (5, 6, 7)]
+        per_position = []
+        for position in sorted({r['sequence_extended'] for r in sequence_rows}):
+            observations = [r for r in sequence_rows if r['sequence_extended'] == position]
+            callbacks = [r for r in observations if r['grace_subkind_id'] == 5]
+            popped = [r for r in observations if r['grace_subkind_id'] == 6]
+            stored = [r for r in observations if r['grace_subkind_id'] == 7 and r['stored_without_jump']]
+            per_position.append({'sequence_extended': position,
+                'within_retained_original_mask': position in request['original_missing_positions'] if request else None,
+                'within_retained_granted_mask': bool(0 <= position-request['first_extended'] < 64 and
+                    offer['granted_mask'] & (1 << (position-request['first_extended']))) if request and offer else None,
+                'retained_AUTH_clocks_us': sorted({r['authenticated_observed_us'] for r in callbacks+popped
+                    if r['authenticated_observed_us']}),
+                'retained_callback_begin_clocks_us': sorted({r['callback_begin_us'] for r in callbacks+popped
+                    if r['callback_begin_us']}),
+                'retained_queue_pop_clocks_us': [r['t_us'] for r in popped],
+                'retained_worker_STORED_record_clocks_us': [r['t_us'] for r in stored],
+                'STORED_record_clock_relative_to_deadline': [
+                    'before' if r['t_us'] < r['deadline_us'] else 'at' if r['t_us'] == r['deadline_us'] else 'after'
+                    for r in stored],
+                'retained_observations': observations,
+                'no_record_does_not_establish_no_arrival': True,
+                'AUTH_is_not_worker_acceptance': True,
+                'record_clock_is_not_proven_actual_insert_instant': True})
+        ranges.append({'source': source, 'identity': identity, 'request_ordinal': identity & 0xffffffff,
+            'request_epoch': identity >> 32, 'request': request, 'offer': offer,
+            'offer_deadline_matches_detect_plus_45ms': offer['deadline_us'] == request['computed_absolute_deadline_us']
+                if request and offer and request['computed_absolute_deadline_us'] is not None else None,
+            'retained_release_observations': releases,
+            'retained_state_end_observations': releases,
+            'retained_hold_observations': holds,
+            'grace_held_observation_retained': bool(holds),
+            'state_end_observation_retained': bool(releases),
+            'retained_worker_ABANDON_observations': abandons,
+            'actual_worker_hole_advance_observation_retained': any(r['advance_metadata_valid'] for r in abandons),
+            'retained_worker_advance_reason_counts': dict(Counter(r['grace_end_reason'] for r in abandons)),
+            'state_end_and_worker_advance_are_distinct': True,
+            'hold_to_state_end_observation_us': releases[0]['t_us']-holds[0]['t_us']
+                if len(holds) == len(releases) == 1 and releases[0]['t_us'] >= holds[0]['t_us'] else None,
+            'state_end_to_worker_advance_observation_us': abandons[0]['t_us']-releases[0]['t_us']
+                if len(releases) == len(abandons) == 1 and abandons[0]['advance_metadata_valid'] and
+                    abandons[0]['grace_end_reason_code'] == releases[0]['release_reason_code'] and
+                    abandons[0]['t_us'] >= releases[0]['t_us'] else None,
+            'retained_release_reason_counts': dict(Counter(r['release_reason'] for r in releases)),
+            'release_mask_checks': [{'t_us': r['t_us'],
+                'accepted_mask_is_subset_of_granted': not bool(r['accepted_worker_mask'] & ~offer['granted_mask'])
+                    if offer else None,
+                'accepted_release_equals_granted_mask': r['accepted_worker_mask'] == offer['granted_mask']
+                    if offer and r['release_reason_code'] == 1 else None} for r in releases],
+            'retained_position_chronology': per_position,
+            'retained_worker_STORED_observations': [r for r in members if r['grace_subkind_id'] == 7 and r['stored_without_jump']],
+            'retained_sequence_and_work_chronology': members,
+            'AUTH_does_not_complete_grace': True,
+            'AU_reconstruction_native_picture_and_presentation_established': False})
+    counters, latest = [r for r in rows if r['grace_subkind_id'] == 10], {}
+    for row in counters:
+        latest[(row['source'], row['request_epoch'], row['counter_id'])] = row
+    modes = [r for r in counters if r['counter_id'] == 114]
+    mode_values = {r['value'] for r in modes}
+    inbox_omissions = [r for r in latest.values() if r['counter_id'] == 101]
+    return {'available': True, 'experiment_enabled': bool(next(iter(mode_values)))
+            if len(mode_values) == 1 and mode_values <= {0, 45} else None,
+        'retained_configured_grace_ms_values': sorted(mode_values),
+        'configured_mode_observation_does_not_prove_runtime_hold': True,
+        'release_reason_code5_scope': 'Production SOURCE is shared by source retirement and reorder window JUMP/reset; code5 alone cannot establish an SSRC change.',
+        'coverage': {'attempts': attempted, 'omitted': omitted, 'retained': attempted-omitted,
+            'details_complete': not omitted, 'per_subkind_attempts_available': False,
+            'absent_retained_subkind_establishes_absence': False,
+            'absent_subkind_establishes_no_record_attempt': not omitted,
+            'retained_control_inbox_omissions': sum(r['value'] for r in inbox_omissions)
+                if len(inbox_omissions) == 1 else None,
+            'control_inbox_coverage_scope': 'latest cumulative snapshot; distinct from critical record admission',
+            'source_or_control_inbox_completeness_not_established_by_critical_coverage': True},
+        'retained_subkind_counts': dict(Counter(r['grace_subkind'] for r in rows)),
+        'range_correlations': ranges, 'retained_timeline': rows,
+        'retained_ordinary_worker_ABANDON_observations': [r for r in rows if r['grace_subkind_id'] == 12 and
+            r['ordinary_worker_advance_observation']],
+        'latest_retained_counter_snapshots': sorted(latest.values(), key=lambda r: (r['request_epoch'], r['source'], r['counter_id'])),
+        'counter_snapshot_duplicates_not_summed': len(counters)-len(latest),
+        'limitations': ['Worker-owned original missing masks and accepted masks differ from callback AUTH cancellation.',
+            '45ms is an absolute per-request deadline, never a new deadline for every pending position.',
+            'Capacity128 remains a hard fallback; retained HOLD does not prove capacity was sufficient.',
+            'CONTROL_OUTCOME attempt start and local return are separate clocks; successful local boolean is not remote receipt.',
+            'WORK_COST counters are aggregates over the range; no decoder PTS or per-input native-output association exists.',
+            'Release/worker acceptance does not establish complete valid AU, Decode feed, native output, RGB or presentation.',
+            'RELEASE observes a state end; only valid critical ABANDON observes the actual worker hole advance, independently of detailed pause windows.',
+            'HOLD, RELEASE and ABANDON clocks are separate observations, not a continuous measured hold or exact function-entry timeline.',
+            'ABANDON flag0x100 and REORDER_HOLE reason16 observe a skipped prefix stopped before another pending position; neither proves an emitted packet or completion of the protected range.',
+            'Ordinary limited ABANDON identity0 has no receiver-NACK request association.',
+            'Release reason5 retains the numeric SOURCE code but means source_or_reorder_reset; the production window-JUMP path also uses it, so it does not prove SSRC change.',
+            'Only latest per-source/epoch counters are used; cumulative snapshots are not summed.']}
 
 
 def critical_analysis(p):
@@ -898,6 +1216,9 @@ def critical_analysis(p):
             item.update(previous_stage_us=row['b'], measured_delay_us=row['c'])
         if 18 <= row['event'] <= 30:
             item = nack_record(item)
+        elif row['event'] == 31:
+            item['stage_name'] = 'NACK_GRACE'
+            item = nack_grace_record(item)
         timeline.append(item)
     # Exact modular range identities only. Overlapping but nonidentical ranges
     # are not silently equated; RTX PT/SSRC remain separate unless a recorded
@@ -1031,6 +1352,7 @@ def critical_analysis(p):
         'AU_stage_totals': au,
         'retained_negotiation_and_RTX_settings': settings,
         'receiver_NACK': nack_analysis(cr, timeline),
+        'receiver_NACK_grace': nack_grace_analysis(cr, timeline),
         'exact_range_candidate_groups': groups,
         'retained_gap_chronology': sorted(chronology, key=lambda r: (r['t_us'], r['ordinal'])),
         'retained_critical_timeline': timeline,
@@ -1153,7 +1475,7 @@ def analyze(data):
         'closed_gap_chronology': gap_chronology(cadence, records, sampled, not negative_complete),
         'retained_recovery': recovery(records), 'retained_PLI_local_results': pli,
         'upstream_diagnostics': critical_analysis(p),
-        'retained_event_counts': dict(record_counts), 'retained_timeline': [dict(r, name=EVENTS.get(r['event'], 'UNKNOWN_%04x' % r['event'])) for r in records],
+        'retained_event_counts': dict(record_counts), 'retained_timeline': [pipeline_record(r) for r in records],
         'retained_RX_observations': [{'t_us': r['t_us'], 'kind': r['flags'] & 255,
             'valid': bool(r['flags'] & 256), 'ssrc': r['a'] >> 32 if r['flags'] & 256 else None,
             'sequence': r['a'] & 65535 if r['flags'] & 256 else None, 'bytes': r['b']}

@@ -2,6 +2,7 @@
 #include "rtc_transport.h"
 #include "rtc_native.h"
 #include "rtc_receive_diag.h"
+#include "nack_grace_inbox.h"
 #include "../media/live_trace.h"
 #include "../auth/json.h"
 #include <rtc/rtc.h>
@@ -43,6 +44,7 @@ struct X4Rtc {
     X4RtcMediaCallback media;
     void *media_user;
     X4Trace *diagnostic_trace;
+    X4NackGraceInbox *grace_inbox;
     uint64_t diagnostic_pli_ordinal; /* Session owner is the sole writer. */
     bool handshake_ack, startup_sent;
     uint64_t started_at;
@@ -728,6 +730,12 @@ void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
         (void)x4_rtc_receive_track_config(rtc->video);
     }
 }
+void x4_rtc_set_nack_grace_inbox(X4Rtc *rtc, X4NackGraceInbox *inbox)
+{
+    if (!rtc) return;
+    rtc->grace_inbox = inbox;
+    x4_nack_grace_inbox_bind(inbox, rtc->nack_epoch);
+}
 int x4_rtc_set_gamepad_source(X4Rtc *rtc,X4GamepadSource source,void *user)
 {
     if(!rtc || !source || rtc->input_thread_started || atomic_load(&rtc->input_stop))return -46;
@@ -885,6 +893,7 @@ int x4_rtc_close(X4Rtc *rtc)
     if(rtc->audio>=0) {rtcSetMessageCallback(rtc->audio,NULL);rtcDeleteTrack(rtc->audio);}
     if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
+    x4_nack_grace_inbox_unbind(rtc->grace_inbox);
     x4_rtc_receive_detach(rtc->diagnostic_trace);
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);

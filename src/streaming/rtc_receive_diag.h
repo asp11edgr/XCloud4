@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Numeric, optional observations only. Also copied into the vendor overlay. */
+/* Numeric observations plus an explicit bounded repair-control bridge.
+ * Also copied into the vendor overlay; control does not depend on tracing. */
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #ifdef __cplusplus
@@ -62,13 +64,50 @@ int x4_rtc_poll_receiver_nack(int track);
 int x4_rtc_close_receiver_nack(int track);
 void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     uint64_t source, uint64_t a, uint64_t b, uint64_t c);
-/* Track-pop thread owns this numeric ticket until its next delivery. */
+/* Track-pop thread owns this numeric ticket until its next delivery.
+ * authenticated_us observes the first watched sequence recognized by the
+ * generator after authenticated provenance, ReceivingSession and full RTP
+ * validation. It is not an exact socket-read/unprotect completion timestamp.
+ * Zero means no recognized first return on this Message, not no reception. */
 typedef struct {
     uint64_t identity, source, extended_sequence, rtp_timestamp;
+    uint64_t authenticated_us;
 } X4NackPacket;
 void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
-    uint64_t extended_sequence, uint32_t rtp_timestamp);
+    uint64_t extended_sequence, uint32_t rtp_timestamp, uint64_t authenticated_us);
 X4NackPacket x4_rtc_nack_delivery_ticket(void);
+/* Functional control for the existing original-video receiver generator.
+ * The application binds an independently bounded inbox to the current
+ * transport epoch. Producers never wait, allocate or print; false reports
+ * local inbox omission, not failure of NACK dispatch or server support.
+ *
+ * Request preserves the ORIGINAL missing mask even after authentication
+ * clears the vendor watch bitmap. Only worker admission may complete grace.
+ * Deadline is absolute detection+45000us, never renewed by a duplicate offer.
+ * Zero deadline represents an invalid/overflowing clock and must fail closed.
+ *
+ * attempt_start_us precedes packet construction and the transport call. It
+ * is NOT a socket-send start or server receipt. local_return_us observes the
+ * bool/exception return from that call or the earlier local cancellation.
+ * A true local_result does not establish remote delivery. */
+enum {
+    X4_NACK_GRACE_REQUEST = 1, X4_NACK_GRACE_OUTCOME = 2,
+    X4_NACK_GRACE_MAX_US = 45000,
+    X4_NACK_GRACE_NOT_ATTEMPTED = -2,
+    X4_NACK_GRACE_EXCEPTION = -1,
+    X4_NACK_GRACE_ATTEMPT = 0,
+    X4_NACK_GRACE_CANCEL_AUTH_COMPLETE = 4,
+    X4_NACK_GRACE_CANCEL_RETIRED = 5,
+    X4_NACK_GRACE_CANCEL_CLOSING = 7
+};
+typedef struct {
+    uint64_t identity, source, first_extended, original_mask, selected_mask;
+    uint64_t detected_us, deadline_us, attempt_start_us, local_return_us;
+    uint32_t sequence_epoch, kind;
+    int32_t local_result;
+    uint32_t reason;
+} X4NackGraceControl;
+bool x4_rtc_nack_grace_control(const X4NackGraceControl *control);
 #ifdef __cplusplus
 }
 #endif

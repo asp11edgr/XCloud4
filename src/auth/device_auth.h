@@ -74,6 +74,8 @@ X4Auth *x4_auth_create(void);
  * outlive every session worker. */
 typedef struct X4Trace X4Trace;
 int x4_auth_set_media_callback(X4Auth *auth, X4SessionMediaCallback callback, void *user, X4Trace *trace);
+typedef struct X4NackGraceInbox X4NackGraceInbox;
+int x4_auth_set_grace_inbox(X4Auth *auth, X4NackGraceInbox *inbox);
 /* Thread-safe request flag. The session owner consumes it and requests PLI;
  * this never accesses the transport from the main/decoder thread. */
 void x4_auth_request_keyframe(X4Auth *auth);

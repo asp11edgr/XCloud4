@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Actual production generator and pinned MediaHandler chain fixtures.
- * The validation tail, entropy and numeric bridge are explicit test doubles.
- * No actual RtcpReceivingSession, CAPI, SRTP, socket or console is measured. */
+ * The validation tail, entropy, diagnostic and control bridges are explicit
+ * test doubles. No actual inbox, RtcpReceivingSession, CAPI, SRTP, socket or
+ * console behavior is measured. Control payloads exercise production calls. */
 #include "rtc_receiver_nack.hpp"
 #include "rtc_receive_diag.h"
 #include <array>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -36,9 +38,14 @@ X4_TEST_NOINLINE void operator delete(void *value, size_t) noexcept { std::free(
 X4_TEST_NOINLINE void operator delete[](void *value, size_t) noexcept { std::free(value); }
 
 namespace {
+static_assert(sizeof(X4NackGraceControl) == 88, "Functional control POD ABI");
+static_assert(sizeof(X4NackPacket) == 40, "Authenticated ticket POD ABI");
 struct Event { unsigned event, flags; uint64_t identity, source, a, b, c; };
 std::array<Event, 2048> events{};
 std::atomic<unsigned> eventCount{0}, eventOmissions{0};
+std::array<X4NackGraceControl, 256> controls{};
+std::atomic<unsigned> controlCount{0}, controlOmissions{0};
+std::atomic<bool> acceptControls{true}, recordEvents{true};
 std::atomic<uint64_t> testClock{10000};
 std::atomic<uint32_t> entropySender{UINT32_C(0x5a5a5a5a)};
 std::atomic<bool> blockRequestRecord{false}, requestRecordEntered{false}, releaseRequestRecord{false};
@@ -50,7 +57,22 @@ void fail(const char *expression, int line) {
 }
 #define CHECK(expression) do { ++checks; if (!(expression)) fail(#expression, __LINE__); } while (0)
 #define CASE(test) do { clearEvents(); test(); ++cases; std::printf("PASS %s\n", #test); } while (0)
-void clearEvents() { eventCount.store(0); eventOmissions.store(0); testClock.store(10000); }
+void clearEvents() {
+    eventCount.store(0); eventOmissions.store(0); testClock.store(10000);
+    controlCount.store(0); controlOmissions.store(0); acceptControls.store(true); recordEvents.store(true);
+}
+unsigned countControl(unsigned kind) {
+    unsigned result = 0, total = controlCount.load();
+    for (unsigned i = 0; i < total && i < controls.size(); ++i)
+        if (controls[i].kind == kind) ++result;
+    return result;
+}
+X4NackGraceControl lastControl(unsigned kind) {
+    unsigned total = controlCount.load();
+    for (unsigned i = total < controls.size() ? total : unsigned(controls.size()); i; --i)
+        if (controls[i - 1].kind == kind) return controls[i - 1];
+    fail("requested functional control exists", __LINE__); return {};
+}
 unsigned count(unsigned event) {
     unsigned result = 0, total = eventCount.load();
     for (unsigned i = 0; i < total && i < events.size(); ++i) if (events[i].event == event) ++result;
@@ -336,6 +358,102 @@ void new_session_has_new_identity_and_budget() {
     CHECK(sent->x4NackIdentity == ((UINT64_C(6) << 32) | 1));
     CHECK(fresh->close() == 0 && counter(14) == 1);
 }
+void functional_request_is_immutable_and_independent_of_trace() {
+    auto value = generator(); recordEvents.store(false);
+    incoming(value, rtp(100)); incoming(value, rtp(105));
+    CHECK(eventCount.load() == 1); // Only initial Answer state predates trace disabling.
+    CHECK(countControl(X4_NACK_GRACE_REQUEST) == 1);
+    auto request = lastControl(X4_NACK_GRACE_REQUEST);
+    CHECK(request.identity == ((UINT64_C(5) << 32) | 1));
+    CHECK(request.source == ((UINT64_C(1) << 63) | (UINT64_C(102) << 32) | 7));
+    CHECK(request.sequence_epoch == 1 && request.first_extended == 101);
+    CHECK(request.original_mask == 15 && request.selected_mask == 0);
+    CHECK(request.detected_us && request.deadline_us == request.detected_us + 45000);
+    CHECK(request.local_result == -2 && !request.attempt_start_us && !request.local_return_us);
+    auto returned = rtp(102); incoming(value, returned);
+    CHECK(returned->x4NackAuthenticated > request.detected_us);
+    auto copy = rtc::make_message(returned->size(), returned);
+    CHECK(copy->x4NackAuthenticated == returned->x4NackAuthenticated);
+    CHECK(copy->x4NackIdentity == returned->x4NackIdentity && copy->x4NackExtended == 102);
+    unsigned sends = 0;
+    CHECK(value->poll([&](rtc::message_ptr message) {
+        ++sends; CHECK(positions(message) == std::vector<uint16_t>({101,103,104})); return true;
+    }) == 1);
+    auto outcome = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(outcome.identity == request.identity && outcome.original_mask == 15 && outcome.selected_mask == 13);
+    CHECK(outcome.detected_us == request.detected_us && outcome.deadline_us == request.deadline_us);
+    CHECK(outcome.attempt_start_us > request.detected_us && outcome.local_return_us > outcome.attempt_start_us);
+    CHECK(outcome.local_result == 1 && outcome.reason == 0);
+    incoming(value, rtp(102)); CHECK(countControl(X4_NACK_GRACE_REQUEST) == 1);
+    CHECK(value->poll([](rtc::message_ptr) { fail("no retry after control", __LINE__); return true; }) == 0);
+    CHECK(sends == 1 && value->close() == 0);
+}
+void authenticated_complete_does_not_erase_original_worker_control() {
+    auto value = generator(); incoming(value, rtp(65534)); incoming(value, rtp(2));
+    auto request = lastControl(X4_NACK_GRACE_REQUEST);
+    for (uint16_t sequence : {uint16_t(65535), uint16_t(0), uint16_t(1)}) incoming(value, rtp(sequence));
+    CHECK(value->poll([](rtc::message_ptr) { fail("AUTH-complete feedback canceled", __LINE__); return true; }) == 0);
+    auto outcome = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(outcome.identity == request.identity && request.first_extended == 65535);
+    CHECK(request.original_mask == 7 && outcome.original_mask == 7 && !outcome.selected_mask);
+    CHECK(outcome.reason == X4_NACK_GRACE_CANCEL_AUTH_COMPLETE && outcome.local_result == -2);
+    CHECK(outcome.deadline_us == request.deadline_us && outcome.local_return_us && !outcome.attempt_start_us);
+    // This reason reports vendor AUTH cancellation only. It cannot prove the
+    // application worker stored those packets and must not clear worker grace.
+    CHECK(countControl(X4_NACK_GRACE_REQUEST) == 1 && value->close() == 0);
+}
+void failed_and_exception_returns_are_local_observations() {
+    auto value = generator(); incoming(value, rtp(100)); incoming(value, rtp(102));
+    CHECK(value->poll([](rtc::message_ptr) { return false; }) == -1);
+    auto outcome = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(outcome.local_result == 0 && outcome.reason == 0 && outcome.selected_mask == 1);
+    CHECK(outcome.local_return_us > outcome.attempt_start_us && outcome.attempt_start_us > outcome.detected_us);
+    incoming(value, rtp(104));
+    CHECK(value->poll([](rtc::message_ptr) -> bool { throw std::runtime_error("test-only failure"); }) == -1);
+    outcome = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(outcome.local_result == -1 && outcome.reason == 0 && outcome.original_mask == 1);
+    CHECK(outcome.local_return_us > outcome.attempt_start_us);
+    CHECK(countControl(X4_NACK_GRACE_REQUEST) == 2 && countControl(X4_NACK_GRACE_OUTCOME) == 2);
+    CHECK(value->poll([](rtc::message_ptr) { fail("local failure cannot retry", __LINE__); return true; }) == 0);
+    CHECK(value->close() == 0);
+}
+void rejected_control_inbox_preserves_nack_budget_and_dispatch() {
+    auto value = generator(); acceptControls.store(false);
+    incoming(value, rtp(100)); incoming(value, rtp(102));
+    CHECK(controlCount.load() == 0 && controlOmissions.load() == 1);
+    unsigned sends = 0;
+    CHECK(value->poll([&](rtc::message_ptr) { ++sends; return true; }) == 1);
+    CHECK(controlCount.load() == 0 && controlOmissions.load() == 2 && sends == 1);
+    CHECK(value->poll([&](rtc::message_ptr) { ++sends; return true; }) == 0);
+    CHECK(value->close() == 0 && counter(14) == 1);
+}
+void closure_and_source_retirement_keep_control_identity() {
+    auto value = generator(); incoming(value, rtp(100,7)); incoming(value, rtp(102,7));
+    auto first = lastControl(X4_NACK_GRACE_REQUEST);
+    incoming(value, rtp(200,8)); incoming(value, rtp(202,8));
+    auto second = lastControl(X4_NACK_GRACE_REQUEST);
+    CHECK(second.sequence_epoch == first.sequence_epoch + 1);
+    CHECK(value->poll([](rtc::message_ptr) { fail("source-retired request", __LINE__); return true; }) == 0);
+    auto retired = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(retired.identity == first.identity && retired.source == first.source && retired.reason == 5);
+    CHECK(retired.original_mask == 1 && !retired.attempt_start_us && retired.local_result == -2);
+    CHECK(value->close() == 0);
+    auto closed = lastControl(X4_NACK_GRACE_OUTCOME);
+    CHECK(closed.identity == second.identity && closed.source == second.source && closed.reason == 7);
+    CHECK(closed.deadline_us == second.deadline_us && closed.local_result == -2);
+}
+void original_sixty_four_bit_mask_and_invalid_deadline_are_explicit() {
+    auto value = generator(); incoming(value, rtp(65500)); incoming(value, rtp(29));
+    auto request = lastControl(X4_NACK_GRACE_REQUEST);
+    CHECK(request.first_extended == 65501 && request.original_mask == UINT64_MAX);
+    CHECK(request.deadline_us == request.detected_us + 45000 && value->close() == 0);
+    clearEvents(); auto overflow = generator(); testClock.store(UINT64_MAX - 100);
+    incoming(overflow, rtp(100)); incoming(overflow, rtp(102));
+    request = lastControl(X4_NACK_GRACE_REQUEST);
+    CHECK(request.original_mask == 1 && request.detected_us > UINT64_MAX - 45000);
+    CHECK(request.deadline_us == 0); // Worker bridge must fail closed on this clock.
+    CHECK(overflow->close() == 0);
+}
 }
 
 extern "C" void x4_native_random_or_exit(void *target, size_t size) {
@@ -347,13 +465,21 @@ extern "C" void x4_native_random_or_exit(void *target, size_t size) {
 extern "C" uint64_t x4_rtc_receive_clock(void) { return testClock.fetch_add(1); }
 extern "C" void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     uint64_t source, uint64_t a, uint64_t b, uint64_t c) {
-    unsigned slot = eventCount.fetch_add(1);
-    if (slot < events.size()) events[slot] = {event, flags, identity, source, a, b, c};
-    else eventOmissions.fetch_add(1);
+    if (recordEvents.load()) {
+        unsigned slot = eventCount.fetch_add(1);
+        if (slot < events.size()) events[slot] = {event, flags, identity, source, a, b, c};
+        else eventOmissions.fetch_add(1);
+    }
     if (event == 19 && blockRequestRecord.load(std::memory_order_acquire)) {
         requestRecordEntered.store(true, std::memory_order_release);
         while (!releaseRequestRecord.load(std::memory_order_acquire)) std::this_thread::yield();
     }
+}
+extern "C" bool x4_rtc_nack_grace_control(const X4NackGraceControl *control) {
+    if (!acceptControls.load()) { controlOmissions.fetch_add(1); return false; }
+    unsigned slot = controlCount.fetch_add(1);
+    if (slot < controls.size()) { controls[slot] = *control; return true; }
+    controlOmissions.fetch_add(1); return false;
 }
 
 int main() {
@@ -374,6 +500,12 @@ int main() {
     CASE(try_gate_omission_retires_continuity_without_a_false_gap);
     CASE(close_retries_while_the_owner_has_an_active_send);
     CASE(new_session_has_new_identity_and_budget);
+    CASE(functional_request_is_immutable_and_independent_of_trace);
+    CASE(authenticated_complete_does_not_erase_original_worker_control);
+    CASE(failed_and_exception_returns_are_local_observations);
+    CASE(rejected_control_inbox_preserves_nack_budget_and_dispatch);
+    CASE(closure_and_source_retirement_keep_control_identity);
+    CASE(original_sixty_four_bit_mask_and_invalid_deadline_are_explicit);
     std::printf("PASS receiver NACK production handler: %u cases, %llu checks\n", cases,
         static_cast<unsigned long long>(checks));
     return 0;

@@ -89,6 +89,7 @@ struct X4Auth {
     X4SessionMediaCallback media_callback;
     void *media_user;
     X4Trace *media_trace; /* Same joined lifetime as media_user; diagnostic only. */
+    X4NackGraceInbox *grace_inbox; /* Same joined lifetime; functional. */
     _Atomic int keyframe_requested;
 };
 
@@ -795,7 +796,7 @@ static void session_run(X4Auth *a)
     } else {
         const X4SessionSnapshot *r = x4_xbox_session(w, a->access_token, &a->session_title, a->session_offering,
             &a->cancel, session_progress, a, passport_provider, a, a->media_callback, a->media_user,
-            &a->keyframe_requested, gamepad_source, a, a->media_trace);
+            &a->keyframe_requested, gamepad_source, a, a->media_trace, a->grace_inbox);
         session_progress(a, r);
     }
     x4_xbox_work_free(w);
@@ -1153,7 +1154,16 @@ int x4_auth_set_media_callback(X4Auth *a, X4SessionMediaCallback callback, void 
     a->media_callback = callback;
     a->media_user = callback ? user : NULL;
     a->media_trace = callback ? trace : NULL;
+    if(!callback) a->grace_inbox=NULL;
     return 0;
+}
+
+int x4_auth_set_grace_inbox(X4Auth *a,X4NackGraceInbox *inbox)
+{
+    if(!a) return X4_AUTH_E_ARGUMENT;
+    if(x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    int rc=join_worker(a); if(rc) return rc;
+    a->grace_inbox=inbox; return 0;
 }
 
 void x4_auth_request_keyframe(X4Auth *a)

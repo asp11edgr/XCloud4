@@ -25,10 +25,10 @@ static void header(uint32_t *p, const X4Controller *c)
     x4_rect(p, 0, 0, X4_WIDTH, X4_HEIGHT, BG);
     x4_rect(p, 84, 88, 12, 78, GREEN);
     x4_text(p, 122, 92, 9, "XCLOUD4", WHITE);
-#if X4_RECEIVER_NACK
-    x4_text(p, 1220, 110, 3, "VERSION 0.7.33 NACK", MUTED);
+#if X4_NACK_GRACE_MS == 45
+    x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G45", MUTED);
 #else
-    x4_text(p, 1220, 110, 3, "VERSION 0.7.33 SIN NACK", MUTED);
+    x4_text(p, 1220, 110, 3, "VERSION 0.7.34 G0", MUTED);
 #endif
     x4_rect(p, 84, 205, 1752, 2, PANEL);
     x4_text(p, 84, 963, 3, c->data.connected ? "DUALSHOCK 4 CONECTADO" : "CONECTA TU DUALSHOCK 4", c->data.connected ? GREEN : MUTED);

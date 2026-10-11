@@ -38,6 +38,9 @@ private:
         uint64_t dispatchTime);
     void counters();
     void suppress(const X4ReceiverNackGap &gap, unsigned reason, uint64_t positions);
+    void graceControl(const X4ReceiverNackGap &gap, unsigned kind,
+        uint64_t selectedMask, uint64_t attemptStart, uint64_t localReturn,
+        int localResult, unsigned reason);
     const bool mEnabled;
     const uint32_t mEpoch;
     uint32_t mSenderSsrc;

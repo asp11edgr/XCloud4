@@ -19,6 +19,7 @@ enum {
 };
 
 typedef struct X4LiveMedia X4LiveMedia;
+typedef struct X4NackGraceInbox X4NackGraceInbox;
 
 typedef struct {
     uint64_t video_packets, audio_packets; /* valid RTP copied into the queues */
@@ -98,6 +99,9 @@ bool x4_live_media_has_new_picture(X4LiveMedia *media);
 /* Borrowed until close succeeds; numeric diagnostics only. Main-only drawn
  * observation does not advance presentation state or read a newer slot. */
 X4Trace *x4_live_media_trace(X4LiveMedia *media);
+/* Functional session-bound control storage, independent of optional trace.
+ * Borrowed until RTC close/unbind and video-worker join complete. */
+X4NackGraceInbox *x4_live_media_grace_inbox(X4LiveMedia *media);
 bool x4_live_media_drawn(X4LiveMedia *media, uint64_t *generation,
     uint64_t *native_output_id, bool *fresh_vs_presented);
 /* Draws the last real picture scaled with aspect ratio into a 1920x1080
@@ -191,3 +195,20 @@ int x4_live_reorder_insert(X4LiveReorder *reorder, const uint8_t *packet, size_t
  * valid until the next insert/reset. now=0 suppresses only time expiry;
  * the depth/window bounds still apply while queued ingress is inserted. */
 const uint8_t *x4_live_reorder_next(X4LiveReorder *reorder, uint64_t now, size_t *size, uint32_t *lost);
+/* Grace fallback only: abandon the current missing prefix through the same
+ * nearest-buffered rule, without consuming a packet or invoking Decode.
+ * Owner must record loss/reset the partial AU before further insertion. */
+uint32_t x4_live_reorder_abandon_gap(X4LiveReorder *reorder);
+/* Limited variants stop BEFORE the protected endpoint at expected+limit.
+ * A limited next can return NULL with lost>0: record/reset the skipped prefix
+ * before waiting at the protected sequence. No buffered packet is consumed
+ * in that case. limit0 forbids gap advancement; window retains old behavior.
+ * The caller computes this limit after a real-clock grace query. */
+uint32_t x4_live_reorder_abandon_gap_limited(X4LiveReorder *reorder,uint32_t advance_limit);
+const uint8_t *x4_live_reorder_next_limited(X4LiveReorder *reorder,uint64_t now,
+    size_t *size,uint32_t *lost,unsigned *reason,bool force_gap,uint32_t advance_limit);
+/* Same reorder operation with numeric reason1=depth,2=time,8=explicit bounded
+ * grace release,16=advance stopped at another protected pending position.
+ * force_gap never changes capacity or permits an overwrite. */
+const uint8_t *x4_live_reorder_next_reason(X4LiveReorder *reorder, uint64_t now,
+    size_t *size, uint32_t *lost, unsigned *reason, bool force_gap);

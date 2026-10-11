@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_media.h"
 #include "video_ingress.h"
+#include "nack_grace.h"
+#include "../streaming/nack_grace_inbox.h"
 #include "../streaming/rtc_receive_diag.h"
 #include "../video/live_h264.h"
 #include "../video/display.h"
@@ -11,6 +13,12 @@
 #include <stdio.h>
 static unsigned be16(const uint8_t *p) { return ((unsigned)p[0] << 8) | p[1]; }
 static uint32_t be32(const uint8_t *p) { return (uint32_t)be16(p) << 16 | be16(p + 2); }
+#ifndef X4_NACK_GRACE_MS
+#define X4_NACK_GRACE_MS 0
+#endif
+enum { GR_CONTROL_REQUEST=1, GR_CONTROL_OUTCOME, GR_OFFER, GR_RELEASE,
+    GR_CALLBACK, GR_QUEUE_POP, GR_WORKER_ACCEPT, GR_WORK_COST, GR_QUEUE_AGE,
+    GR_COUNTER, GR_HOLD_BEGIN, GR_ABANDON };
 /* Legacy trace schema excludes SSRC. The private progress sidecar records
  * numeric SSRC/sequence only; neither format contains payloads or credentials.
  * MEDIA events 0x100..0x13f are reserved in live_trace.h. */
@@ -125,57 +133,6 @@ int x4_live_track_accept(X4LiveTrack *t, const X4LiveRtp *r)
     if (!t->locked) { t->locked = true; t->ssrc = r->ssrc; t->payload_type = r->payload_type; return X4_LIVE_TRACK_NEW; }
     return X4_LIVE_TRACK_SAME;
 }
-int x4_live_reorder_init(X4LiveReorder *q, uint16_t window, uint16_t depth, uint64_t wait)
-{
-    memset(q, 0, sizeof(*q));
-    if (!window || window > 1024 || (window & (window - 1)) || !depth || depth > window || !wait) return -1;
-    q->slots = calloc(window, sizeof(*q->slots)); q->data = malloc((size_t)window * X4_LIVE_RTP_MAX);
-    if (!q->slots || !q->data) { x4_live_reorder_free(q); return X4_LIVE_ERR_MEMORY; }
-    q->window = window; q->depth = depth; q->max_wait = wait; return 0;
-}
-void x4_live_reorder_free(X4LiveReorder *q) { free(q->slots); free(q->data); memset(q, 0, sizeof(*q)); }
-void x4_live_reorder_reset(X4LiveReorder *q) { if (q->slots) memset(q->slots, 0, q->window * sizeof(*q->slots)); q->started = false; q->buffered = 0; }
-int x4_live_reorder_insert(X4LiveReorder *q, const uint8_t *p, size_t size, uint16_t seq, uint64_t now)
-{
-    if (!q || !q->window || !p || size > X4_LIVE_RTP_MAX || !size) return X4_LIVE_REORDER_LATE;
-    if (!q->started) { q->expected = seq; q->started = true; }
-    int diff = (int16_t)(seq - q->expected), result = X4_LIVE_REORDER_STORED;
-    if (diff < 0) return X4_LIVE_REORDER_LATE;
-    if ((unsigned)diff >= q->window) { x4_live_reorder_reset(q); q->expected = seq; q->started = true; result = X4_LIVE_REORDER_JUMP; }
-    unsigned at = seq & (q->window - 1);
-    if (q->slots[at].used) return X4_LIVE_REORDER_LATE;
-    memcpy(q->data + (size_t)at * X4_LIVE_RTP_MAX, p, size);
-    q->slots[at] = (X4LiveReorderSlot){.sequence = seq, .size = size, .used = true, .arrival = now};
-    ++q->buffered; return result;
-}
-static const uint8_t *reorder_next_reason(X4LiveReorder *q, uint64_t now, size_t *size, uint32_t *lost, unsigned *reason)
-{
-    if (reason) *reason = 0;
-    *size = 0; *lost = 0;
-    if (!q || !q->started || !q->buffered) return NULL;
-    unsigned at = q->expected & (q->window - 1);
-    if (!q->slots[at].used || q->slots[at].sequence != q->expected) {
-        unsigned gap = q->window;
-        uint64_t oldest = now;
-        for (unsigned i = 0; i < q->window; ++i) if (q->slots[i].used) {
-            unsigned d = (uint16_t)(q->slots[i].sequence - q->expected);
-            if (d < gap) gap = d;
-            if (q->slots[i].arrival < oldest) oldest = q->slots[i].arrival;
-        }
-        /* A zero clock suppresses time expiry while ingress still awaits
-         * insertion. The bounded depth/window policy continues to apply. */
-        if (gap >= q->window || (q->buffered < q->depth && (!now || now - oldest < q->max_wait))) return NULL;
-        if (reason) *reason = (q->buffered >= q->depth ? 1u : 0u) |
-            (now && now - oldest >= q->max_wait ? 2u : 0u);
-        q->expected += gap; *lost = gap; at = q->expected & (q->window - 1);
-    }
-    X4LiveReorderSlot *s = &q->slots[at];
-    if (!s->used || s->sequence != q->expected) return NULL;
-    *size = s->size; s->used = false; --q->buffered; ++q->expected;
-    return q->data + (size_t)at * X4_LIVE_RTP_MAX;
-}
-const uint8_t *x4_live_reorder_next(X4LiveReorder *q, uint64_t now, size_t *size, uint32_t *lost)
-{ return reorder_next_reason(q, now, size, lost, NULL); }
 enum { RGB_SLOTS = 3, WORKER_BUDGET_US = 16000, WORKER_DECODE_LIMIT = 4 };
 typedef struct { uint32_t *pixels; unsigned width, height; uint64_t generation, completed_us, native_output; } RgbSlot;
 struct X4LiveMedia {
@@ -192,6 +149,14 @@ struct X4LiveMedia {
     X4IngressTicket reorder_tickets[128], au_tickets[128];
     unsigned au_ticket_count;
     uint64_t au_ticket_omissions, reorder_ticket_omissions;
+    X4NackGraceInbox grace_inbox;
+    X4NackGraceState grace;
+    uint64_t grace_controls, grace_seen_omissions;
+    uint64_t grace_decode_start[64], grace_copy_start[64], grace_convert_start[64];
+    uint64_t grace_max_dwell[64];
+    uint64_t grace_hold_logged;
+    uint64_t grace_force_ranges;
+    bool grace_force_gap;
     atomic_uint callback_active, callback_peak;
     atomic_uint_fast64_t callback_calls, callback_overlap, callback_us, callback_max_us;
     atomic_uint_fast64_t reserve_us, reserve_max_us, rx_invalid;
@@ -441,6 +406,8 @@ X4LiveMedia *x4_live_media_create(int *error)
         if (!m->rgb[i].pixels) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     }
     m->trace_session = x4_trace_now_us();
+    x4_nack_grace_inbox_init(&m->grace_inbox);
+    x4_nack_grace_init(&m->grace, m->trace_session, X4_NACK_GRACE_MS == 45);
     m->trace = x4_trace_create(m->trace_session, X4_LIVE_COPY_READERS);
     m->video.trace = m->trace;
     /* Optional sampler owns no playback buffers. Bind before all producers;
@@ -518,11 +485,15 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         parsed >= 0 ? r.ssrc : 0, parsed >= 0 ? r.sequence : 0, size, callback_begin);
     X4IngressResult result = { .reason = X4_INGRESS_INVALID };
     X4NackPacket delivered = x4_rtc_nack_delivery_ticket();
-    X4IngressTicket ticket = {delivered.identity, delivered.source, delivered.extended_sequence, delivered.rtp_timestamp};
+    X4IngressTicket ticket = {delivered.identity, delivered.source, delivered.extended_sequence,
+        delivered.rtp_timestamp, delivered.authenticated_us};
     uint64_t source = parsed >= 0 ? (1ull<<63) | ((uint64_t)r.payload_type<<32) | r.ssrc : 0;
     if (parsed < 0 || ticket.source != source || (uint16_t)ticket.extended_sequence != r.sequence ||
         ticket.rtp_timestamp != r.timestamp) ticket = (X4IngressTicket){0};
     bool pushed = parsed >= 0 && x4_video_ingress_push_ticket(&m->ingress, p, size, callback_begin, &result, &ticket);
+    if(ticket.identity) x4_trace_monitor_critical(m->trace,callback_begin,X4_MON_CR_NACK_GRACE,
+        GR_CALLBACK,result.reason,ticket.identity,ticket.source,
+        ticket.extended_sequence,ticket.authenticated_us,callback_begin);
     if (parsed < 0) atomic_fetch_add_explicit(&m->rx_invalid, 1, memory_order_relaxed);
     if (parsed < 0 || !pushed) {
         atomic_fetch_add(&m->dropped, 1); atomic_store(&m->ingress_gap, true); atomic_store(&m->keyframe, true);
@@ -561,6 +532,136 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         ((uint64_t)active << 32) | (parsed >= 0 ? r.sequence : 0u), (cb32 << 32) | reserve32);
     atomic_fetch_sub_explicit(&m->callback_active, 1, memory_order_relaxed);
 }
+static void grace_record(X4LiveMedia *m,unsigned kind,unsigned flags,uint64_t identity,
+    uint64_t source,uint64_t a,uint64_t b,uint64_t c)
+{
+    x4_trace_monitor_critical(m->trace,x4_trace_now_us(),X4_MON_CR_NACK_GRACE,
+        kind,flags,identity,source,a,b,c);
+}
+static uint64_t grace_source(const X4LiveMedia *m)
+{ return (UINT64_C(1)<<63)|((uint64_t)m->track.payload_type<<32)|m->track.ssrc; }
+static uint32_t grace_span(const X4LiveMedia *m)
+{
+    uint32_t furthest=0;
+    for(unsigned i=0;i<m->reorder.window;++i) if(m->reorder.slots[i].used) {
+        unsigned offset=(uint16_t)(m->reorder.slots[i].sequence-m->reorder.expected);
+        if(offset>furthest) furthest=offset;
+    }
+    return furthest;
+}
+static void grace_effects(X4LiveMedia *m,X4NackGraceEffects effects)
+{
+    uint64_t changed=effects.completed|effects.deadline|effects.capacity|effects.passed|effects.invalidated;
+    for(unsigned i=0;i<64;++i) if(changed&(UINT64_C(1)<<i)) {
+        X4NackGraceRange *r=&m->grace.ranges[i];
+        unsigned offset=(uint16_t)(m->reorder.expected-(uint16_t)r->first_extended);
+        if(x4_nack_grace_release_forces_gap(r->release_reason)&&offset<64&&
+            ((r->granted_mask&~r->accepted_mask)&(UINT64_C(1)<<offset))) {
+            m->grace_force_gap=true; m->grace_force_ranges|=UINT64_C(1)<<i;
+        }
+        uint64_t source=(UINT64_C(1)<<63)|((uint64_t)m->track.payload_type<<32)|r->ssrc;
+        grace_record(m,GR_RELEASE,r->release_reason,r->identity,source,
+            r->deadline_us,r->accepted_mask,m->reorder.buffered);
+        grace_record(m,GR_WORK_COST,0,r->identity,source,
+            m->video.decode_us+m->video_totals.decode_us-m->grace_decode_start[i],
+            m->video.copy_us+m->video_totals.copy_us-m->grace_copy_start[i],
+            m->video.convert_us+m->video_totals.convert_us-m->grace_convert_start[i]);
+        uint64_t now=x4_trace_now_us(),oldest=x4_video_ingress_oldest(&m->ingress);
+        grace_record(m,GR_QUEUE_AGE,0,r->identity,source,
+            oldest&&now>=oldest?now-oldest:0,x4_video_ingress_depth(&m->ingress),m->grace_max_dwell[i]);
+    }
+}
+static void grace_controls(X4LiveMedia *m)
+{
+    uint64_t omitted=atomic_load_explicit(&m->grace_inbox.omitted,memory_order_relaxed);
+    if(omitted!=m->grace_seen_omissions) {
+        m->grace_seen_omissions=omitted;
+        /* Unknown control history must not extend a hold. Keep NACK enabled,
+         * but irreversibly disable grace for this session. */
+        grace_effects(m,x4_nack_grace_close_reason(&m->grace,X4_GRACE_RELEASE_EXPLICIT));
+        grace_record(m,GR_COUNTER,0,0,0,101,omitted,0);
+    }
+    if(!m->track.locked) return; /* First accepted packet owns source binding. */
+    X4NackGraceControl control;
+    for(unsigned n=0;n<X4_GRACE_INBOX_CAP&&x4_nack_grace_inbox_pop(&m->grace_inbox,&control);++n) {
+        ++m->grace_controls;
+        if(control.kind==X4_NACK_GRACE_REQUEST) {
+            grace_record(m,GR_CONTROL_REQUEST,0,control.identity,control.source,
+                control.first_extended,control.original_mask,control.detected_us);
+            X4NackGraceRequest request={m->trace_session,control.identity,
+                control.first_extended,control.original_mask,control.detected_us,
+                (uint32_t)control.source,control.sequence_epoch};
+            X4NackGraceEffects effects;
+            uint64_t now=x4_trace_now_us();
+            int offer=x4_nack_grace_offer(&m->grace,&request,now,&effects);
+            grace_effects(m,effects);
+            unsigned ordinal=(uint32_t)control.identity;
+            X4NackGraceRange *r=ordinal&&ordinal<=64?&m->grace.ranges[ordinal-1]:NULL;
+            grace_record(m,GR_OFFER,0,control.identity,control.source,
+                control.deadline_us,r?r->granted_mask:0,((uint64_t)m->reorder.buffered<<32)|(unsigned)offer);
+            if(offer==X4_GRACE_OFFER_ADMITTED) {
+                unsigned i=ordinal-1;
+                m->grace_decode_start[i]=m->video.decode_us+m->video_totals.decode_us;
+                m->grace_copy_start[i]=m->video.copy_us+m->video_totals.copy_us;
+                m->grace_convert_start[i]=m->video.convert_us+m->video_totals.convert_us;
+                /* Controls may reach the worker after a requested packet was
+                 * already STORED. Callback/AUTH alone never clear pending. */
+                for(unsigned slot=0;slot<m->reorder.window;++slot) if(m->reorder.slots[slot].used)
+                    grace_effects(m,x4_nack_grace_accepted_wire(&m->grace,m->track.ssrc,
+                        m->grace.sequence_epoch,m->reorder.slots[slot].sequence,x4_trace_now_us()));
+            }
+        } else if(control.kind==X4_NACK_GRACE_OUTCOME) {
+            grace_record(m,GR_CONTROL_OUTCOME,((unsigned)(control.local_result+2)&255u)|(control.reason<<8),
+                control.identity,control.source,control.attempt_start_us,control.local_return_us,control.selected_mask);
+            if((control.reason==X4_NACK_GRACE_ATTEMPT && control.local_result!=1) ||
+                control.reason==X4_NACK_GRACE_CANCEL_RETIRED || control.reason==X4_NACK_GRACE_CANCEL_CLOSING)
+                grace_effects(m,x4_nack_grace_cancel(&m->grace,control.identity,X4_GRACE_RELEASE_TRANSPORT));
+            /* AUTH-complete cancels a send watch, not worker grace. */
+        }
+    }
+}
+static X4NackGraceDecision grace_query(X4LiveMedia *m,uint32_t prospective_offset)
+{
+    grace_controls(m);
+    if(!m->grace.active_count) return (X4NackGraceDecision){0};
+    uint32_t span=grace_span(m);
+    if(prospective_offset>span) span=prospective_offset;
+    X4NackGraceDecision decision=x4_nack_grace_query(&m->grace,m->reorder.expected,
+        m->reorder.buffered,span,x4_trace_now_us());
+    grace_effects(m,decision.effects);
+    if(decision.reason==X4_GRACE_HOLD) {
+        unsigned ordinal=(uint32_t)decision.identity;
+        uint64_t bit=UINT64_C(1)<<(ordinal-1);
+        if(!(m->grace_hold_logged&bit)) {
+            m->grace_hold_logged|=bit;
+            grace_record(m,GR_HOLD_BEGIN,0,decision.identity,grace_source(m),
+                ((uint64_t)m->reorder.expected<<32)|m->reorder.buffered,decision.deadline_us,span);
+        }
+    }
+    return decision;
+}
+static void grace_abandon_before_insert(X4LiveMedia *m)
+{
+    if(!m->grace_force_gap) return;
+    uint16_t expected=m->reorder.expected,buffered=m->reorder.buffered;
+    uint32_t span=grace_span(m);
+    uint32_t limit=x4_nack_grace_advance_limit(&m->grace,expected,m->reorder.window);
+    uint32_t lost=x4_live_reorder_abandon_gap_limited(&m->reorder,limit);
+    if(lost) {
+        unsigned at=m->reorder.expected&(m->reorder.window-1);
+        bool protected_boundary=!m->reorder.slots[at].used||
+            m->reorder.slots[at].sequence!=m->reorder.expected;
+        unsigned reason=8u|(protected_boundary?16u:0u);
+        for(unsigned i=0;i<64;++i) if(m->grace_force_ranges&(UINT64_C(1)<<i))
+            grace_record(m,GR_ABANDON,m->grace.ranges[i].release_reason|(protected_boundary?0x100u:0u),
+                m->grace.ranges[i].identity,grace_source(m),
+                ((uint64_t)expected<<32)|lost,buffered,span);
+        x4_trace_record(m->trace,MT_REORDER_GAP,reason,
+            ((uint64_t)expected<<32)|lost,buffered);
+        m->lost+=lost; reset_au(m,true,RESET_REORDER,reason);
+        m->grace_force_gap=false; m->grace_force_ranges=0;
+    }
+}
 static bool tick_budget(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin)
 {
     /* Preserve original short-circuit order and every yielding condition.
@@ -581,15 +682,33 @@ static void drain_reordered(X4LiveMedia *m, uint64_t begin, uint64_t decode_begi
         size_t size = 0; uint32_t lost = 0;
         unsigned reason = 0;
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
-        const uint8_t *p = reorder_next_reason(&m->reorder, allow_expire ? sceKernelGetProcessTime() : 0, &size, &lost, &reason);
+        X4NackGraceDecision grace=grace_query(m,0);
+        unsigned at=m->reorder.expected&(m->reorder.window-1);
+        bool hole=m->reorder.started&&(!m->reorder.slots[at].used||m->reorder.slots[at].sequence!=m->reorder.expected);
+        if(hole&&grace.reason==X4_GRACE_HOLD) break;
+        uint64_t forced=m->grace_force_ranges;
+        uint32_t limit=x4_nack_grace_advance_limit(&m->grace,expected,m->reorder.window);
+        uint32_t advance_span=(forced||limit<m->reorder.window)?grace_span(m):0;
+        const uint8_t *p = x4_live_reorder_next_limited(&m->reorder, allow_expire ? sceKernelGetProcessTime() : 0,
+            &size, &lost, &reason,m->grace_force_gap&&hole,limit);
+        if(lost||p||!hole) { m->grace_force_gap=false; m->grace_force_ranges=0; }
         x4_trace_record(m->trace, X4_TRACE_REORDER_STATE, 0,
             ((uint64_t)m->reorder.expected << 32) | m->reorder.buffered, m->reorder.started);
-        if (!p) break;
         if (lost) {
+            if(reason&8u) for(unsigned i=0;i<64;++i) if(forced&(UINT64_C(1)<<i))
+                grace_record(m,GR_ABANDON,m->grace.ranges[i].release_reason|((reason&16u)?0x100u:0u),
+                    m->grace.ranges[i].identity,grace_source(m),
+                    ((uint64_t)expected<<32)|lost,buffered,advance_span);
+            if((reason&16u)&&!(reason&8u))
+                grace_record(m,GR_ABANDON,0x100u,0,grace_source(m),
+                    ((uint64_t)expected<<32)|lost,buffered,advance_span);
             x4_trace_record(m->trace, MT_REORDER_GAP, (uint16_t)(reason | (allow_expire ? 4u : 0u)),
                 ((uint64_t)expected << 32) | lost, buffered);
             m->lost += lost; reset_au(m, true, RESET_REORDER, reason);
         }
+        /* A protected pending position may stop an advance before any
+         * buffered packet. Its skipped prefix is still real loss/recovery. */
+        if (!p) break;
         X4LiveRtp r; if (x4_live_rtp_parse(p, size, &r) == 0) {
             x4_trace_record(m->trace, MT_REORDER_EMIT, r.marker ? X4_TRACE_F_MARKER : 0u, r.sequence, size);
             X4IngressTicket ticket = m->reorder_tickets[r.sequence & 127u];
@@ -886,6 +1005,12 @@ static void video_batch(X4LiveMedia *m)
         }
         ++m->tick_packets;
         uint64_t popped = sceKernelGetProcessTime(), age = arrival && popped >= arrival ? popped - arrival : 0;
+        if(ticket.identity) {
+            grace_record(m,GR_QUEUE_POP,0,ticket.identity,ticket.source,
+                ticket.extended_sequence,arrival,ticket.authenticated_us);
+            unsigned ordinal=(uint32_t)ticket.identity;
+            if(ordinal&&ordinal<=64&&age>m->grace_max_dwell[ordinal-1]) m->grace_max_dwell[ordinal-1]=age;
+        }
         m->queue_age_us += age; if (age > m->queue_age_max_us) m->queue_age_max_us = age;
         X4LiveRtp r; if (x4_live_rtp_parse(packet, size, &r) < 0) continue;
         x4_trace_record(m->trace, MT_POP, r.marker ? X4_TRACE_F_MARKER : 0u,
@@ -900,6 +1025,10 @@ static void video_batch(X4LiveMedia *m)
             memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
             x4_trace_record(m->trace, MT_TRACK, locked ? 1u : 0u, ++m->trace_track_epoch, r.sequence);
             reset_au(m, true, RESET_TRACK, locked ? 1u : 0u); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
+            /* Vendor original-video observation starts at sequence epoch1.
+             * A later vendor rebase is not permission to rebind the accepted
+             * worker source; such controls fail closed until a fresh session. */
+            grace_effects(m,x4_nack_grace_bind_source(&m->grace,r.ssrc,1));
             if (locked) {
                 int rc = x4_live_video_stop(&m->video); if (rc < 0) goto finish;
                 retire_video_counters(m);
@@ -907,6 +1036,16 @@ static void video_batch(X4LiveMedia *m)
                 decode_begin = frame_begin = 0;
             }
         }
+        grace_controls(m);
+        if(m->reorder.started&&m->grace.active_count) {
+            int offset=(int16_t)(r.sequence-m->reorder.expected);
+            (void)grace_query(m,offset>=0?(unsigned)offset:0u);
+        }
+        /* Deadline/capacity fallback precedes accepting a delayed queued
+         * return, even if the work budget has just elapsed. This bounded
+         * advance performs no Decode/emit and cannot prolong grace to the
+         * callback-to-worker delay. The existing AU recovery remains intact. */
+        grace_abandon_before_insert(m);
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
         /* LATE also includes occupied slots. Observe the owning worker's
          * pre-insert state without changing the reorder decision. */
@@ -918,11 +1057,25 @@ static void video_batch(X4LiveMedia *m)
                 nack_reject = 2u;
         }
         int rc = x4_live_reorder_insert(&m->reorder, packet, size, r.sequence, sceKernelGetProcessTime());
+        if(rc==X4_LIVE_REORDER_JUMP) {
+            for(unsigned i=0;i<64;++i) if(m->grace.ranges[i].active)
+                grace_effects(m,x4_nack_grace_cancel(&m->grace,m->grace.ranges[i].identity,X4_GRACE_RELEASE_SOURCE));
+            m->grace_force_gap=false; m->grace_force_ranges=0;
+        } else if(rc==X4_LIVE_REORDER_STORED) {
+            grace_effects(m,x4_nack_grace_accepted_wire(&m->grace,r.ssrc,
+                m->grace.sequence_epoch,r.sequence,x4_trace_now_us()));
+        }
         if (rc == X4_LIVE_REORDER_JUMP) memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
         if (ticket.identity) x4_trace_monitor_critical(m->trace, x4_trace_now_us(),
             X4_MON_CR_NACK_REORDER_RESULT, 0xffffu,
             rc == X4_LIVE_REORDER_LATE ? nack_reject : 0, ticket.identity, ticket.source,
             ticket.extended_sequence, rc, ticket.identity & UINT32_MAX);
+        if(ticket.identity) {
+            unsigned ordinal=(uint32_t)ticket.identity;
+            uint64_t deadline=ordinal&&ordinal<=64?m->grace.ranges[ordinal-1].deadline_us:0;
+            grace_record(m,GR_WORKER_ACCEPT,rc,ticket.identity,ticket.source,
+                ticket.extended_sequence,((uint64_t)expected<<32)|buffered,deadline);
+        }
         if (rc != X4_LIVE_REORDER_LATE) m->reorder_tickets[r.sequence & 127u] = ticket;
         if (rc == X4_LIVE_REORDER_JUMP)
             x4_trace_record(m->trace, X4_TRACE_REORDER_WINDOW_JUMP, 0,
@@ -966,6 +1119,9 @@ static void *video_worker(void *context)
     while (rc >= 0 && !atomic_load(&m->stop)) {
         x4_trace_poll(m->trace);
         reset_worker_maxima(m);
+        /* Independently evaluate absolute grace expiry on the existing
+         * worker cadence, including empty ingress and no new reception. */
+        if(m->track.locked) (void)grace_query(m,0);
         if (atomic_load_explicit(&m->started, memory_order_acquire) && !m->video.error &&
             (x4_video_ingress_depth(&m->ingress) || m->reorder.buffered)) video_batch(m);
         else {
@@ -981,6 +1137,18 @@ static void *video_worker(void *context)
         }
     }
     m->diagnostic_worker_phase = X4_MON_PHASE_STOPPING;
+    grace_controls(m);
+    grace_effects(m,x4_nack_grace_close_reason(&m->grace,X4_GRACE_RELEASE_CLOSE));
+    const uint64_t grace_counters[]={atomic_load(&m->grace_inbox.admitted),
+        atomic_load(&m->grace_inbox.omitted),atomic_load(&m->grace_inbox.stale),
+        m->grace_controls,m->grace.counters.offers,m->grace.counters.admitted,
+        m->grace.counters.accepted_positions,m->grace.counters.deadline_ranges,
+        m->grace.counters.capacity_ranges,m->grace.counters.completed_ranges,
+        m->grace.counters.stale_source_offers,m->grace.counters.expired_offers,
+        m->grace.counters.overlap_positions,m->grace.counters.active_cap_offers,
+        X4_NACK_GRACE_MS,X4_RUMBLE};
+    for(unsigned i=0;i<sizeof(grace_counters)/sizeof(grace_counters[0]);++i)
+        grace_record(m,GR_COUNTER,0,0,0,100+i,grace_counters[i],0);
     x4_trace_monitor_state(m->trace, X4_MON_ACTOR_WORKER, X4_MON_PHASE_STOPPING, 0);
     m->worker_close_result = x4_live_video_stop(&m->video);
     for (unsigned i = 0; i < RESET_COUNT; ++i) {
@@ -1008,6 +1176,7 @@ bool x4_live_media_has_new_picture(X4LiveMedia *m)
     return fresh;
 }
 X4Trace *x4_live_media_trace(X4LiveMedia *m) { return m ? m->trace : NULL; }
+X4NackGraceInbox *x4_live_media_grace_inbox(X4LiveMedia *m) { return m ? &m->grace_inbox : NULL; }
 bool x4_live_media_drawn(X4LiveMedia *m, uint64_t *generation, uint64_t *output, bool *fresh)
 {
     if (generation) *generation = 0;

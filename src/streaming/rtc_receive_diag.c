@@ -175,10 +175,10 @@ void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     leave(); errno = saved;
 }
 void x4_rtc_nack_delivery(uint64_t identity, uint64_t source,
-    uint64_t extended_sequence, uint32_t rtp_timestamp)
+    uint64_t extended_sequence, uint32_t rtp_timestamp, uint64_t authenticated_us)
 {
     ReceiveThread *slot = thread_slot();
-    if (slot) slot->nack = (X4NackPacket){identity, source, extended_sequence, rtp_timestamp};
+    if (slot) slot->nack = (X4NackPacket){identity, source, extended_sequence, rtp_timestamp, authenticated_us};
     else atomic_fetch_add_explicit(&nack_ticket_omissions,1,memory_order_relaxed);
 }
 X4NackPacket x4_rtc_nack_delivery_ticket(void)

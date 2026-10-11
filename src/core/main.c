@@ -68,7 +68,7 @@ reopen_interface:;
     }
     x4_controller_init(&controller);
 #ifdef X4_INGRESS_BASELINE
-    printf("XCloud4 0.7.33 BASE: solo para referencia, no es la prueba autorizada\n");
+    printf("XCloud4 %s BASE: solo para referencia, no es la prueba autorizada\n",X4_PRODUCT_VERSION);
 #else
     printf("XCloud4 %s: progreso independiente, base MPSC\n", X4_PRODUCT_VERSION);
 #endif
@@ -266,6 +266,7 @@ reopen_interface:;
                     live_muted = 0;
                     rc = live_error;
                     if (!rc) rc = x4_auth_set_media_callback(auth, x4_live_media_receive, live, x4_live_media_trace(live));
+                    if (!rc) rc = x4_auth_set_grace_inbox(auth,x4_live_media_grace_inbox(live));
                     if (!rc) { game_controls = 0; rc = x4_auth_start_session(auth, catalog_selected); }
                     if (rc && !live_error) live_error = rc;
                     x4_auth_session_snapshot(auth, &session);
