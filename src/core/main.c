@@ -28,6 +28,7 @@
 #include "../auth/release_check.h"
 #include "../ui/picture_settings.h"
 #include "../ui/server_settings.h"
+#include "../ui/access_country.h"
 
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
 /* Main is the sole writer and exporter. No pad read or local action is
@@ -319,6 +320,15 @@ int main(void)
     int session_back = 0;
     bool is_fortnite_session = false;
     bool fortnite_login_flow = false;
+    X4AccessCountryUi access_card_ui = {0};
+    bool access_card_visible = false, access_query = false;
+    bool access_query_started = false, access_query_cancelled = false;
+    int access_query_page = 0;
+    uint64_t access_notice_until = 0;
+    X4UpdateNotice update_notice = {0};
+#if X4_STREAM_PROFILE && !X4_PUBLIC
+    bool update_test_requested = false;
+#endif
     int game_controls = 0;
     int media_active = 0;
     int closing = 0;
@@ -522,6 +532,29 @@ reopen_interface:;
 #endif
 #endif
         if (!closing) {
+            /* The Home update card owns all UI edges while open. A close
+             * edge cannot also navigate, open OPTIONS or start sign-in. */
+            if (update_notice.open) {
+                (void)x4_apple_update_notice_handle(&update_notice,
+                    (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) != 0);
+                controller.pressed = 0;
+            }
+            /* Access-card input belongs only to catalog/Fortnite. Reuse the
+             * existing pending-auth coordinator; never sign Microsoft out. */
+            if (screen.page == 5 || screen.page == 8) {
+                if (access_query && !access_query_started && pending_auth < 0 &&
+                           !x4_auth_busy(auth)) {
+                    /* The existing coordinator may refuse before dispatch
+                     * (for example, Store cleanup failed). Allow a new edge. */
+                    access_query = false;
+                    access_card_visible = false;
+                }
+                if (access_notice_until && input_at >= access_notice_until)
+                    access_notice_until = 0;
+            } else {
+                access_card_visible = false;
+                access_notice_until = 0;
+            }
             static bool first_choice_modal_opened = false;
             bool awaiting_first = x4_server_settings_awaiting_first_choice();
             if (awaiting_first) {
@@ -551,8 +584,19 @@ reopen_interface:;
                 if(controller.pressed&ORBIS_PAD_BUTTON_CROSS) actions|=X4_SETTINGS_CONFIRM;
                 if(controller.pressed&ORBIS_PAD_BUTTON_CIRCLE) actions|=X4_SETTINGS_CANCEL;
                 bool can_edit=!catalog_browser.editing&&!x4_auth_busy(auth)&&pending_auth<0&&
-                    !pending_launch&&!session_back&&!live_retained;
-                stream_settings_consumed=x4_stream_settings_ui_handle(&stream_settings_ui,actions,can_edit);
+                    !pending_launch&&!session_back&&!live_retained&&!access_query;
+                if (stream_settings_ui.open && can_edit &&
+                    (controller.pressed & ORBIS_PAD_BUTTON_TRIANGLE) &&
+                    !(controller.pressed & (ORBIS_PAD_BUTTON_CIRCLE | ORBIS_PAD_BUTTON_OPTIONS))) {
+                    /* Lab-only UI action: discard the draft and show the
+                     * sample on Home; it never changes the real check. */
+                    update_test_requested = true;
+                    stream_settings_ui.open = false;
+                    stream_settings_consumed = true;
+                    screen.page = 0;
+                    ui_pressed = 0;
+                    controller.pressed = 0;
+                } else stream_settings_consumed=x4_stream_settings_ui_handle(&stream_settings_ui,actions,can_edit);
                 if(stream_settings_consumed) ui_pressed&=ORBIS_PAD_BUTTON_OPTIONS;
                 if(stream_settings_consumed || stream_settings_ui.open) controller.pressed = 0;
             } else stream_settings_ui.open=false;
@@ -561,7 +605,7 @@ reopen_interface:;
 #endif
             bool can_edit_pic = (picture_settings_ui.first_time_mode ||
                 ((screen.page == 0 || screen.page == 4 || screen.page == 5 || screen.page == 8) && !x4_auth_busy(auth) && pending_auth < 0)) &&
-                !game_input && !catalog_browser.editing && !pending_launch && !session_back && !live_retained && !closing;
+                !game_input && !catalog_browser.editing && !pending_launch && !session_back && !live_retained && !closing && !access_query;
             unsigned pic_actions = 0;
             if ((controller.pressed & ORBIS_PAD_BUTTON_OPTIONS) && screen.page == 8 && !picture_settings_ui.open) {
                 picture_settings_ui.tab = 1;
@@ -569,6 +613,8 @@ reopen_interface:;
             if (controller.pressed & ORBIS_PAD_BUTTON_OPTIONS) pic_actions |= X4_PIC_SETTINGS_OPEN;
             if (controller.pressed & ORBIS_PAD_BUTTON_UP) pic_actions |= X4_PIC_SETTINGS_UP;
             if (controller.pressed & ORBIS_PAD_BUTTON_DOWN) pic_actions |= X4_PIC_SETTINGS_DOWN;
+            if (controller.pressed & ORBIS_PAD_BUTTON_LEFT) pic_actions |= X4_PIC_SETTINGS_LEFT;
+            if (controller.pressed & ORBIS_PAD_BUTTON_RIGHT) pic_actions |= X4_PIC_SETTINGS_RIGHT;
             if (controller.pressed & ORBIS_PAD_BUTTON_CROSS) pic_actions |= X4_PIC_SETTINGS_CONFIRM;
             if (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) pic_actions |= X4_PIC_SETTINGS_CANCEL;
             if (controller.pressed & ORBIS_PAD_BUTTON_L1) pic_actions |= X4_PIC_SETTINGS_PREV_TAB;
@@ -587,6 +633,62 @@ reopen_interface:;
                     pending_auth = X4_AUTH_XBOX_CATALOG;
                 }
             }
+            if (picture_settings_ui.access_changed) {
+                picture_settings_ui.access_changed = false;
+                if (access_card_visible) x4_access_country_ui_open(&access_card_ui);
+            }
+            if (!picture_settings_ui.open && !pic_consumed &&
+                (screen.page == 5 || screen.page == 8) && !pending_launch &&
+                !live_retained && !session_back) {
+                bool eligible = catalog.state == X4_CATALOG_ERROR &&
+                    x4_lang_is_cloud_unavailable(catalog.error, catalog.http_status,
+                        catalog.xerr, catalog.offering, catalog.stage);
+                if (eligible && !access_card_visible && !access_query &&
+                    pending_auth < 0 && !x4_auth_busy(auth)) {
+                    x4_access_country_ui_open(&access_card_ui);
+                    access_card_visible = true;
+                }
+                if ((access_card_visible && eligible) || access_query) {
+                    unsigned actions = 0;
+                    if (controller.pressed & ORBIS_PAD_BUTTON_LEFT) actions |= X4_ACCESS_UI_LEFT;
+                    if (controller.pressed & ORBIS_PAD_BUTTON_RIGHT) actions |= X4_ACCESS_UI_RIGHT;
+                    if (controller.pressed & ORBIS_PAD_BUTTON_CROSS) actions |= X4_ACCESS_UI_CONFIRM;
+                    if (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) actions |= X4_ACCESS_UI_CANCEL;
+                    if (controller.pressed & ORBIS_PAD_BUTTON_TRIANGLE) actions |= X4_ACCESS_UI_HELP;
+                    bool busy = access_query || pending_auth >= 0 || x4_auth_busy(auth);
+                    X4AccessCountryUiResult action = x4_access_country_ui_handle(
+                        &access_card_ui, actions, busy, "tarjeta");
+                    if (action == X4_ACCESS_UI_APPLIED && !busy) {
+                        access_query_page = screen.page;
+                        access_query = true;
+                        access_query_started = access_query_cancelled = false;
+                        access_notice_until = 0;
+                        catalog_selected = 0;
+                        pending_auth = access_query_page == 8 ?
+                            X4_AUTH_FORTNITE_QUERY : X4_AUTH_XBOX_CATALOG;
+                    } else if (action == X4_ACCESS_UI_CANCEL_QUERY) {
+                        pending_auth = -1;
+                        x4_auth_cancel(auth);
+                        access_query_cancelled = true;
+                        if (!access_query_started) access_query = false;
+                    } else if (action == X4_ACCESS_UI_BACK) {
+                        access_card_visible = false;
+                        if (screen.page == 8 || screen.catalog_from_home) {
+                            screen.catalog_from_home = 0;
+                            screen.page = 0;
+                        } else screen.page = 4;
+                    }
+                    /* Consume edges before catalog navigation, search,
+                     * account navigation or Fortnite's ordinary Play action. */
+                    ui_pressed = 0;
+                    controller.pressed = 0;
+                }
+            }
+            if (screen.page == 5 || screen.page == 8) {
+                x4_access_country_card_set(&access_card_ui, access_query ?
+                    X4_ACCESS_CARD_TRYING : (access_notice_until ?
+                    X4_ACCESS_CARD_SUCCESS : X4_ACCESS_CARD_SELECT));
+            } else x4_access_country_card_set(NULL, X4_ACCESS_CARD_SELECT);
             if (game_input && x4_touch_menu_is_open(&touch_menu)) {
                 X4TouchMenuAction menu_action = x4_touch_menu_update(&touch_menu, controller.pressed, controller.data.buttons, controller_read_at);
                 switch (menu_action) {
@@ -754,6 +856,11 @@ reopen_interface:;
                 enum X4AuthAction action = (enum X4AuthAction)pending_auth;
                 pending_auth = -1;
                 rc = x4_auth_start(auth, action);
+                if (access_query && !access_query_started &&
+                    action == (access_query_page == 8 ? X4_AUTH_FORTNITE_QUERY : X4_AUTH_XBOX_CATALOG)) {
+                    access_query_started = rc == 0;
+                    if (rc) access_query = false;
+                }
                 if (rc) snprintf(ui_notice, sizeof(ui_notice), x4_tr(X4_TR_NOTICE_QUERY_ERR_FMT), rc);
                 else ui_notice[0] = 0;
             }
@@ -765,6 +872,19 @@ reopen_interface:;
 #endif
         x4_auth_snapshot(auth, &account);
         bool catalog_copied = x4_auth_catalog_snapshot_cached(auth, &catalog, &catalog_cursor) != 0;
+        /* Evaluate completion only after copying the new worker's catalog,
+         * never against the previous frame's refusal/READY snapshot. */
+        if (access_query && access_query_started && !x4_auth_busy(auth) &&
+            catalog.state != X4_CATALOG_LOADING) {
+            access_query = access_query_started = false;
+            access_card_visible = false;
+            if (!access_query_cancelled && catalog.state == X4_CATALOG_READY) {
+                access_card_ui.selected = x4_auth_access_country(auth);
+                access_notice_until = input_at + 3000000u;
+            }
+            x4_access_country_card_set(&access_card_ui, access_notice_until ?
+                X4_ACCESS_CARD_SUCCESS : X4_ACCESS_CARD_SELECT);
+        }
         if (catalog_copied) {
             ++ui_generation;
             x4_catalog_presentation_set_generation(&presentation, ui_generation);
@@ -1355,6 +1475,29 @@ reopen_interface:;
             ((screen.page == 8 || screen.page == 5) && (x4_auth_busy(auth) || catalog.state == X4_CATALOG_LOADING)) ||
             (screen.page == 6 && x4_auth_busy(auth)));
         x4_apple_set_animation_phase(ui_animated ? (unsigned)(draw_at / 100000u) : 0);
+        /* Offer only after this frame's navigation/panel/auth actions. An
+         * existing release result supplies the version and validated tag;
+         * this UI path performs no HTTP request. */
+        bool update_home_idle = !closing && !screen.exit_requested && screen.page == 0 &&
+            !picture_settings_ui.open && !x4_server_settings_awaiting_first_choice() &&
+            !screen.open_settings_requested && !screen.explore_catalog_requested &&
+            !fortnite_login_flow && pending_auth < 0 && !pending_launch &&
+            !x4_auth_busy(auth) && !live_retained && !session_back;
+#if X4_STREAM_PROFILE && !X4_PUBLIC
+        update_home_idle = update_home_idle && !stream_settings_ui.open;
+        if (update_test_requested && update_home_idle && !update_notice.open) {
+            if (x4_apple_update_notice_offer(&update_notice,"9.9.9",NULL,true,true))
+                update_test_requested = false;
+        } else
+#endif
+        if (update_home_idle && !update_notice.open && !update_notice.shown &&
+            x4_release_check_status(NULL,0) == X4_UPDATE_AVAILABLE) {
+            char version[32], tag[64];
+            (void)x4_release_check_status(version,sizeof(version));
+            bool valid_tag = x4_release_check_tag(tag,sizeof(tag));
+            (void)x4_apple_update_notice_offer(&update_notice,version,
+                valid_tag ? tag : NULL,true,false);
+        }
         bool ui_reuse_work=false;
         if (!live_visible && screen.page != 3 && screen.page != 6) {
             uint32_t next_ui_sig = 2166136261u;
@@ -1364,6 +1507,8 @@ reopen_interface:;
             UI_HASH(screen.selected);
             UI_HASH(screen.signed_in);
             UI_HASH(screen.exit_error);
+            UI_HASH(update_notice.open);
+            UI_HASH(update_notice.shown);
             UI_HASH(x4_apple_get_animation_phase());
             UI_HASH(account.state);
             UI_HASH(account.error);
@@ -1395,6 +1540,16 @@ reopen_interface:;
             UI_HASH(picture_settings_ui.selected);
             UI_HASH(picture_settings_ui.server_selected);
             UI_HASH(picture_settings_ui.server_scroll_offset);
+            UI_HASH(picture_settings_ui.access_ui.selected);
+            UI_HASH(picture_settings_ui.access_ui.confirming);
+            UI_HASH(picture_settings_ui.access_ui.help);
+            UI_HASH(picture_settings_ui.access_ui.save_error);
+            UI_HASH(access_card_ui.selected);
+            UI_HASH(access_card_ui.confirming);
+            UI_HASH(access_card_ui.help);
+            UI_HASH(access_card_ui.save_error);
+            UI_HASH(access_query);
+            UI_HASH(access_notice_until != 0);
             UI_HASH(controller.data.connected);
             UI_HASH(controller.data.buttons);
 #if X4_STREAM_PROFILE && !X4_PUBLIC
@@ -1538,12 +1693,16 @@ reopen_interface:;
             x4_catalog_gui_draw_cached(&catalog, &catalog_browser, &recent, catalog_assets, &gui, x4_display_pixels(&display));
 #if X4_STREAM_PROFILE && !X4_PUBLIC
             x4_stream_settings_ui_draw(&stream_settings_ui,x4_display_pixels(&display));
+            if (stream_settings_ui.open)
+                x4_apple_draw_update_test_action(x4_display_pixels(&display),310,924);
 #endif
         }
         }
         if (picture_settings_ui.open) {
             x4_picture_settings_ui_draw_cached(&picture_settings_ui, x4_display_pixels(&display));
         }
+        if (!ui_reuse_work && screen.page == 0 && update_notice.open)
+            x4_apple_update_notice_draw(&update_notice,x4_display_pixels(&display));
         x4_exit_error_draw(screen.exit_error, x4_display_pixels(&display));
         if(screen.exit_error||live_error||(screen.page==6&&session.state==X4_SESSION_ERROR))ui_metric=X4_UI_ERRORS;
         else if(picture_settings_ui.open){

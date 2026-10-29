@@ -198,8 +198,12 @@ static void test_tab_navigation_and_menu(const char *test_path)
     CHECK(x4_picture_settings_ui_handle(&ui, X4_PIC_SETTINGS_NEXT_TAB, true));
     CHECK(ui.tab == 1);
 
-    /* Press R1 while on Tab 1: does not overflow */
+    /* The new Access section is reached from Server; its upper bound is 2. */
     CHECK(x4_picture_settings_ui_handle(&ui, X4_PIC_SETTINGS_NEXT_TAB, true));
+    CHECK(ui.tab == 2);
+    CHECK(x4_picture_settings_ui_handle(&ui, X4_PIC_SETTINGS_NEXT_TAB, true));
+    CHECK(ui.tab == 2);
+    CHECK(x4_picture_settings_ui_handle(&ui, X4_PIC_SETTINGS_PREV_TAB, true));
     CHECK(ui.tab == 1);
 
     /* In Tab 1: navigate options (0=Auto, 1=Brazil, 2=CentralUS, 3=WestEurope -> total 4) */

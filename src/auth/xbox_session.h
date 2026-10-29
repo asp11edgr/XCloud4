@@ -2,6 +2,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "../ui/access_country.h"
 
 /* Public view of one Xbox cloud session preparation. This milestone asks
  * Xbox to provision a cloud session, waits until the server reports it ready
@@ -48,6 +49,7 @@ enum X4SessionState {
  * exchange did not return a status. */
 typedef struct {
     enum X4SessionState state;
+    X4AccessCountry access_country; /* declared login country, not real location */
     int error, http_status;
     int cleanup_error, cleanup_http_status;
     int ready_seen, cleanup_failed;

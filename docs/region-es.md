@@ -2,6 +2,20 @@
 
 # Cómo jugar si tu país no tiene Xbox Cloud Gaming
 
+## Opción en la app: País de acceso
+
+1. En la tarjeta de **Posible restricción regional**, usa **IZQUIERDA/DERECHA** para elegir **Automático**, **Estados Unidos**, **Brasil**, **Japón**, **Corea** o **Polonia**. También puedes abrir **OPTIONS > Acceso** con **L1/R1**.
+2. Pulsa **X Probar acceso** en la tarjeta o **X Guardar** en Ajustes. La primera vez que confirmes un país distinto de Automático, lee el aviso y pulsa **X Entiendo, continuar** o **CÍRCULO Cancelar**.
+3. La tarjeta vuelve a consultar el catálogo o Fortnite con la sesión de Microsoft ya autorizada; no vuelve a pedir el código. **CÍRCULO** cancela la consulta. Ajustes aplica la elección en la siguiente consulta o partida.
+4. La app conserva la elección y el aviso aceptado en `/data/xcloud4/access-v1.bin`, sin datos de cuenta. Puedes volver a **Automático** desde **OPTIONS > Acceso**. El panel inicial **Elige tu servidor** conserva solo la selección de servidor.
+5. **TRIÁNGULO Más ayuda** en la tarjeta abre el QR de esta guía.
+
+Esta opción declara otro país solo en la petición de inicio de sesión del servicio en la nube. No es una VPN, no cambia el país de tu cuenta ni el servidor donde juegas y no concede una suscripción. El acceso no está garantizado. No resuelve errores previos de perfil Xbox, país de la cuenta, edad o red; esos mantienen su mensaje específico.
+
+**Usar un país de acceso distinto puede ir contra los términos de Xbox y Microsoft podría restringir tu cuenta. Úsalo bajo tu propia responsabilidad.**
+
+## Alternativa: cuenta y servidor
+
 Algunos usuarios informan de que funciona este método. No está garantizado y puede dejar de funcionar en cualquier momento:
 
 1. Conectado a una VPN de un país donde Xbox Cloud Gaming está disponible, crea una cuenta de Microsoft nueva con ese país como región.
@@ -13,6 +27,6 @@ Riesgos: crear una cuenta con un país que no es el tuyo puede ir contra los té
 
 Lista oficial de países con Xbox Cloud Gaming: https://www.xbox.com/regions
 
-XCloud4 no modifica ni falsea tu ubicación: solo usa lo que Xbox permite a tu cuenta.
+Con **País de acceso: Automático**, XCloud4 no añade una declaración de ubicación al login. Con otro país elegido, declara la IP de referencia de ese país únicamente al pedir acceso a la nube; la conexión mantiene su origen real.
 
 **Aviso:** XCloud4 es un proyecto independiente, sin afiliación con Microsoft, Xbox ni Sony. Se ofrece tal cual, sin garantías. Lo usas bajo tu propia responsabilidad: el proyecto no se hace responsable de problemas con tu consola, tu cuenta o tus suscripciones. Usa XCloud4 respetando los términos de servicio de Microsoft y Xbox.

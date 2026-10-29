@@ -49,8 +49,14 @@ static void write_check(const X4StreamCpuReport *report,const char *outcome)
 }
 static void all_variants(void)
 {
-    _Static_assert(sizeof(X4StreamRequestConfig)==64&&offsetof(X4StreamRequestConfig,cpu_variant)==49,
-        "CPU snapshot uses existing x86_64 config padding");
+    /* Published f18bbeb already includes smoothing/sharpness/request mode.
+     * Pin its complete x86_64 layout; this task does not change the struct. */
+    _Static_assert(sizeof(X4StreamRequestConfig)==72&&offsetof(X4StreamRequestConfig,cpu_variant)==49&&
+        offsetof(X4StreamRequestConfig,decoder_depth)==50&&offsetof(X4StreamRequestConfig,interaction_modes)==51&&
+        offsetof(X4StreamRequestConfig,convert_mode)==52&&offsetof(X4StreamRequestConfig,sharpness)==53&&
+        offsetof(X4StreamRequestConfig,resolution_request_mode)==54&&offsetof(X4StreamRequestConfig,h264_profile)==56&&
+        offsetof(X4StreamRequestConfig,max_fs)==60&&offsetof(X4StreamRequestConfig,max_mbps)==64,
+        "published x86_64 captured config layout and stable CPU/depth offsets");
     for(unsigned v=0;v<=X4_CPU_3;++v){
         X4StreamCpuConfig c=x4_stream_cpu_config(v);
         assert(c.variant==v&&c.decoder_priority==(v==0?700:v==3?256:480)&&c.decoder_affinity==(v>=2?15u:63u));

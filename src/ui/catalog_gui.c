@@ -318,6 +318,12 @@ static void draw_non_ready_state(uint32_t *p, const X4CatalogSnapshot *c)
         return;
     }
     if (c->state == X4_CATALOG_LOADING) {
+        X4AccessCountryCardPhase access_phase;
+        x4_access_country_card_get(NULL, &access_phase);
+        if (access_phase == X4_ACCESS_CARD_TRYING) {
+            x4_apple_draw_access_card(p, x + 56, y + 72, w - 112, h - 144);
+            return;
+        }
         const char *label = x4_server_settings_awaiting_first_choice()
             ? x4_tr(X4_TR_CAT_CHOOSE_SERVER_WAIT)
             : x4_tr(X4_TR_CAT_LOADING);
@@ -335,9 +341,13 @@ static void draw_non_ready_state(uint32_t *p, const X4CatalogSnapshot *c)
             if (spec) msg = spec;
             unavailable_country = x4_lang_is_cloud_unavailable(
                 c->error, c->http_status, c->xerr, c->offering, c->stage);
+            if (unavailable_country) msg = x4_tr(X4_TR_ACCESS_TITLE);
         }
-        x4_apple_draw_icon(p, x + 56, y + 60, X4_ICON_INFO, X4_RGB(255,196,112));
-        int lines = wrapped(p, x + 104, y + 54, 28, X4_FONT_SEMIBOLD, msg, w - 160, 3, C_WHITE);
+        int lines = 0;
+        if (!unavailable_country) {
+            x4_apple_draw_icon(p, x + 56, y + 60, X4_ICON_INFO, X4_RGB(255,196,112));
+            lines = wrapped(p, x + 104, y + 54, 28, X4_FONT_SEMIBOLD, msg, w - 160, 3, C_WHITE);
+        }
         int cur_y = y + 54 + lines * 36 + 14;
         if (c->error || c->http_status >= 400 || c->xerr != 0) {
             char det[96];
@@ -355,10 +365,20 @@ static void draw_non_ready_state(uint32_t *p, const X4CatalogSnapshot *c)
             cur_y += hlines * 30 + 16;
         }
         if (unavailable_country) {
-            if (cur_y < y + 250) cur_y = y + 250;
-            x4_apple_draw_region_qr_block(p, x + 56, cur_y, w - 112, 330, x4_lang_current());
+            if (cur_y < y + 150) cur_y = y + 150;
+            x4_apple_draw_access_card(p, x + 56, cur_y, w - 112, y + h - cur_y - 28);
         }
     }
+}
+
+static bool access_card_visible(const X4CatalogSnapshot *catalog)
+{
+    if (!catalog) return false;
+    X4AccessCountryCardPhase phase;
+    x4_access_country_card_get(NULL,&phase);
+    if (catalog->state == X4_CATALOG_LOADING && phase == X4_ACCESS_CARD_TRYING) return true;
+    return catalog->state == X4_CATALOG_ERROR && x4_lang_is_cloud_unavailable(
+        catalog->error,catalog->http_status,catalog->xerr,catalog->offering,catalog->stage);
 }
 
 static void draw_discover_tab(uint32_t *p, const X4CatalogSnapshot *c,
@@ -779,15 +799,18 @@ static void draw_search_keyboard_interactive(uint32_t *p, const X4CatalogBrowser
     }
 }
 
-static void draw_footer(uint32_t *p, const X4CatalogGuiStatus *s)
+static void draw_footer(uint32_t *p, const X4CatalogGuiStatus *s, bool access)
 {
     (void)s;
     x4_apple_fill_round_rect(p, 84, 926, 1752, 1, 0, X4_RGBA(0xFF, 0xFF, 0xFF, 0x22));
     int fx = 84;
-    fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_CROSS, x4_tr(X4_TR_APPLE_HINT_SELECT)) + 34;
-    fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_TRIANGLE, x4_tr(X4_TR_APPLE_HINT_SEARCH)) + 34;
-    fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_OPTIONS, x4_tr(X4_TR_APPLE_HINT_SETTINGS)) + 34;
-    fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_CIRCLE, x4_tr(X4_TR_APPLE_HINT_BACK)) + 34;
+    if (!access) {
+        fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_CROSS, x4_tr(X4_TR_APPLE_HINT_SELECT)) + 34;
+        fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_TRIANGLE, x4_tr(X4_TR_APPLE_HINT_SEARCH)) + 34;
+        fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_OPTIONS, x4_tr(X4_TR_APPLE_HINT_SETTINGS)) + 34;
+        fx += x4_apple_draw_footer_hint(p, fx, 954, X4_PAD_CIRCLE, x4_tr(X4_TR_APPLE_HINT_BACK)) + 34;
+    }
+    int notice_right;
 
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE && !X4_PUBLIC
     char video_settings[192];
@@ -797,13 +820,17 @@ static void draw_footer(uint32_t *p, const X4CatalogGuiStatus *s)
     int vx = 1836 - vw;
     if (vx < fx + 16) vx = fx + 16;
     txt(p, vx, 956, 20, X4_FONT_SEMIBOLD, video_settings, 1836 - vx, C_GREEN);
+    notice_right = vx - 32;
 #else
     const char *ds4 = (s && s->connected) ? x4_tr(X4_TR_CAT_DS4_CONNECTED) : x4_tr(X4_TR_CAT_DS4_CONNECT);
     int dw = x4_text_width_px(20, X4_FONT_REGULAR, ds4);
     int dx = 1836 - dw;
     if (dx < fx + 16) dx = fx + 16;
     txt(p, dx, 956, 20, X4_FONT_REGULAR, ds4, 1836 - dx, (s && s->connected) ? C_SOFT : C_MUTED);
+    notice_right = dx - 32;
 #endif
+    if (access && s && s->notice && s->notice[0] && notice_right > 84)
+        txt(p,84,956,20,X4_FONT_REGULAR,s->notice,notice_right-84,C_WHITE);
 }
 
 static void catalog_gui_draw(const X4CatalogSnapshot *c, const X4CatalogBrowser *b,
@@ -846,7 +873,11 @@ static void catalog_gui_draw(const X4CatalogSnapshot *c, const X4CatalogBrowser 
         draw_grid_and_detail_tab(p, c, b, r, a, s, false);
     }
 
-    draw_footer(p, s);
+    /* The access card owns X/Circle/Triangle. Do not advertise catalog
+     * selection/search shortcuts while those same edges have other actions. */
+    draw_footer(p,s,access_card_visible(c));
+    if (c && c->state == X4_CATALOG_READY)
+        x4_apple_draw_access_success(p, 550, 988, 820);
     keyboard_cache_stats.last_draw_full=true;
     if (b->editing) {
         draw_search_keyboard_modal_frame(p);

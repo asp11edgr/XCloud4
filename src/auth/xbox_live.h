@@ -5,6 +5,7 @@
 #include "xbox_session.h"
 #include "../input/gamepad.h"
 #include "../streaming/stream_profile.h"
+#include "../ui/access_country.h"
 #include <stdatomic.h>
 #include <stddef.h>
 
@@ -17,6 +18,9 @@ typedef void (*X4XboxProgress)(void *context, const char *stage, const char *off
 
 /* Large heap workspace; free wipes it, tokens included. */
 X4XboxWork *x4_xbox_work_new(void);
+/* Captured before the worker exists; used only for both GSSV login POSTs.
+ * A fresh workspace defaults to Automatic. No preference is read in login. */
+bool x4_xbox_work_set_access_country(X4XboxWork *, X4AccessCountry);
 /* Worker-owned setup before any session request. Copies the validated public
  * request snapshot; later menu changes cannot alter this session's identity. */
 bool x4_xbox_work_set_request_config(X4XboxWork *, const X4StreamRequestConfig *);

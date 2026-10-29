@@ -72,6 +72,7 @@ struct X4Auth {
     enum X4AuthAction action;
     X4AuthWork *work;
     X4XboxWork *xwork; /* catalog and session runs only */
+    _Atomic unsigned access_country; /* captured before creating each worker */
     /* Private session run arguments, copied from the catalog before start. */
     X4CatalogTitle session_title;
     char session_offering[24];
@@ -293,6 +294,7 @@ static void reset_session(X4Auth *a, enum X4SessionState state, int error, const
     X4SessionSnapshot next;
     memset(&next, 0, sizeof(next));
     next.state = state;
+    next.access_country = x4_auth_access_country(a);
     next.error = error;
     copy_text(next.stage, sizeof(next.stage), stage);
     copy_text(next.title_name, sizeof(next.title_name), title);
@@ -1005,6 +1007,7 @@ X4Auth *x4_auth_create(void)
     atomic_init(&a->cancel, 0);
     atomic_init(&a->finished, 1);
     atomic_init(&a->keyframe_requested, 0);
+    atomic_init(&a->access_country, X4_ACCESS_AUTO);
     atomic_flag_clear(&a->lock);
     a->account_epoch = 1;
     reset_recent(a, X4_CATALOG_IDLE, 0, "sin recientes de Xbox");
@@ -1019,11 +1022,30 @@ int x4_auth_busy(X4Auth *a)
     return a && !atomic_load_explicit(&a->finished, memory_order_acquire);
 }
 
+X4AccessCountry x4_auth_access_country(const X4Auth *a)
+{
+    return a ? (X4AccessCountry)atomic_load_explicit(&a->access_country, memory_order_acquire) : X4_ACCESS_AUTO;
+}
+
+/* All four GSSV entry points use one value copied before worker creation.
+ * The Microsoft account and its tokens are deliberately left untouched. */
+static X4XboxWork *new_xbox_work(X4Auth *a)
+{
+    X4AccessCountry country = x4_access_country_get();
+    X4XboxWork *w = x4_xbox_work_new();
+    if (w && !x4_xbox_work_set_access_country(w, country)) {
+        x4_xbox_work_free(w);
+        return NULL;
+    }
+    if (w) atomic_store_explicit(&a->access_country, (unsigned)country, memory_order_release);
+    return w;
+}
+
 /* Main thread, after join and expiry checks. Publishes LOADING first. */
 static int start_catalog(X4Auth *a)
 {
     if (!a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
-    a->xwork = x4_xbox_work_new();
+    a->xwork = new_xbox_work(a);
     if (!a->xwork) {
         printf("XCloud4: catalogo Xbox sin memoria de trabajo\n");
         reset_catalog(a, X4_CATALOG_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para el catalogo");
@@ -1053,7 +1075,7 @@ static int start_catalog(X4Auth *a)
 static int start_recents(X4Auth *a)
 {
     if (!a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
-    a->xwork = x4_xbox_work_new();
+    a->xwork = new_xbox_work(a);
     if (!a->xwork) { reset_recent(a, X4_CATALOG_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para recientes"); return X4_AUTH_E_ALLOCATION; }
     int rc = begin_recent_job(a);
     if (rc) { x4_xbox_work_free(a->xwork); a->xwork = NULL; return rc; }
@@ -1072,7 +1094,7 @@ static int start_recents(X4Auth *a)
 static int start_fortnite(X4Auth *a)
 {
     if (!a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
-    a->xwork = x4_xbox_work_new();
+    a->xwork = new_xbox_work(a);
     if (!a->xwork) {
         printf("XCloud4: Fortnite sin memoria de trabajo\n");
         reset_catalog(a, X4_CATALOG_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para buscar Fortnite");
@@ -1198,7 +1220,7 @@ int x4_auth_start_session_request(X4Auth *a, unsigned index,
         x4_secure_clear(&title,sizeof(title));return X4_AUTH_E_ARGUMENT;
     }
 #endif
-    a->xwork = x4_xbox_work_new();
+    a->xwork = new_xbox_work(a);
     if (!a->xwork) {
         printf("XCloud4: sesion Xbox sin memoria de trabajo\n");
         reset_session(a, X4_SESSION_ERROR, X4_AUTH_E_ALLOCATION, "sin memoria para la sesion", shown, offering,

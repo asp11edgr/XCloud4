@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "apple_ui.h"
 #include "font.h"
+#include "../core/build_identity.h"
 #include "../../third_party/qrcodegen/qrcodegen.h"
 #include <math.h>
 #include <stdio.h>
@@ -17,6 +18,177 @@
 static unsigned animation_phase;
 void x4_apple_set_animation_phase(unsigned phase) { animation_phase = phase; }
 unsigned x4_apple_get_animation_phase(void) { return animation_phase; }
+
+static bool update_tag_valid(const char *tag)
+{
+    if (!tag || !tag[0]) return false;
+    unsigned i=0;
+    for (; i<64 && tag[i]; ++i) {
+        unsigned char c=(unsigned char)tag[i];
+        if (!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||
+              c=='.'||c=='_'||c=='-')) return false;
+    }
+    return i>0 && i<64 && strcmp(tag,".") && strcmp(tag,"..");
+}
+
+bool x4_apple_update_notice_offer(X4UpdateNotice *notice,const char *version,
+    const char *tag,bool eligible,bool is_test)
+{
+    if (!notice || !eligible || notice->open || (!is_test && notice->shown) || !version) return false;
+    size_t size=0;
+    while (size<sizeof(notice->version) && version[size]) {
+        unsigned char c=(unsigned char)version[size];
+        if (c<0x20 || c>0x7e) return false;
+        ++size;
+    }
+    if (!size || size>=sizeof(notice->version)) return false;
+    memcpy(notice->version,version,size+1);
+    if (update_tag_valid(tag))
+        snprintf(notice->url,sizeof(notice->url),"https://github.com/asp11edgr/XCloud4/releases/tag/%s",tag);
+    else
+        snprintf(notice->url,sizeof(notice->url),"https://github.com/asp11edgr/XCloud4/releases");
+    notice->open=true;
+    if (!is_test) notice->shown=true;
+    return true;
+}
+
+bool x4_apple_update_notice_handle(X4UpdateNotice *notice,bool circle)
+{
+    if (!notice || !notice->open) return false;
+    if (circle) notice->open=false;
+    return true;
+}
+
+static void update_notice_qr(uint32_t *pixels,int x,int y,const char *url)
+{
+    static uint8_t qr[qrcodegen_BUFFER_LEN_MAX],temp[qrcodegen_BUFFER_LEN_MAX];
+    if (!qrcodegen_encodeText(url,temp,qr,qrcodegen_Ecc_MEDIUM,qrcodegen_VERSION_MIN,
+        10,qrcodegen_Mask_AUTO,true)) return;
+    int size=qrcodegen_getSize(qr),scale=330/(size+8),box=(size+8)*scale;
+    int left=x+(330-box)/2,top=y+(330-box)/2;
+    x4_apple_fill_round_rect(pixels,x,y,330,330,18,X4_RGB(255,255,255));
+    const uint32_t black=X4_RGB(9,15,25);
+    for(int row=0;row<size;++row)for(int col=0;col<size;++col){
+        if(!qrcodegen_getModule(qr,col,row))continue;
+        int dx=left+(col+4)*scale,dy=top+(row+4)*scale;
+        for(int yy=0;yy<scale;++yy)for(int xx=0;xx<scale;++xx)
+            pixels[(size_t)(dy+yy)*X4_WIDTH+dx+xx]=black;
+    }
+}
+
+void x4_apple_update_notice_draw(const X4UpdateNotice *notice,uint32_t *p)
+{
+    if(!notice||!notice->open||!p)return;
+    x4_apple_fill_round_rect(p,0,0,X4_WIDTH,X4_HEIGHT,0,X4_RGBA(3,7,15,185));
+    x4_apple_glass_panel(p,300,218,1320,644,32,70,78);
+    x4_text_ellipsis_px(p,362,274,42,X4_FONT_BOLD,x4_tr(X4_TR_UPDATE_NOTICE_TITLE),1196,X4_RGB(245,248,252));
+    char version[192];
+    snprintf(version,sizeof(version),x4_tr(X4_TR_UPDATE_NOTICE_VERSION_FMT),notice->version,X4_PRODUCT_VERSION);
+    x4_apple_text_wrap(p,362,362,30,X4_FONT_SEMIBOLD,version,700,42,4,X4_RGB(76,230,151));
+    update_notice_qr(p,1180,376,notice->url);
+    x4_apple_text_wrap(p,1138,728,20,X4_FONT_REGULAR,x4_tr(X4_TR_UPDATE_NOTICE_DESCRIPTION),420,28,3,X4_RGB(197,209,225));
+    x4_text_ellipsis_px(p,1138,824,18,X4_FONT_REGULAR,"github.com/asp11edgr/XCloud4/releases",420,X4_RGB(171,188,209));
+    x4_apple_draw_footer_hint(p,362,770,X4_PAD_CIRCLE,x4_tr(X4_TR_UPDATE_NOTICE_CLOSE));
+}
+
+void x4_apple_draw_update_test_action(uint32_t *p,int x,int y)
+{
+#if !X4_PUBLIC
+    x4_apple_draw_footer_hint(p,x,y,X4_PAD_TRIANGLE,x4_tr(X4_TR_UPDATE_NOTICE_TEST));
+#else
+    (void)p;(void)x;(void)y;
+#endif
+}
+
+static void access_line(uint32_t *p, int x, int y, int size, int weight,
+    const char *text, int width, uint32_t color)
+{
+    x4_text_ellipsis_px(p, x, y, size, weight, text, width, color);
+}
+
+void x4_apple_draw_access_controls(uint32_t *p, int x, int y, int w, int h,
+    const X4AccessCountryUi *ui, X4AccessCountryCardPhase phase, bool settings)
+{
+    if (!p || !ui || w < 600 || h < 300) return;
+    const uint32_t ink = X4_RGB(245,247,250), soft = X4_RGB(188,201,218);
+    const uint32_t amber = X4_RGB(255,211,151);
+    if (ui->help) {
+        int reserved = ui->selected == X4_ACCESS_AUTO ? 52 : 160;
+        x4_apple_draw_region_qr_block(p,x,y,w,h-reserved,x4_lang_current());
+        if (ui->selected != X4_ACCESS_AUTO)
+            x4_apple_text_wrap(p,x,y+h-133,21,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_WARNING),w,29,3,amber);
+        x4_apple_draw_footer_hint(p,x,y+h-30,X4_PAD_CIRCLE,x4_tr(X4_TR_ACCESS_BACK));
+        return;
+    }
+    if (phase == X4_ACCESS_CARD_TRYING) {
+        char message[160];
+        snprintf(message,sizeof(message),x4_tr(X4_TR_ACCESS_TRYING_FMT),x4_access_country_label(ui->selected));
+        x4_apple_spinner(p,x,y+24,x4_apple_get_animation_phase());
+        access_line(p,x+58,y+22,32,X4_FONT_SEMIBOLD,message,w-58,ink);
+        if (ui->selected != X4_ACCESS_AUTO)
+            x4_apple_text_wrap(p,x,y+118,22,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_WARNING),w,31,4,amber);
+        x4_apple_draw_footer_hint(p,x,y+h-30,X4_PAD_CIRCLE,x4_tr(X4_TR_ACCESS_CANCEL));
+        return;
+    }
+    if (ui->confirming) {
+        access_line(p,x,y,32,X4_FONT_BOLD,x4_tr(X4_TR_ACCESS_CONFIRM_TITLE),w,ink);
+        x4_apple_text_wrap(p,x,y+82,25,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_WARNING),w,36,4,amber);
+        if (ui->save_error)
+            x4_apple_text_wrap(p,x,y+h-145,22,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_SAVE_ERROR),w,30,2,amber);
+        if (!settings) {
+            int fx=x;
+            fx+=x4_apple_draw_footer_hint(p,fx,y+h-30,X4_PAD_CROSS,x4_tr(X4_TR_ACCESS_CONTINUE))+42;
+            x4_apple_draw_footer_hint(p,fx,y+h-30,X4_PAD_CIRCLE,x4_tr(X4_TR_ACCESS_CANCEL));
+        }
+        return;
+    }
+    access_line(p,x,y,settings?46:30,X4_FONT_BOLD,
+        x4_tr(settings?X4_TR_ACCESS_COUNTRY:X4_TR_ACCESS_TITLE),w,ink);
+    if (settings)
+        access_line(p,x,y+62,25,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_NEXT_QUERY),w,soft);
+    int sy=y+(settings?128:62);
+    int label_width=settings?230:250;
+    access_line(p,x,sy+17,25,X4_FONT_SEMIBOLD,x4_tr(X4_TR_ACCESS_COUNTRY),label_width,soft);
+    int sw=w-label_width-32;
+    if (sw>650) sw=650;
+    int sx=x+label_width+32;
+    x4_apple_fill_round_rect(p,sx,sy,sw,64,18,X4_RGBA(255,255,255,22));
+    x4_apple_focus_ring(p,sx,sy,sw,64,18);
+    access_line(p,sx+20,sy+15,29,X4_FONT_SEMIBOLD,"<",30,ink);
+    access_line(p,sx+60,sy+15,29,X4_FONT_SEMIBOLD,x4_access_country_label(ui->selected),sw-120,ink);
+    access_line(p,sx+sw-38,sy+15,29,X4_FONT_SEMIBOLD,">",30,ink);
+    int dy=sy+96;
+    x4_apple_text_wrap(p,x,dy,settings?25:23,X4_FONT_REGULAR,
+        x4_tr(X4_TR_ACCESS_DESCRIPTION),w,settings?36:32,3,soft);
+    if (ui->selected != X4_ACCESS_AUTO)
+        x4_apple_text_wrap(p,x,dy+122,21,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_WARNING),w,29,3,amber);
+    if (ui->save_error)
+        x4_apple_text_wrap(p,x,y+h-105,20,X4_FONT_REGULAR,x4_tr(X4_TR_ACCESS_SAVE_ERROR),w,27,2,amber);
+    if (!settings) {
+        int fx=x;
+        fx+=x4_apple_draw_footer_hint(p,fx,y+h-30,X4_PAD_CROSS,x4_tr(X4_TR_ACCESS_TRY))+42;
+        fx+=x4_apple_draw_footer_hint(p,fx,y+h-30,X4_PAD_CIRCLE,x4_tr(X4_TR_ACCESS_BACK))+42;
+        x4_apple_draw_footer_hint(p,fx,y+h-30,X4_PAD_TRIANGLE,x4_tr(X4_TR_ACCESS_HELP));
+    }
+}
+
+void x4_apple_draw_access_card(uint32_t *p,int x,int y,int w,int h)
+{
+    X4AccessCountryUi ui; X4AccessCountryCardPhase phase;
+    x4_access_country_card_get(&ui,&phase);
+    x4_apple_draw_access_controls(p,x,y,w,h,&ui,phase,false);
+}
+
+void x4_apple_draw_access_success(uint32_t *p,int x,int y,int w)
+{
+    X4AccessCountryUi ui; X4AccessCountryCardPhase phase;
+    x4_access_country_card_get(&ui,&phase);
+    if(phase!=X4_ACCESS_CARD_SUCCESS)return;
+    char message[160];
+    snprintf(message,sizeof(message),x4_tr(X4_TR_ACCESS_SUCCESS_FMT),x4_access_country_label(ui.selected));
+    x4_apple_fill_round_rect(p,x,y,w,52,18,X4_RGBA(18,57,39,235));
+    access_line(p,x+20,y+13,23,X4_FONT_SEMIBOLD,message,w-40,X4_RGB(204,255,224));
+}
 void x4_apple_spinner(uint32_t *p, int x, int y, unsigned phase)
 {
     for (unsigned i=0;i<12;++i) {

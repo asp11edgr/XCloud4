@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "../streaming/stream_profile.h"
+#include "access_country.h"
 
 typedef enum {
     X4_PIC_QUALITY_1080P_ALTA = 0,
@@ -19,17 +20,21 @@ enum {
     X4_PIC_SETTINGS_CONFIRM = 8u,
     X4_PIC_SETTINGS_CANCEL = 16u,
     X4_PIC_SETTINGS_PREV_TAB = 32u,
-    X4_PIC_SETTINGS_NEXT_TAB = 64u
+    X4_PIC_SETTINGS_NEXT_TAB = 64u,
+    X4_PIC_SETTINGS_LEFT = 128u,
+    X4_PIC_SETTINGS_RIGHT = 256u
 };
 
 typedef struct {
     bool open;
-    unsigned tab; /* 0 = Imagen, 1 = Servidor */
+    unsigned tab; /* 0 = Imagen, 1 = Servidor, 2 = Acceso */
     unsigned selected; /* 0..2 (quality in tab 0) */
     unsigned server_selected; /* 0..region_count (0=Automático, 1..N=regions in tab 1) */
     unsigned server_scroll_offset;
     bool first_time_mode;
     bool server_changed;
+    X4AccessCountryUi access_ui;
+    bool access_changed;
 } X4PictureSettingsUi;
 
 /* Initialization and persistence */

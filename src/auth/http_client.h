@@ -68,7 +68,9 @@ typedef struct { const char *name, *value; } X4HttpHeader;
  * json selects POST (printable ASCII, at most X4_HTTP_JSON_BODY_MAX bytes);
  * NULL selects GET. Each destination has its own short header allowlist;
  * Authorization is accepted only as "Bearer <token68>" to a /v2/titles
- * region. capacity is at most X4_HTTP_RESPONSE_MAX + 1. */
+ * region. X-Forwarded-For is optional only for the two login POSTs and must
+ * match the closed access-country IP table; it is forbidden elsewhere.
+ * capacity is at most X4_HTTP_RESPONSE_MAX + 1. */
 int x4_http_json_request(X4Http *http, const char *url, const X4HttpHeader *headers,
     size_t header_count, const char *json, char *body, size_t capacity, size_t *length,
     int *status, const _Atomic int *cancel);

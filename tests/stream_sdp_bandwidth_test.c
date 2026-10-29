@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "../src/streaming/stream_sdp_bandwidth.h"
 #include "../src/streaming/stream_profile.h"
+/* Preserve the real es-MX default used by inherited /play constructors. */
+#include "../src/ui/lang.c"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

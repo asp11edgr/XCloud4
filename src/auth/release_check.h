@@ -29,5 +29,11 @@ void x4_release_check_start(void);
 void x4_release_check_stop(void);
 enum X4UpdateStatus x4_release_check_status(char *version_out, size_t cap);
 
+/* Main-thread public copy of the release tag, never a remote URL. Available
+ * only for AVAILABLE and a complete 1..63 byte ASCII [A-Za-z0-9._-] tag.
+ * Returns false and clears out when absent/invalid or capacity is too small. */
+bool x4_release_check_tag(char *out, size_t capacity);
+
 /* Testing/rendering override helper */
 void x4_release_check_set_mock(enum X4UpdateStatus status, const char *version);
+void x4_release_check_set_mock_tag(enum X4UpdateStatus status, const char *version, const char *tag);

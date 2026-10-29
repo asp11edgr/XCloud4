@@ -30,6 +30,20 @@ Version 0.2.1 adapts SYSTEM-user selection for MAIN and buffer-consumption waiti
 
 ## Protocol and API research
 
+### Optional access-country login table (1.2.1-beta / lab 0.7.58)
+
+The fixed country/IP values in `src/ui/access_country.h` are adapted from
+Better xCloud, copyright (c) redphx, MIT license: `redphx/better-xcloud`,
+commit `f8397043f6d2148d2345d508902a38c69cf1ee20`,
+[`src/enums/bypass-servers.ts`](https://github.com/redphx/better-xcloud/blob/f8397043f6d2148d2345d508902a38c69cf1ee20/src/enums/bypass-servers.ts).
+The retained MIT notice is `docs/licenses/Better-xCloud-MIT-LICENSE.txt` and
+is included in both packages. The original XCloud4 integration adds
+`X-Forwarded-For` only to validated GSSV login requests when explicitly
+selected by the user; Automatic omits it. These addresses are header values,
+not proxies or video destinations. No account credential or third-party
+service implementation is included. Host tests establish request isolation,
+not acceptance in an unsupported country.
+
 GreenVita (MPL-2.0), Better xCloud (MIT), and Moonlight PS4 (permission to adapt its own code not yet clarified) are research references. Their implementations have not been incorporated into the confirmed 0.6.2 baseline. Reviewed versions and relevant files are listed in [REFERENCIAS.md](docs/REFERENCIAS.md).
 
 The public OAuth reference identifier also used by GreenVita is used temporarily with the owner's authorization in 0.6.2. This is not a claim of ownership of that registration or incorporation of GreenVita's Rust implementation.

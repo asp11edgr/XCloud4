@@ -36,12 +36,29 @@ int x4_http_request(X4Http *h,const char *url,const char *form,char *body,size_t
 {(void)h;(void)url;(void)form;(void)cancel;if(body&&cap)body[0]=0;*length=0;*status=0;return X4_HTTP_PROTOCOL;}
 int x4_http_passport_request(X4Http *h,const char *form,char *body,size_t cap,size_t *length,int *status,const _Atomic int *cancel)
 {return x4_http_request(h,"",form,body,cap,length,status,cancel);}
-struct X4XboxWork{X4CatalogSnapshot catalog;X4RecentSnapshot recent;
+static _Atomic unsigned fixture_access_country;
+X4AccessCountry x4_access_country_get(void){return (X4AccessCountry)atomic_load(&fixture_access_country);}
+struct X4XboxWork{X4CatalogSnapshot catalog;X4RecentSnapshot recent;X4AccessCountry access_country;
 #ifdef X4_AUTH_STARTUP_TEST
     X4StreamRequestConfig request;X4StreamStartup *startup;X4KeyframeLimiter *limiter;
 #endif
 };
 X4XboxWork *x4_xbox_work_new(void){return calloc(1,sizeof(X4XboxWork));}
+bool x4_xbox_work_set_access_country(X4XboxWork *w,X4AccessCountry country)
+{CHECK(w&&x4_access_country_valid(country));w->access_country=country;return true;}
+#ifdef X4_ACCESS_COUNTRY_AUTH_TEST
+static _Atomic unsigned fixture_country_entered,fixture_country_block;
+static X4AccessCountry fixture_country_expected;
+static void fixture_country_record(X4XboxWork *w,unsigned route,const _Atomic int *cancel)
+{
+    CHECK(w->access_country==fixture_country_expected);
+    atomic_store(&fixture_country_entered,route);
+    while(atomic_load(&fixture_country_block)&&!atomic_load(cancel))sceKernelUsleep(1000);
+    CHECK(w->access_country==fixture_country_expected);
+}
+#else
+#define fixture_country_record(w,route,cancel) ((void)0)
+#endif
 void x4_xbox_work_free(X4XboxWork *w){if(w){x4_secure_clear(w,sizeof(*w));free(w);}}
 #ifdef X4_AUTH_STARTUP_TEST
 bool x4_xbox_work_set_request_config(X4XboxWork *w,const X4StreamRequestConfig *c)
@@ -53,6 +70,7 @@ bool x4_xbox_work_set_keyframe_limiter(X4XboxWork *w,X4KeyframeLimiter *limiter)
 #endif
 const X4CatalogSnapshot *x4_xbox_catalog(X4XboxWork *w,const char *token,const _Atomic int *cancel,X4XboxProgress progress,void *context)
 {
+    fixture_country_record(w,1,cancel);
     (void)cancel;CHECK(!strcmp(token,"private-host-token"));atomic_fetch_add(&catalog_runs,1);
     if(progress)progress(context,"host catalog", "xgpuweb","host-region");
     w->catalog.state=X4_CATALOG_READY;w->catalog.count=1;strcpy(w->catalog.titles[0].id,"CURRENT_TITLE");strcpy(w->catalog.titles[0].product_id,"PROD1");strcpy(w->catalog.offering,"xgpuweb");
@@ -60,6 +78,7 @@ const X4CatalogSnapshot *x4_xbox_catalog(X4XboxWork *w,const char *token,const _
 }
 const X4CatalogSnapshot *x4_xbox_fortnite_query(X4XboxWork *w,const char *token,const _Atomic int *cancel,X4XboxProgress progress,void *context)
 {
+    fixture_country_record(w,2,cancel);
     (void)token; (void)cancel; (void)progress; (void)context;
     w->catalog.state=X4_CATALOG_READY;w->catalog.count=1;strcpy(w->catalog.titles[0].id,"FORTNITE");strcpy(w->catalog.titles[0].product_id,"BT5P2X999VH2");strcpy(w->catalog.titles[0].name,"Fortnite");strcpy(w->catalog.offering,"xgpuweb");strcpy(w->catalog.region,"host-region");
     return &w->catalog;
@@ -67,6 +86,7 @@ const X4CatalogSnapshot *x4_xbox_fortnite_query(X4XboxWork *w,const char *token,
 const X4RecentSnapshot *x4_xbox_catalog_recent(const X4XboxWork *w){return &w->recent;}
 const X4RecentSnapshot *x4_xbox_recents(X4XboxWork *w,const char *token,const _Atomic int *cancel)
 {
+    fixture_country_record(w,3,cancel);
     CHECK(!strcmp(token,"private-host-token"));atomic_fetch_add(&recent_runs,1);atomic_store(&recent_entered,1);
     while(atomic_load(&block_recent)&&!atomic_load(cancel))sceKernelUsleep(1000);
     /* Keep cancellation cleanup pending until the main test observes its
@@ -82,11 +102,13 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w,const char *token,const X
     (void)w;(void)token;(void)title;(void)offering;(void)cancel;(void)progress;(void)context;(void)passport;(void)passport_context;(void)callback;(void)user;(void)keyframe;(void)source;(void)gamepad_user;(void)trace;(void)rumble;(void)inbox;
 #ifdef X4_AUTH_STARTUP_TEST
     CHECK(w->startup==fixture_expected_startup&&callback==fixture_expected_callback&&user==fixture_expected_user);
+    fixture_country_record(w,4,cancel);
     CHECK(w->limiter==fixture_expected_limiter);
     CHECK(w->request.profile==X4_REQUEST_720P_HQ&&w->request.width==1280&&w->request.height==720);
     atomic_store(&fixture_session_entered,1);
     while(atomic_load(&fixture_block_session)&&!atomic_load(cancel))sceKernelUsleep(1000);
-    fixture_session_result.state=X4_SESSION_CLOSED;return &fixture_session_result;
+    fixture_session_result.state=X4_SESSION_CLOSED;
+    fixture_session_result.access_country=w->access_country;return &fixture_session_result;
 #else
     CHECK(0);return NULL; /* A UI-only fixture must never start streaming. */
 #endif

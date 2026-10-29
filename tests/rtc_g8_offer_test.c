@@ -7,6 +7,11 @@ static const char *local_offer="v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nb=AS:6
 static unsigned recorded[4],bandwidth_records;
 static unsigned answer_recorded[4],answer_records;
 static int remote_result;
+static unsigned expected_video_diagnostics;
+/* The receive worker is not linked by this SDP-only fixture. Its current
+ * offers/answers contain no SSRC, so the diagnostic sink must stay unused. */
+void x4_rtc_receive_diag_set_expected_video(uint32_t ssrc,uint32_t pt,const char *mid)
+{(void)ssrc;(void)pt;(void)mid;++expected_video_diagnostics;}
 int rtcGetLocalDescription(int pc,char *out,int cap)
 {
     assert(pc==7);int size=(int)strlen(local_offer)+1;if(!out)return size;
@@ -61,4 +66,5 @@ int main(void)
     assert(answer_records==2&&answer_recorded[0]==1&&!answer_recorded[1]&&!answer_recorded[2]);
     puts("PASS actual RTC local offer: G8 alone advertises 8000 kbps; five existing profiles unchanged; numeric metadata and repeated bounded retrieval");
     puts("PASS actual RTC answer bandwidth observed before native acceptance/rejection; only numeric public metadata retained");
+    assert(!expected_video_diagnostics);
 }

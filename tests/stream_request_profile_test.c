@@ -2,6 +2,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../src/streaming/stream_profile.h"
 #include "../src/auth/json.h"
+/* Use the production es-MX default, including exact /play locale JSON. */
+#include "../src/ui/lang.c"
 #include <assert.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -9,10 +11,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-_Static_assert(sizeof(X4StreamRequestConfig)==64&&offsetof(X4StreamRequestConfig,os_name)==24&&
+/* Published f18bbeb includes the picture/request options; the alias remains
+ * derived and is not an additional field in this 72-byte captured config. */
+_Static_assert(sizeof(X4StreamRequestConfig)==72&&offsetof(X4StreamRequestConfig,os_name)==24&&
     offsetof(X4StreamRequestConfig,display_info)==48&&offsetof(X4StreamRequestConfig,interaction_modes)==51&&
-    offsetof(X4StreamRequestConfig,max_mbps)==60,
-    "preserve the captured x86_64 config ABI; alias is derived, never stored");
+    offsetof(X4StreamRequestConfig,cpu_variant)==49&&offsetof(X4StreamRequestConfig,decoder_depth)==50&&
+    offsetof(X4StreamRequestConfig,convert_mode)==52&&offsetof(X4StreamRequestConfig,sharpness)==53&&
+    offsetof(X4StreamRequestConfig,resolution_request_mode)==54&&offsetof(X4StreamRequestConfig,h264_profile)==56&&
+    offsetof(X4StreamRequestConfig,max_fs)==60&&offsetof(X4StreamRequestConfig,max_mbps)==64,
+    "published captured x86_64 config ABI; alias is derived, never stored");
 _Static_assert(X4_REQUEST_720P60==0&&X4_REQUEST_1080P_G==1&&X4_REQUEST_1080P_H==2&&
     X4_REQUEST_1080P_HQ==3&&X4_REQUEST_720P_HQ==4&&X4_REQUEST_1080P_G8==5&&X4_REQUEST_PROFILE_MAX==5&&X4_REQUEST_PROFILE_COUNT==6&&
     X4_REQUEST_1080P_A==1&&X4_REQUEST_1080P_B==2&&X4_REQUEST_1080P_C==X4_REQUEST_PROFILE_MAX,
@@ -146,7 +153,7 @@ int main(void)
         X4StreamRequestConfig c=x4_stream_settings_get();
         assert((c.profile==X4_REQUEST_720P60&&c.color_preference==X4_COLOR_AUTO_709)||
             (c.profile==X4_REQUEST_720P_HQ&&c.color_preference==X4_COLOR_FORCE_601));
-        assert(original.profile==X4_REQUEST_720P_HQ&&original.width==1280&&original.display_info&&!strcmp(original.os_name,"windows"));
+        assert(original.profile==X4_REQUEST_1080P_G&&original.width==1920&&original.height==1080&&original.display_info&&!strcmp(original.os_name,"windows"));
         assert(c.cpu_variant==X4_CPU_3&&c.decoder_depth==X4_DEPTH_2&&c.interaction_modes==X4_INTERACTION_MASK);
     }
     assert(!pthread_join(id,NULL));

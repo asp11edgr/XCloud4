@@ -104,3 +104,24 @@ const char *x4_region_qr_short_label(enum X4Lang lang);
 const char *x4_region_qr_caption(enum X4Lang lang);
 void x4_apple_draw_region_qr_block(uint32_t *pixels, int x, int y, int w, int h,
                                    enum X4Lang lang);
+
+/* Optional access-country card and OPTIONS content. Renderer-only: no I/O. */
+#include "access_country.h"
+void x4_apple_draw_access_controls(uint32_t *pixels, int x, int y, int w, int h,
+    const X4AccessCountryUi *ui, X4AccessCountryCardPhase phase, bool settings);
+void x4_apple_draw_access_card(uint32_t *pixels, int x, int y, int w, int h);
+void x4_apple_draw_access_success(uint32_t *pixels, int x, int y, int w);
+
+typedef struct {
+    bool open, shown;
+    char version[64], url[256];
+} X4UpdateNotice;
+/* Called by the Home UI owner only after an AVAILABLE result. Eligibility
+ * excludes other pages/modals; offers made while ineligible are not consumed.
+ * Test notices do not consume the once-per-startup real notice. */
+bool x4_apple_update_notice_offer(X4UpdateNotice *notice,const char *version,
+    const char *validated_tag,bool eligible,bool is_test);
+/* Returns true while the modal owns input. Only Circle closes it. */
+bool x4_apple_update_notice_handle(X4UpdateNotice *notice,bool circle);
+void x4_apple_update_notice_draw(const X4UpdateNotice *notice,uint32_t *pixels);
+void x4_apple_draw_update_test_action(uint32_t *pixels,int x,int y);

@@ -5,11 +5,12 @@
 #define X4_PUBLIC 0
 #endif
 #if X4_PUBLIC
-#define X4_PRODUCT_VERSION "1.2.0-beta"
+#define X4_PRODUCT_VERSION "1.2.1-beta"
 #else
-#define X4_PRODUCT_VERSION "0.7.57-lab"
+#define X4_PRODUCT_VERSION "0.7.58-lab"
 #endif
-#define X4_SOURCE_ID "e17abfb9414b019e3dbf2791ff2625a670026958"
+/* Base revision; the task delivery records the complete uncommitted source. */
+#define X4_SOURCE_ID "f18bbebac41f8493ef1bfd498f74cf076481cb20"
 #if X4_RECEIVER_NACK
 #define X4_NACK_ID "-n1"
 #else

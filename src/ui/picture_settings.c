@@ -39,7 +39,7 @@ static struct {
     const X4PictureSettingsUi *owner;
     uint32_t *canvas;
     enum X4Lang language;
-    bool first_time;
+    bool first_time, access_footer;
     X4PictureSettingsCacheStats stats;
 } settings_cache;
 
@@ -51,6 +51,7 @@ void x4_picture_settings_ui_cache_invalidate(void)
     settings_cache.canvas=NULL;
     settings_cache.stats.ready=false;
     settings_cache.stats.cache_bytes=0;
+    settings_cache.access_footer=false;
 }
 
 bool x4_picture_settings_ui_cache_ready(const X4PictureSettingsUi *s)
@@ -143,6 +144,7 @@ static bool save_to_disk(const char *path, X4PictureQualityOption quality)
 
 void x4_picture_settings_init(void)
 {
+    x4_access_country_init();
     X4PictureQualityOption loaded = load_from_disk(get_settings_path());
     atomic_store_explicit(&active_quality, (unsigned)loaded, memory_order_release);
 }
@@ -220,6 +222,8 @@ bool x4_picture_settings_ui_handle(X4PictureSettingsUi *s, unsigned a, bool can_
         s->tab = 0;
         s->first_time_mode = false;
         s->server_changed = false;
+        s->access_changed = false;
+        x4_access_country_ui_open(&s->access_ui);
         s->selected = (unsigned)x4_picture_settings_get();
         if (s->selected >= X4_PIC_QUALITY_COUNT) s->selected = 0;
 
@@ -244,14 +248,36 @@ bool x4_picture_settings_ui_handle(X4PictureSettingsUi *s, unsigned a, bool can_
 
     /* Tab switching (only in normal mode) */
     if (!s->first_time_mode) {
+        if (s->tab == 2 && s->access_ui.confirming) {
+            unsigned actions = (a & X4_PIC_SETTINGS_CONFIRM) ? X4_ACCESS_UI_CONFIRM : 0u;
+            if (x4_access_country_ui_handle(&s->access_ui, actions, false, "ajustes") == X4_ACCESS_UI_APPLIED) {
+                s->access_changed = true;
+                s->open = false;
+                x4_picture_settings_ui_cache_invalidate();
+            }
+            return true;
+        }
         if ((a & X4_PIC_SETTINGS_PREV_TAB) && s->tab > 0) {
             s->tab--;
             return true;
         }
-        if ((a & X4_PIC_SETTINGS_NEXT_TAB) && s->tab < 1) {
+        if ((a & X4_PIC_SETTINGS_NEXT_TAB) && s->tab < 2) {
             s->tab++;
             return true;
         }
+    }
+
+    if (s->tab == 2 && !s->first_time_mode) {
+        unsigned actions = 0;
+        if (a & X4_PIC_SETTINGS_LEFT) actions |= X4_ACCESS_UI_LEFT;
+        if (a & X4_PIC_SETTINGS_RIGHT) actions |= X4_ACCESS_UI_RIGHT;
+        if (a & X4_PIC_SETTINGS_CONFIRM) actions |= X4_ACCESS_UI_CONFIRM;
+        if (x4_access_country_ui_handle(&s->access_ui, actions, false, "ajustes") == X4_ACCESS_UI_APPLIED) {
+            s->access_changed = true;
+            s->open = false;
+            x4_picture_settings_ui_cache_invalidate();
+        }
+        return true;
     }
 
     if (s->tab == 0) {
@@ -341,9 +367,9 @@ static void badge(uint32_t *p, int x, int y, const char *text, int available)
 static void settings_sidebar(uint32_t *p, unsigned tab)
 {
     line(p, 144, 176, 44, X4_FONT_BOLD, local("Ajustes", "Settings"), 252, white);
-    const enum X4TextId labels[2] = {X4_TR_OPTIONS_TAB_PICTURE, X4_TR_OPTIONS_TAB_SERVER};
-    const enum X4TablerIconId icons[2] = {X4_ICON_DEVICE_DESKTOP, X4_ICON_SERVER};
-    for (unsigned i = 0; i < 2; ++i) {
+    const enum X4TextId labels[3] = {X4_TR_OPTIONS_TAB_PICTURE, X4_TR_OPTIONS_TAB_SERVER, X4_TR_ACCESS_TAB};
+    const enum X4TablerIconId icons[3] = {X4_ICON_DEVICE_DESKTOP, X4_ICON_SERVER, X4_ICON_INFO};
+    for (unsigned i = 0; i < 3; ++i) {
         int y = 300 + (int)i * 104;
         if (i == tab) {
             x4_apple_fill_round_rect(p, 132, y, 266, 82, 22, X4_RGBA(255,255,255,28));
@@ -549,7 +575,25 @@ static void settings_contents(const X4PictureSettingsUi *s,uint32_t *pixels)
 {
     if (!s->first_time_mode) settings_sidebar(pixels, s->tab);
     if (s->tab == 0 && !s->first_time_mode) picture_rows(s, pixels);
+    else if (s->tab == 2 && !s->first_time_mode)
+        x4_apple_draw_access_controls(pixels,470,184,1280,600,&s->access_ui,X4_ACCESS_CARD_SELECT,true);
     else server_rows(s, pixels);
+}
+
+static void access_footer(const X4PictureSettingsUi *s,uint32_t *p,bool full)
+{
+    const char *save = x4_tr(s->access_ui.confirming ? X4_TR_ACCESS_CONTINUE : X4_TR_ACCESS_SAVE);
+    x4_apple_pill_button(p,470,852,370,62,save,true,false,X4_ICON_NONE);
+    x4_apple_pill_button(p,864,852,236,62,x4_tr(X4_TR_ACCESS_CANCEL),false,false,X4_ICON_NONE);
+    if (full) {
+        int hx=150;
+        if (!s->access_ui.confirming) {
+            hx+=x4_apple_draw_pad_glyph(p,hx,993,X4_GLYPH_L1)+12;
+            hx+=x4_apple_draw_footer_hint(p,hx,993,X4_GLYPH_R1,local("Cambiar sección", "Change section"))+42;
+        }
+        hx+=x4_apple_draw_footer_hint(p,hx,993,X4_GLYPH_CROSS,save)+42;
+        x4_apple_draw_footer_hint(p,hx,993,X4_GLYPH_CIRCLE,x4_tr(X4_TR_ACCESS_CANCEL));
+    }
 }
 
 void x4_picture_settings_ui_draw(const X4PictureSettingsUi *s, uint32_t *pixels)
@@ -558,7 +602,8 @@ void x4_picture_settings_ui_draw(const X4PictureSettingsUi *s, uint32_t *pixels)
     x4_server_settings_mark_ui_drawn();
     settings_background(pixels);
     settings_contents(s,pixels);
-    settings_footer(pixels, s->first_time_mode ? 170 : 470, s->first_time_mode);
+    if (s->tab == 2 && !s->first_time_mode) access_footer(s,pixels,true);
+    else settings_footer(pixels, s->first_time_mode ? 170 : 470, s->first_time_mode);
 }
 
 void x4_picture_settings_ui_draw_cached(const X4PictureSettingsUi *s,uint32_t *pixels)
@@ -596,8 +641,23 @@ void x4_picture_settings_ui_draw_cached(const X4PictureSettingsUi *s,uint32_t *p
             memcpy(pixels+offset,settings_cache.backdrop+offset,SETTINGS_PANEL_W*sizeof(uint32_t));
         }
     }
+    bool access = s->tab == 2 && !s->first_time_mode;
+    if (access || settings_cache.access_footer) {
+        /* Access confirmation has a different footer. Restore it from the
+         * original WB backdrop, then redraw its hints; keep other tabs' cache
+         * behavior unchanged. Mark the extra dirty area for the display. */
+        for (int row=980;row<1048;++row) {
+            size_t offset=(size_t)row*SETTINGS_W+SETTINGS_X;
+            memcpy(pixels+offset,settings_cache.backdrop+offset,SETTINGS_PANEL_W*sizeof(uint32_t));
+        }
+        full=true;
+    }
     settings_contents(s,pixels);
-    settings_footer_buttons(pixels,s->first_time_mode?170:470);
-    if(full)settings_footer_hints(pixels,s->first_time_mode);
+    if (s->tab == 2 && !s->first_time_mode) access_footer(s,pixels,full);
+    else {
+        settings_footer_buttons(pixels,s->first_time_mode?170:470);
+        if(full)settings_footer_hints(pixels,s->first_time_mode);
+    }
     ++settings_cache.stats.cached_draws;settings_cache.stats.last_draw_full=full;
+    settings_cache.access_footer=access;
 }

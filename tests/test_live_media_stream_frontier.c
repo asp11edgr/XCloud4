@@ -37,6 +37,11 @@ void x4_live_audio_receive(X4LiveAudio *a,const uint8_t *p,size_t n)
 {(void)a;(void)p;(void)n;abort();}
 void x4_stream_pipeline_received(X4StreamPipeline *p,size_t b,uint64_t n)
 {(void)p;(void)b;(void)n;}
+/* The scheduler is a double in this standalone media-frontier harness.
+ * Complete its existing observation-only hook, without claiming coverage
+ * of the real scheduler's post-halt diagnostics. */
+void x4_stream_pipeline_note_post_halt_video(X4StreamPipeline *p,uint64_t now)
+{(void)p;assert(now==clock_us);}
 void x4_stream_pipeline_au_received(X4StreamPipeline *p,bool idr,uint64_t n)
 {(void)p;(void)idr;(void)n;}
 int x4_stream_pipeline_submit_parameters(X4StreamPipeline *p,const uint8_t *a,size_t b,

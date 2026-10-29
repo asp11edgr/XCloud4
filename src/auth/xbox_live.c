@@ -84,6 +84,7 @@ static const struct { const char *id, *url, *stage; } offerings[] = {
 };
 
 struct X4XboxWork {
+    X4AccessCountry access_country; /* immutable after HTTP/RTC begins */
 #if X4_STREAM_PROFILE
     X4StreamRequestConfig request_config;
     char play_device_info[640];
@@ -155,6 +156,13 @@ X4XboxWork *x4_xbox_work_new(void)
     }
 #endif
     return w;
+}
+
+bool x4_xbox_work_set_access_country(X4XboxWork *w, X4AccessCountry country)
+{
+    if (!w || !x4_access_country_valid(country) || w->http || w->rtc || w->session_id[0]) return false;
+    w->access_country = country;
+    return true;
 }
 
 bool x4_xbox_work_set_request_config(X4XboxWork *w, const X4StreamRequestConfig *request)
@@ -641,8 +649,13 @@ static int login(X4XboxWork *w, size_t index)
         x4_secure_clear(w->request, sizeof(w->request));
         return finish(w, X4_CATALOG_ERROR, X4_AUTH_E_FORM, 0, "solicitud de credenciales");
     }
-    const X4HttpHeader headers[] = {{"x-gssv-client", "XboxComBrowser"}};
-    int rc = call(w, offerings[index].url, headers, 1, true, &length, &status);
+    X4HttpHeader headers[2] = {{"x-gssv-client", "XboxComBrowser"}};
+    size_t header_count = 1;
+    const char *ip = x4_access_country_ip(w->access_country);
+    if (ip) headers[header_count++] = (X4HttpHeader){"X-Forwarded-For", ip};
+    int rc = call(w, offerings[index].url, headers, header_count, true, &length, &status);
+    printf("XCloud4: login gssv oferta=%s pais_acceso=%s http=%d\n",
+        offerings[index].id, x4_access_country_code(w->access_country), status);
     if (rc) return failed(w, rc);
     if (status >= 400 && status < 500) {
         wipe_response(w, length);
@@ -2974,6 +2987,7 @@ const X4SessionSnapshot *x4_xbox_session(X4XboxWork *w, const char *microsoft_to
 {
     memset(&w->result, 0, sizeof(w->result));
     memset(&w->session, 0, sizeof(w->session));
+    w->session.access_country = w->access_country;
     w->result.state = X4_CATALOG_LOADING;
     w->session.state = X4_SESSION_STARTING;
     w->cancel = cancel;

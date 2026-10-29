@@ -509,6 +509,13 @@ static void phase2_catalog_error(uint32_t *p, const X4CatalogSnapshot *cat)
     const char *msg=x4_lang_catalog_error_msg(cat->error,cat->http_status,cat->xerr,
         cat->offering,cat->stage,message,sizeof(message));
     bool country=x4_lang_is_cloud_unavailable(cat->error,cat->http_status,cat->xerr,cat->offering,cat->stage);
+    if (country) {
+        x4_apple_glass_panel(p,190,180,1540,760,28,24,46);
+        snprintf(detail,sizeof(detail),"0x%08x · HTTP %d · Xbox %u",(unsigned)cat->error,cat->http_status,cat->xerr);
+        x4_text_px(p,252,222,20,X4_FONT_REGULAR,detail,SOFT);
+        x4_apple_draw_access_card(p,252,288,1408,586);
+        return;
+    }
     if(cat->error==X4_AUTH_E_FORTNITE_NOT_FOUND) msg=x4_tr(X4_TR_FORTNITE_UNAVAILABLE);
     x4_apple_glass_panel(p,190,250,1540,660,28,24,46);
     phase2_warning(p,252,310);
@@ -516,9 +523,7 @@ static void phase2_catalog_error(uint32_t *p, const X4CatalogSnapshot *cat)
     x4_apple_text_wrap(p,252,380,26,X4_FONT_REGULAR,msg?msg:phase2_tr("Xbox no pudo completar la solicitud.","Xbox could not complete the request."),1410,36,4,INK);
     snprintf(detail,sizeof(detail),"0x%08x · HTTP %d · Xbox %u",(unsigned)cat->error,cat->http_status,cat->xerr);
     x4_text_px(p,252,552,20,X4_FONT_REGULAR,detail,SOFT);
-    if(country) {
-        x4_apple_draw_region_qr_block(p,252,578,1408,306,x4_lang_current());
-    } else {
+    {
         const char *hint=x4_net_hint(cat->error);
         x4_apple_text_wrap(p,252,604,24,X4_FONT_REGULAR,hint?hint:x4_tr_stage(cat->stage),1410,34,5,SOFT);
         x4_apple_draw_footer_hint(p,252,806,X4_PAD_CROSS,phase2_tr("Reintentar","Retry"));
@@ -530,6 +535,13 @@ static void phase2_catalog_error(uint32_t *p, const X4CatalogSnapshot *cat)
 void x4_fortnite_summary_draw(const X4Screen *s, const X4CatalogSnapshot *cat, int busy, uint32_t *p)
 {
     phase2_base(p,phase2_tr("Inicio / Fortnite","Home / Fortnite"));
+    X4AccessCountryCardPhase access_phase;
+    x4_access_country_card_get(NULL,&access_phase);
+    if (busy && access_phase == X4_ACCESS_CARD_TRYING) {
+        x4_apple_glass_panel(p,190,180,1540,760,28,24,46);
+        x4_apple_draw_access_card(p,252,288,1408,586);
+        return;
+    }
     if(cat && cat->state==X4_CATALOG_ERROR) { phase2_catalog_error(p,cat);return; }
     if(busy || (cat && cat->state==X4_CATALOG_LOADING)) {
         x4_apple_glass_panel(p,270,300,1380,500,28,24,46);
@@ -550,8 +562,15 @@ void x4_fortnite_summary_draw(const X4Screen *s, const X4CatalogSnapshot *cat, i
     char server_line[256];
     if(ms>0) snprintf(server_line,sizeof(server_line),phase2_tr("Servidor: %s · %d ms","Server: %s · %d ms"),server,ms);
     else snprintf(server_line,sizeof(server_line),phase2_tr("Servidor: %s · Sin medir","Server: %s · Not measured"),server);
-    x4_apple_glass_panel(p,1160,118,616,48,24,22,44);
-    x4_text_ellipsis_px(p,1180,130,21,X4_FONT_REGULAR,server_line,568,SOFT);
+    X4AccessCountry country = x4_access_country_get();
+    if (country != X4_ACCESS_AUTO) {
+        size_t used = strlen(server_line);
+        snprintf(server_line + used,sizeof(server_line) - used,x4_tr(X4_TR_ACCESS_BADGE_FMT),x4_access_country_label(country));
+    }
+    int server_x = country == X4_ACCESS_AUTO ? 1160 : 784;
+    int server_width = country == X4_ACCESS_AUTO ? 616 : 992;
+    x4_apple_glass_panel(p,server_x,118,server_width,48,24,22,44);
+    x4_text_ellipsis_px(p,server_x+20,130,21,X4_FONT_REGULAR,server_line,server_width-48,SOFT);
     x4_apple_glass_panel(p,1788,118,48,48,24,22,44);
     x4_apple_draw_icon(p,1800,130,X4_ICON_SETTINGS,INK);
     const char *labels[]={phase2_tr("1080p Alta","1080p High"),"1080p","720p"};
@@ -582,6 +601,7 @@ void x4_fortnite_summary_draw(const X4Screen *s, const X4CatalogSnapshot *cat, i
     fx+=x4_apple_draw_footer_hint(p,fx,1004,X4_PAD_CROSS,phase2_tr("Jugar","Play"))+36;
     fx+=x4_apple_draw_footer_hint(p,fx,1004,X4_PAD_CIRCLE,phase2_tr("Volver","Back"))+36;
     x4_apple_draw_footer_hint(p,fx,1004,X4_PAD_OPTIONS,phase2_tr("Servidor","Server"));
+    x4_apple_draw_access_success(p,84,952,550);
 }
 
 void x4_screen_draw(const X4Screen *s, const X4Controller *c, uint32_t *p)
@@ -978,7 +998,14 @@ void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, i
                 x4_tr(X4_TR_GAME_TOUCH_HINT));
         }
 #endif
-        x4_text(p, 48, X4_HEIGHT - 34, 2, banner, WHITE);
+        X4AccessCountry access_country = s ? (X4AccessCountry)s->access_country : X4_ACCESS_AUTO;
+        if (x4_access_country_valid(access_country) && access_country != X4_ACCESS_AUTO) {
+            size_t used = strlen(banner);
+            snprintf(banner + used,sizeof(banner) - used,x4_tr(X4_TR_ACCESS_BADGE_FMT),x4_access_country_label(access_country));
+        }
+        if (access_country != X4_ACCESS_AUTO)
+            x4_text_ellipsis_px(p,48,X4_HEIGHT-34,22,X4_FONT_REGULAR,banner,X4_WIDTH-96,WHITE);
+        else x4_text(p, 48, X4_HEIGHT - 34, 2, banner, WHITE);
     }
     if (m && s && (m->audio_error || s->input_error || muted)) {
         char line[96];

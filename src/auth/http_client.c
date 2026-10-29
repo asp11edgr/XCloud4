@@ -3,6 +3,7 @@
 #include "ca_bundle.h"
 #include "../core/module.h"
 #include "../ui/lang.h"
+#include "../ui/access_country.h"
 #include "../core/build_identity.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -52,6 +53,7 @@ static const char header_contract[] = "x-xbl-contract-version";
 static const char header_client[] = "x-gssv-client";
 static const char header_device[] = "X-MS-Device-Info";
 static const char header_authorization[] = "Authorization";
+static const char header_forwarded_for[] = "X-Forwarded-For";
 static const char sessions_path[] = "/v5/sessions/cloud/";
 #define X4_HTTP_SESSION_ID_MAX 128u
 #define X4_HTTP_SESSION_HEADERS 3u
@@ -513,6 +515,8 @@ static int check_headers(enum Destination d, const X4HttpHeader *headers, size_t
         else if (!strcmp(name, header_authorization))
             allowed = (d == DEST_REGION || d == DEST_SESSION) && !strncmp(value, "Bearer ", 7) &&
                 token68(value + 7);
+        else if (!strcmp(name, header_forwarded_for))
+            allowed = d == DEST_LOGIN && x4_access_country_valid_ip(value);
         if (!allowed) return X4_HTTP_ARGUMENT;
     }
     return 0;

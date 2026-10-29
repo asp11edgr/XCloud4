@@ -24,12 +24,24 @@ class KeyframeWiring(unittest.TestCase):
 
     def test_same_pointer_precedes_worker_http_and_sdp(self):
         start = block(self.auth, r'int\s+x4_auth_start_session_request\s*\([^)]*\)')
-        self.assertLess(start.index('if(!a->keyframe_limiter)'), start.index('x4_xbox_work_new()'))
+        self.assertLess(start.index('if(!a->keyframe_limiter)'), start.index('new_xbox_work(a)'))
+        self.assertLess(start.index('new_xbox_work(a)'), start.index('x4_xbox_work_set_keyframe_limiter(a->xwork, a->keyframe_limiter)'))
         self.assertLess(start.index('x4_xbox_work_set_keyframe_limiter(a->xwork, a->keyframe_limiter)'), start.index('scePthreadCreate('))
         session = block(self.xbox, r'const\s+X4SessionSnapshot\s*\*x4_xbox_session\s*\([^)]*\)')
         self.assertLess(session.index('if(!w->keyframe_limiter)'), session.index('x4_http_open('))
         stream = block(self.xbox, r'static\s+void\s+session_stream\s*\([^)]*\)')
         self.assertLess(stream.index('x4_rtc_set_keyframe_limiter(w->rtc,w->keyframe_limiter)'), stream.index('signal_sdp('))
+
+    def test_workspace_factory_captures_before_any_worker(self):
+        factory = block(self.auth, r'static\s+X4XboxWork\s*\*new_xbox_work\s*\([^)]*\)')
+        self.assertLess(factory.index('x4_access_country_get()'), factory.index('x4_xbox_work_new()'))
+        self.assertLess(factory.index('x4_xbox_work_new()'), factory.index('x4_xbox_work_set_access_country(w, country)'))
+        self.assertLess(factory.index('x4_xbox_work_set_access_country(w, country)'), factory.index('atomic_store_explicit(&a->access_country'))
+        self.assertIn('x4_xbox_work_free(w);', factory)
+        self.assertIn('return NULL;', factory)
+        self.assertIn('return w;', factory)
+        self.assertNotIn('scePthreadCreate(', factory)
+        self.assertNotIn('x4_http_open(', factory)
 
     def test_new_route_reserves_only_after_startup_gate(self):
         stream = block(self.xbox, r'static\s+void\s+session_stream\s*\([^)]*\)')

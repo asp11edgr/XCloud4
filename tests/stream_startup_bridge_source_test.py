@@ -71,7 +71,9 @@ class StartupBridgeSource(unittest.TestCase):
         self.assertIn('uint64_t keyframe_interval=500000;',stream) # Legacy remains available.
         header=(ROOT/'src/streaming/stream_startup.h').read_text(encoding='utf-8')
         self.assertIn('X4_STREAM_INITIAL_RESOLUTION_RETRY_US=300000',header)
-        self.assertIn('X4_STREAM_INITIAL_RESOLUTION_WAIT_US=10000000',header)
+        # The published baseline allows 30 s for the requested resolution;
+        # this does not change the separate five-second BAD_FRAME recovery.
+        self.assertIn('X4_STREAM_INITIAL_RESOLUTION_WAIT_US=30000000',header)
         recovery=(ROOT/'src/video/stream_idr_recovery.h').read_text(encoding='utf-8')
         self.assertIn('X4_STREAM_IDR_RETRY_US = 300000',recovery)
         self.assertIn('X4_STREAM_IDR_TIMEOUT_US = 5000000',recovery)
@@ -82,21 +84,31 @@ class StartupBridgeSource(unittest.TestCase):
         waiting=self.main[self.main.index('if(!live_error && live && !closing && !session_back &&'):]
         waiting=waiting[:waiting.index('#endif')]
         self.assertIn('x4_auth_busy(auth) && x4_live_media_waiting_initial_resolution(live)',waiting)
-        self.assertIn('snprintf(shown.stage,sizeof(shown.stage),"'+expected+'")',waiting)
+        self.assertRegex(waiting,r'snprintf\s*\(shown\.stage\s*,\s*sizeof\(shown\.stage\)\s*,\s*"'+re.escape(expected)+r'"\s*\)')
+        self.assertRegex(waiting,r'if\s*\(wait_sec\s*>=\s*5\)')
+        self.assertIn('Xbox está preparando el juego… %u s',waiting)
+        self.assertIn('x4_stream_startup_alias_sent_us',waiting)
         self.assertNotIn('shown.state',waiting)
         self.assertNotIn('shown.error',waiting)
         self.assertNotIn('X4_SESSION_ERROR',waiting)
         draw=block(self.screen,r'void\s+x4_session_draw\s*\([^)]*\)')
-        self.assertIn('case X4_SESSION_STREAMING:',draw)
-        self.assertIn('x4_text(p, 126, 523, 3, s->stage, MUTED);',draw)
-        self.assertLess(draw.index('case X4_SESSION_STREAMING:'),draw.index('s->stage'))
+        # The current renderer localizes the stage for every non-queue state,
+        # including STREAMING; it no longer has the old state switch/layout.
+        self.assertRegex(draw,r'else\s+x4_apple_text_wrap\([^;]+x4_tr_stage\(s->stage\)')
+        self.assertNotIn('X4_SESSION_STREAMING',draw)
+        self.assertLess(draw.index('s->waiting_for_resources'),draw.index('x4_tr_stage(s->stage)'))
 
     def test_error_uses_rejected_dimensions_in_status(self):
         draw=block(self.screen,r'void\s+x4_live_status_draw\s*\([^)]*\)')
         self.assertIn('m->video_rejected_width,m->video_rejected_height,video_error',draw)
         self.assertIn('x4_stream_video_error_text',draw)
         formatter=(ROOT/'src/ui/stream_video_status.h').read_text(encoding='utf-8')
-        self.assertIn('Xbox envió %u×%u; esta PS4 solo admite hasta 1080p. Sal con OPTIONS.',formatter)
+        self.assertIn('x4_tr(X4_TR_VIDEO_REJECTED_DIM_PUBLIC_FMT), width, height',formatter)
+        self.assertIn('x4_tr(X4_TR_VIDEO_REJECTED_DIM_LAB_FMT), width, height',formatter)
+        translations=(ROOT/'src/ui/lang.c').read_text(encoding='utf-8')
+        self.assertIn('[X4_TR_VIDEO_REJECTED_DIM_LAB_FMT] = "Xbox envió %u×%u; esta PS4 solo admite hasta 1080p. Sal con OPTIONS."',translations)
+        self.assertIn('[X4_TR_VIDEO_REJECTED_DIM_PUBLIC_FMT] = "Xbox envió %u×%u; esta PS4 solo admite hasta 1080p. Cierra con botón PS."',translations)
+        self.assertIn('[X4_TR_VIDEO_REJECTED_DIM_LAB_FMT] = "Xbox sent %u×%u; this PS4 supports up to 1080p. Exit with OPTIONS."',translations)
 
 
 if __name__=='__main__':

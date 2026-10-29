@@ -1,10 +1,31 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #define _POSIX_C_SOURCE 200809L
+#include <strings.h> /* strcasecmp used by the included production unit. */
+/* The catalog Store URL now uses the production locale owner. Keep its real
+ * implementation in this isolated harness; the original runner is unchanged. */
+#include "../src/ui/lang.c"
 #include "../src/auth/xbox_live.c"
 static unsigned checks, stage, mode, mru_calls, store_calls, title_calls;
 static X4XboxWork *current_work;
 static _Atomic int cancel_flag;
 #define CHECK(x) do{++checks;if(!(x)){fprintf(stderr,"MRU exchange check failed line%d: %s\n",__LINE__,#x);exit(1);}}while(0)
+/* Server choice is a separate owner. Model a previously saved Automatic
+ * choice; assert the real parser publishes the fixture's sole default region.
+ * This MRU-only harness must neither open a first-choice panel nor wait. */
+static unsigned region_updates,server_choice_queries;
+bool x4_server_settings_update_regions(const X4ServerRegion *regions,unsigned count)
+{
+    CHECK(regions&&count==1&&!strcmp(regions[0].name,"Host Region")&&regions[0].is_default);
+    CHECK(!strcmp(regions[0].api_host,"region.gssv-play-prod.xboxlive.com"));
+    ++region_updates;return true;
+}
+bool x4_server_settings_has_saved_choice(void){++server_choice_queries;return true;}
+const char *x4_server_settings_get_selected(void){return "";}
+void x4_server_settings_reset_ui_drawn(void){CHECK(0&&"saved choice must skip first-choice UI");}
+void x4_server_settings_set_awaiting_first_choice(bool awaiting){(void)awaiting;CHECK(0&&"no first-choice UI in MRU exchange");}
+bool x4_server_settings_awaiting_first_choice(void){CHECK(0&&"no first-choice wait in MRU exchange");return false;}
+bool x4_server_settings_is_ui_drawn(void){CHECK(0&&"no first-choice drawing in MRU exchange");return false;}
+void x4_server_settings_notify_choice_done(void){CHECK(0&&"no synthetic confirmation in MRU exchange");}
 uint64_t sceKernelGetProcessTime(void){return 1000000;}
 int sceKernelUsleep(unsigned us){(void)us;return 0;}
 void x4_secure_clear(void *p,size_t n){volatile unsigned char *b=p;while(n--)*b++=0;}
@@ -36,9 +57,10 @@ int x4_http_json_request(X4Http *h,const char *url,const X4HttpHeader *headers,s
     }else{CHECK(0);return X4_HTTP_URL;}
     CHECK(response);size_t n=strlen(response);CHECK(n<cap);memcpy(body,response,n+1);*length=n;return 0;
 }
-static void new_run(unsigned m){mode=m;stage=title_calls=mru_calls=store_calls=0;atomic_store(&cancel_flag,0);current_work=x4_xbox_work_new();CHECK(current_work);}
+static void new_run(unsigned m){mode=m;stage=title_calls=mru_calls=store_calls=region_updates=server_choice_queries=0;atomic_store(&cancel_flag,0);current_work=x4_xbox_work_new();CHECK(current_work);}
 static int zero_buffer(const void *p,size_t n){const unsigned char *b=p;while(n--)if(*b++)return 0;return 1;}
 static void verify_wiped(void){
+    CHECK(region_updates==1&&server_choice_queries==1);
     CHECK(zero_buffer(current_work->user_token,sizeof(current_work->user_token))&&zero_buffer(current_work->xsts_token,sizeof(current_work->xsts_token))&&zero_buffer(current_work->gs_token,sizeof(current_work->gs_token))&&zero_buffer(current_work->authorization,sizeof(current_work->authorization)));
     CHECK(zero_buffer(current_work->response,sizeof(current_work->response))&&zero_buffer(current_work->request,sizeof(current_work->request))&&zero_buffer(current_work->url,sizeof(current_work->url))&&zero_buffer(current_work->origin,sizeof(current_work->origin)));
     x4_xbox_work_free(current_work);current_work=NULL;

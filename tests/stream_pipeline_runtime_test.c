@@ -23,6 +23,9 @@ static uint32_t *scanout[3], pending_pixel,screen_pixel;
 static uint64_t pending_arg,shown_arg,shown_time,flip_time_override;
 static pthread_t main_owner,decode_owner;
 static const char *report_directory;
+/* Locale belongs to the UI, outside this scheduler/native-double harness.
+ * This fixed value only completes stream_profile's existing link contract. */
+const char *x4_lang_locale(void){return "es-MX";}
 static void *allocated;
 static atomic_uint decode_pause_us;
 static atomic_bool decode_native_running;
@@ -186,6 +189,8 @@ static int fixture_snprintf(char *destination,size_t bytes,const char *format,..
 #undef x4_video_pipeline_finish_scanout
 #undef printf
 #undef snprintf
+/* Existing explicit empty diagnostics; no transport/input owner runs here. */
+#include "stream_startup_metrics_stubs.c"
 int x4_stream_pipeline_test_cpu_ready(X4StreamPipeline *p,unsigned index,int applied)
 {
     (void)p;

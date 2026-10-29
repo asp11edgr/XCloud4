@@ -3,6 +3,7 @@
  * pinned/patched libdatachannel Message and RTCP structures. No network send,
  * SRTCP cryptography, authenticated receive or console behavior is measured. */
 #include "rtc_receiver_nack.hpp"
+#include "rtc_receive_diag.h"
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -12,6 +13,7 @@
 
 static uint64_t checks;
 static unsigned cases;
+static unsigned fixture_owner_calls;
 static constexpr uint32_t Sender = UINT32_C(0xaabbccdd);
 static constexpr uint32_t Epoch = 17;
 static constexpr std::array<char, 35> Cname = {
@@ -27,6 +29,32 @@ static void fail(const char *expression, const char *file, int line)
 }
 #define CHECK(expression) do { ++checks; if (!(expression)) fail(#expression, __FILE__, __LINE__); } while (0)
 #define CASE(test) do { test(); ++cases; std::printf("PASS %s\n", #test); } while (0)
+
+/* Fixture-only link contracts, declared by the real owner headers above.
+ * ASan/UBSan may retain X4ReceiverNack's vtable and its observer methods even
+ * though these wire-encoder tests never construct a receiver. Do not pretend
+ * to implement reception, grace control or receiver-state behavior here:
+ * crossing any such boundary is an immediate fixture failure. */
+[[noreturn]] static void fixture_owner_unexpected(const char *name)
+{
+    ++fixture_owner_calls;
+    fail(name, __FILE__, __LINE__);
+    std::abort();
+}
+extern "C" uint64_t x4_rtc_receive_clock(void)
+{ fixture_owner_unexpected("fixture-only: receive clock must not run in wire encoder tests"); }
+extern "C" void x4_rtc_nack_event(unsigned, unsigned, uint64_t, uint64_t,
+    uint64_t, uint64_t, uint64_t)
+{ fixture_owner_unexpected("fixture-only: NACK observation must not run in wire encoder tests"); }
+extern "C" bool x4_rtc_nack_grace_control(const X4NackGraceControl *)
+{ fixture_owner_unexpected("fixture-only: grace control must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_close(X4ReceiverNackState *)
+{ fixture_owner_unexpected("fixture-only: receiver close must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_discontinuity(X4ReceiverNackState *)
+{ fixture_owner_unexpected("fixture-only: receiver discontinuity must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_observe(X4ReceiverNackState *, uint32_t,
+    uint8_t, uint16_t, uint64_t, X4ReceiverNackObservation *)
+{ fixture_owner_unexpected("fixture-only: receiver observation must not run in wire encoder tests"); }
 
 static uint16_t read16(const uint8_t *bytes)
 { return uint16_t((uint16_t(bytes[0]) << 8) | bytes[1]); }
@@ -266,6 +294,7 @@ int main()
     CASE(malformed_descriptor_rejected);
     CASE(bounded_sparse_masks_preserve_exact_positions);
     CASE(authenticated_delivery_metadata_is_preserved_by_message_copy);
+    CHECK(fixture_owner_calls == 0);
     std::printf("PASS receiver NACK production wire: %u cases, %llu checks\n", cases,
         static_cast<unsigned long long>(checks));
     return 0;

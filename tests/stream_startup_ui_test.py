@@ -137,7 +137,7 @@ class StartupUiSourceRegression(unittest.TestCase):
             self.assertIn("continue;", active)
             self.assertNotIn("x4_display_pixels", active)
 
-    def test_options_is_unmasked_after_error_and_checked_before_page_return(self) -> None:
+    def test_error_unmasks_ui_and_session_navigation_stays_owned_by_main(self) -> None:
         for profile in (1, 2):
             main, screen = self.projected[profile]
             predicate = re.search(r"bool\s+game_input\s*=([^;]+);", main)
@@ -147,11 +147,21 @@ class StartupUiSourceRegression(unittest.TestCase):
             self.assertRegex(main, r"if\s*\(game_input\)\s*ui_pressed\s*&=\s*~ORBIS_PAD_BUTTON_OPTIONS;")
             self.assertRegex(main, r"x4_screen_update\s*\(&screen,\s*ui_pressed,\s*controller.data.buttons\)")
             update = block(screen, r"void\s+x4_screen_update\s*\([^)]*\)")
-            self.assertLess(update.index("ORBIS_PAD_BUTTON_OPTIONS"), update.index("s->page == 6"))
-            self.assertRegex(update, r"if\s*\(pressed\s*&\s*ORBIS_PAD_BUTTON_OPTIONS\)\s*s->exit_requested\s*=\s*1")
-            self.assertRegex(main, r"if\s*\(screen.exit_requested\)\s*\{")
+            self.assertRegex(update,r"if\s*\(s->page\s*==\s*6\)\s*return;")
+            # The published UI no longer closes from OPTIONS in screen.c.
+            # Main owns Circle cancellation and waits for remote cleanup;
+            # its Lab touch-menu exit action uses the same safe-close path.
+            session = block(main,r"if\s*\(!closing\s*&&\s*screen.page\s*==\s*6\s*&&\s*previous_page\s*==\s*6\)")
+            cancel = block(session,r"if\s*\(\(controller.pressed\s*&\s*ORBIS_PAD_BUTTON_CIRCLE\)\s*&&\s*!game_input\s*&&\s*!session_back\)")
+            self.assertIn("x4_auth_cancel(auth)",cancel)
+            self.assertIn("session_back = 1",cancel)
+            self.assertRegex(session,r"if\s*\(session_back\s*&&\s*!x4_auth_busy\(auth\)\)")
+            self.assertRegex(main,r"case\s+X4_TOUCH_MENU_ACTION_EXIT_APP\s*:\s*screen.exit_requested\s*=\s*1;")
+            exit_path=block(main,r"if\s*\(screen.exit_requested\)")
+            self.assertIn("x4_auth_cancel(auth)",exit_path)
+            self.assertIn("closing = 1",exit_path)
 
-    def test_numeric_spanish_error_is_drawn_while_session_stays_busy(self) -> None:
+    def test_localized_numeric_error_is_drawn_while_session_stays_busy(self) -> None:
         for profile in (1, 2):
             main, screen = self.projected[profile]
             self.assertRegex(main, r"if\s*\(\s*live_error\s*&&\s*\(\s*!x4_auth_busy\(auth\)\s*\|\|\s*video_start_error\s*\)\s*\)")
@@ -159,8 +169,15 @@ class StartupUiSourceRegression(unittest.TestCase):
             status = block(screen, r"void\s+x4_live_status_draw\s*\([^)]*\)")
             self.assertIn("x4_stream_video_error_text", status)
             self.assertIn("m->video_rejected_width,m->video_rejected_height", status)
-            self.assertIn("Código %d", status)
-            self.assertIn("OPTIONS para salir", status)
+            self.assertIn('phase2_tr("Vídeo: %d · Audio: %s · 0x%08x","Video: %d · Audio: %s · 0x%08x")',status)
+            self.assertRegex(status,r'\),\s*video_error,\s*m->audio_error')
+            formatter=(ROOT/'src/ui/stream_video_status.h').read_text(encoding='utf8')
+            for key in ('X4_TR_VIDEO_REJECTED_DIM_PUBLIC_FMT','X4_TR_VIDEO_REJECTED_DIM_LAB_FMT',
+                        'X4_TR_VIDEO_STOPPED_PUBLIC_FMT','X4_TR_VIDEO_STOPPED_LAB_FMT'):
+                self.assertIn('x4_tr('+key+')',formatter)
+            translations=(ROOT/'src/ui/lang.c').read_text(encoding='utf8')
+            self.assertIn('[X4_TR_VIDEO_STOPPED_LAB_FMT] = "Vídeo detenido (código %d). Sal con OPTIONS."',translations)
+            self.assertIn('[X4_TR_VIDEO_STOPPED_LAB_FMT] = "Video stopped (code %d). Exit with OPTIONS."',translations)
             self.assertRegex(main, r"x4_session_draw\s*\(&shown,\s*x4_auth_busy\(auth\),\s*closing,")
             self.assertGreaterEqual(len(re.findall(r"video_start_error\s*=\s*false", main)), 3)
 

@@ -37,6 +37,11 @@ static int fixture_wait_block(X4StreamWait *,unsigned);
 #include "../src/video/stream_pipeline.c"
 #undef x4_stream_wait_block
 #undef fopen
+/* The startup harness links these same fixtures separately. Standalone
+ * resilience keeps its original runner and completes only missing owners. */
+#ifndef X4_STREAM_RESILIENCE_NO_MAIN
+#include "stream_startup_metrics_stubs.c"
+#endif
 
 enum { HOST_RESERVATIONS=256, HOST_COMMANDS=128 };
 enum { GOOD, ERROR_FRAME, NATIVE_FAILURE, NO_OUTPUT, INVALID_LAYOUT };

@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 /* Reuse native-ABI-only doubles; call the real Xbox workspace setter. */
+#define _POSIX_C_SOURCE 200809L
+/* This standalone runner does not link the locale owner separately. */
+#include "../src/ui/lang.c"
 #define main existing_http_fixture_main
 #include "stream_os_profile_http_test.c"
 #undef main

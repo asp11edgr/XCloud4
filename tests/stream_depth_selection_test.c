@@ -2,14 +2,22 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../src/streaming/stream_profile.h"
 #include "../src/ui/stream_settings.h"
+/* This focused runner does not link the production locale owner. */
+#include "../src/ui/lang.c"
 #include <assert.h>
 #include <stddef.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
-_Static_assert(sizeof(X4StreamRequestConfig)==64&&offsetof(X4StreamRequestConfig,decoder_depth)==50&&
-    offsetof(X4StreamRequestConfig,h264_profile)==52,"depth fits existing captured config padding");
+/* The published f18bbeb config already contains the picture/request options;
+ * retain a strict ABI check against that baseline rather than the older 64 B. */
+_Static_assert(sizeof(X4StreamRequestConfig)==72&&offsetof(X4StreamRequestConfig,cpu_variant)==49&&
+    offsetof(X4StreamRequestConfig,decoder_depth)==50&&offsetof(X4StreamRequestConfig,interaction_modes)==51&&
+    offsetof(X4StreamRequestConfig,convert_mode)==52&&offsetof(X4StreamRequestConfig,sharpness)==53&&
+    offsetof(X4StreamRequestConfig,resolution_request_mode)==54&&offsetof(X4StreamRequestConfig,h264_profile)==56&&
+    offsetof(X4StreamRequestConfig,max_fs)==60&&offsetof(X4StreamRequestConfig,max_mbps)==64,
+    "published x86_64 captured config layout and stable CPU/depth offsets");
 
 static void resolution_policy(void)
 {

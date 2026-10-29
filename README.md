@@ -19,12 +19,14 @@
 
 ---
 
-## Novedades de la 1.2.0 / What's New in 1.2.0
+## Novedades de la 1.2.1-beta / What's New in 1.2.1-beta
 
 ### Español
+- **País de acceso opcional:** la tarjeta de posible restricción regional permite elegir un país y reintentar sin cerrar la sesión de Microsoft. También está en **OPTIONS > Acceso**; empieza en Automático y conserva la elección. No garantiza el acceso ni cambia el país de tu cuenta o el servidor de juego. Usar un país distinto puede ir contra los términos de Xbox y Microsoft podría restringir tu cuenta; úsalo bajo tu propia responsabilidad.
+- **Aviso de actualización al abrir Inicio:** cuando la consulta existente detecta una versión nueva, muestra una tarjeta con QR a su release de GitHub, una vez por arranque y sin interrumpir otros paneles o partidas. CÍRCULO la cierra; el aviso verde y el estado en Acerca de permanecen.
 - **Nueva interfaz, más rápida:** diseño oscuro renovado en todas las pantallas (menú principal, catálogo, búsqueda, Fortnite, Ajustes, Cuenta, Acerca de y Apoyo), menú de partida nuevo y pantalla de carga con un cohete animado.
 - **Fila de Xbox:** si los servidores de Xbox están llenos, XCloud4 muestra que estás en la fila, el tiempo de espera y, si Xbox la da, una estimación. Espera hasta 15 minutos y puedes cancelar con CÍRCULO.
-- **Menú OPTIONS con calidad y servidor:** pestañas **Imagen** (`1080p Alta`, `1080p` y `720p`) y **Servidor** (navegables con `L1`/`R1`).
+- **Menú OPTIONS con calidad, servidor y acceso:** pestañas **Imagen** (`1080p Alta`, `1080p` y `720p`), **Servidor** y **Acceso** (navegables con `L1`/`R1`).
 - **Selector de servidor con ms reales de la última partida:** elige entre los servidores que Xbox ofrece a tu cuenta; tras jugar una partida en un servidor, XCloud4 guarda y muestra los ms reales medidos durante la sesión.
 - **Botón Fortnite para cuentas sin Game Pass, con elección de calidad:** acceso directo desde el menú principal para jugar Fortnite gratis con una cuenta gratuita de Microsoft (con perfil de Xbox), eligiendo calidad y servidor antes de iniciar.
 - **Imagen más nítida:** reconstrucción de color suave, escalado bilineal limpio de 720p a 1080p y realce de nitidez ligero.
@@ -33,9 +35,11 @@
 - **Mensajes claros de cuenta, red y disponibilidad:** avisos traducidos para errores de perfil o región de Xbox, fallos de DNS/red y disponibilidad de Xbox Cloud Gaming.
 
 ### English
+- **Optional access country:** the possible regional restriction card lets you choose a country and retry without signing out of Microsoft. It is also available in **OPTIONS > Access**; it starts on Automatic and remembers your choice. Access is not guaranteed, and it does not change your account's country or the game server. Using a different access country may go against Xbox's terms, and Microsoft could restrict your account; use it at your own risk.
+- **Update notice on Home:** when the existing check finds a newer version, a card shows a QR to its GitHub release, once per launch and without interrupting panels or games. CIRCLE closes it; the green notice and About status remain.
 - **New, faster interface:** refreshed dark design on every screen (main menu, catalog, search, Fortnite, Settings, Account, About and Support), a new in-game menu and a loading screen with an animated rocket.
 - **Xbox queue:** when Xbox servers are full, XCloud4 shows that you're in line, how long you've waited and, when Xbox provides one, an estimate. It waits up to 15 minutes and you can cancel with CIRCLE.
-- **OPTIONS menu with picture quality and server:** **Picture** (`1080p High`, `1080p`, and `720p`) and **Server** tabs (switchable with `L1`/`R1`).
+- **OPTIONS menu with picture quality, server and access:** **Picture** (`1080p High`, `1080p`, and `720p`), **Server** and **Access** tabs (switchable with `L1`/`R1`).
 - **Server selector with real ms from the last game:** pick from the servers Xbox offers your account; after playing a session on a server, XCloud4 saves and displays the real RTT in ms measured during gameplay.
 - **Fortnite button for accounts without Game Pass, with quality selection:** direct main-menu card to play Fortnite free with a free Microsoft account (with an Xbox profile), selecting picture quality and server before launching.
 - **Sharper image:** smooth chroma reconstruction, clean 720p-to-1080p scaling, and light luma sharpening.
@@ -67,16 +71,16 @@ Ambas ediciones se compilan desde este mismo árbol de código (`X4_PUBLIC=1` y 
 
 | Edición / Edition | Paquete / Package | Título en PS4 | Title ID | Público objetivo / Target Audience |
 |---|---|---|---|---|
-| **Public Beta** | `XCloud4-1.2.0-beta-publico.pkg` | `XCloud4` | `XCLD00003` | Jugadores: menú OPTIONS de calidad (`1080p Alta`, `1080p`, `720p`) y servidor con ms reales, botón directo a Fortnite, presentación sin VSync de baja latencia, inicio de sesión con código y QR, vibración DualShock 4 e interfaz automática en español/inglés. |
-| **Experimental Lab** | `XCloud4-0.7.57-lab.pkg` | `XCloud4 Lab` | `XCLD00001` | Pruebas avanzadas: añade el panel técnico `R3` y registros diagnósticos por sesión en `/data/xcloud4/`. |
+| **Public Beta** | `XCloud4-1.2.1-beta-publico.pkg` | `XCloud4` | `XCLD00003` | Jugadores: menú OPTIONS de calidad (`1080p Alta`, `1080p`, `720p`), servidor con ms reales y país de acceso opcional, botón directo a Fortnite, presentación sin VSync de baja latencia, inicio de sesión con código y QR, vibración DualShock 4 e interfaz automática en español/inglés. |
+| **Experimental Lab** | `XCloud4-0.7.58-lab.pkg` | `XCloud4 Lab` | `XCLD00001` | Pruebas avanzadas: añade el panel técnico `R3` y registros diagnósticos por sesión en `/data/xcloud4/`. |
 
-Consulta [RELEASE_NOTES_1.2.0-beta.md](RELEASE_NOTES_1.2.0-beta.md) y [RELEASE_NOTES_lab-0.7.57.md](RELEASE_NOTES_lab-0.7.57.md) para más detalles.
+Consulta [RELEASE_NOTES_1.2.1-beta.md](RELEASE_NOTES_1.2.1-beta.md) y [RELEASE_NOTES_lab-0.7.58.md](RELEASE_NOTES_lab-0.7.58.md) para más detalles.
 
 ---
 
 ## Instalación / Installation
 
-1. Descarga `XCloud4-1.2.0-beta-publico.pkg` (o `XCloud4-0.7.57-lab.pkg` para la edición de laboratorio).
+1. Descarga `XCloud4-1.2.1-beta-publico.pkg` (o `XCloud4-0.7.58-lab.pkg` para la edición de laboratorio).
 2. Copia el archivo `.pkg` a tu PS4 mediante:
    - Una **memoria USB** (FAT32 o exFAT) en la raíz, o
    - El servidor **FTP de GoldHEN** en `/data/pkg/`.
@@ -91,13 +95,14 @@ Consulta [RELEASE_NOTES_1.2.0-beta.md](RELEASE_NOTES_1.2.0-beta.md) y [RELEASE_N
 
 | Control | Acción (ES) | Action (EN) |
 |---|---|---|
-| **OPTIONS** | Abre Ajustes (**Imagen** y **Servidor**) | Opens Settings (**Picture** and **Server**) |
-| **L1 / R1** | Cambia entre las pestañas **Imagen** y **Servidor** | Switches between **Picture** and **Server** tabs |
+| **OPTIONS** | Abre Ajustes (**Imagen**, **Servidor** y **Acceso**) | Opens Settings (**Picture**, **Server** and **Access**) |
+| **L1 / R1** | Cambia entre las pestañas **Imagen**, **Servidor** y **Acceso** | Switches between **Picture**, **Server** and **Access** tabs |
 | **Arriba / Abajo** | Elige calidad (`1080p Alta`, `1080p`, `720p`) o servidor | Selects quality (`1080p High`, `1080p`, `720p`) or server |
+| **Izquierda / Derecha** | Cambia el país provisional en **Acceso** o en la tarjeta regional | Changes the pending country in **Access** or on the regional card |
 | **X (Cruz)** | Guarda la elección y cierra el panel | Saves selection and closes panel |
 | **CÍRCULO** | Cancela sin guardar y cierra | Cancels without saving and closes |
 
-Los ajustes de imagen se guardan en `/data/xcloud4/settings-public-v1.bin` y la elección de servidor (junto con los ms de la última partida) en `/data/xcloud4/server-v1.bin`.
+Los ajustes de imagen se guardan en `/data/xcloud4/settings-public-v1.bin`, la elección de servidor (junto con los ms de la última partida) en `/data/xcloud4/server-v1.bin`, y el país de acceso y la aceptación del aviso en `/data/xcloud4/access-v1.bin`. Este último no contiene datos de la cuenta y se conserva entre sesiones. / The access country and warning acknowledgement are stored in `/data/xcloud4/access-v1.bin`, without account data, and retained between sessions.
 
 ### En el juego (mientras juegas en la nube) / In-Game Menu
 
@@ -119,8 +124,8 @@ Los ajustes de imagen se guardan en `/data/xcloud4/settings-public-v1.bin` y la 
 ## ¿Por qué no me funciona? / Troubleshooting
 
 > **Recordatorio / Reminder:** Consulta el [Aviso / Disclaimer](#aviso--disclaimer) al inicio de este documento.  
-> **XCloud4 no se salta restricciones de región: la app solo usa lo que Xbox permite a tu cuenta.**  
-> **XCloud4 does not bypass regional restrictions: the app only uses what Xbox allows for your account.**
+> **País de acceso** declara otro país únicamente al iniciar la sesión en la nube, mediante una cabecera de la petición de acceso. Es opcional y no está garantizado: no da una suscripción ni cambia el país de la cuenta. No resuelve errores de perfil Xbox, país de la cuenta o edad que ocurran antes de ese acceso. Usar un país de acceso distinto puede ir contra los términos de Xbox y Microsoft podría restringir tu cuenta. Úsalo bajo tu propia responsabilidad.  
+> **Access country** declares another country only when signing in to the cloud service, through a login request header. It is optional and not guaranteed: it does not provide a subscription or change the account's country. It does not resolve earlier Xbox profile, account-country or age errors. Using a different access country may go against Xbox's terms, and Microsoft could restrict your account. Use it at your own risk.
 
 ### Español
 - **"Tu cuenta aún no tiene perfil de Xbox":** entra una vez en [xbox.com](https://www.xbox.com) con esa cuenta de Microsoft para crear tu perfil (gamertag) y vuelve a iniciar sesión en XCloud4.
@@ -128,7 +133,7 @@ Los ajustes de imagen se guardan en `/data/xcloud4/settings-public-v1.bin` y la 
 - **"Xbox no envió imagen":** puede ser un fallo temporal de Xbox con ese juego o servidor; vuelve a intentarlo o prueba otro servidor en **OPTIONS > Servidor**.
 - **"Los servidores de Xbox están llenos. Estás en la fila…":** Xbox no tiene un servidor libre para ese juego en este momento (pasa a menudo con Fortnite en horas de mucha gente). Espera o cancela con CÍRCULO y vuelve a intentarlo.
 - **"Xbox no tiene servidores libres ahora":** la fila superó los 15 minutos. Prueba en unos minutos o elige otro servidor en **OPTIONS > Servidor**.
-- **País sin Xbox Cloud Gaming (`HTTP 403` o región no soportada):** comprueba la lista oficial de países y regiones con Xbox Cloud Gaming en la página de Microsoft: [https://www.xbox.com/regions](https://www.xbox.com/regions).
+- **Posible restricción regional:** la tarjeta ofrece **País de acceso** y **X Probar acceso**, con el aviso de responsabilidad antes del primer país distinto de Automático. **TRIÁNGULO Más ayuda** conserva la guía. Un HTTP 403 también puede tener otras causas; consulta el código y la disponibilidad oficial en [xbox.com/regions](https://www.xbox.com/regions).
 
 ### English
 - **"Your account doesn't have an Xbox profile yet":** sign in once at [xbox.com](https://www.xbox.com) with that Microsoft account to create your Xbox profile (gamertag), then sign in again in XCloud4.
@@ -136,7 +141,7 @@ Los ajustes de imagen se guardan en `/data/xcloud4/settings-public-v1.bin` y la 
 - **"Xbox didn't send any video":** this may be a temporary Xbox issue with that game or server; try again or pick another server in **OPTIONS > Server**.
 - **"Xbox servers are busy. You're in line…":** Xbox has no free server for that game right now (common with Fortnite at peak hours). Wait, or cancel with CIRCLE and try again.
 - **"Xbox has no free servers right now":** the queue went past 15 minutes. Try again in a few minutes or choose another server in **OPTIONS > Server**.
-- **Country without Xbox Cloud Gaming (`HTTP 403` or unsupported region):** check Microsoft's official list of supported countries and regions at [https://www.xbox.com/regions](https://www.xbox.com/regions).
+- **Possible regional restriction:** the card offers **Access country** and **X Try access**, with the risk acknowledgement before the first non-Automatic country. **TRIANGLE More help** retains the guide. HTTP 403 can have other causes; check the code and official availability at [xbox.com/regions](https://www.xbox.com/regions).
 
 ¿Tu país no tiene Xbox Cloud Gaming? Lee [docs/region-es.md](docs/region-es.md)  
 Your country doesn't have Xbox Cloud Gaming? Read [docs/region-en.md](docs/region-en.md)

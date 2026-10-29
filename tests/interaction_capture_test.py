@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Eight R3 combinations through real UI/config and extracted destination code.
+"""All R3 interaction combinations through real UI/config and destination code.
 
 The generated fixture executes the exact destination statements from main,
 media and RTC. Native endpoints are doubles; no main loop, video or audio
@@ -71,9 +71,22 @@ fixture = r'''
 #include <stdio.h>
 #include <string.h>
 #include "src/ui/stream_settings.h"
-_Static_assert(sizeof(X4StreamRequestConfig)==64&&offsetof(X4StreamRequestConfig,interaction_modes)==51,
-    "session modes use the existing request padding");
+#include "src/ui/ui_perf.h"
+/* f18 already carries the picture/request fields after the interaction byte. */
+_Static_assert(sizeof(X4StreamRequestConfig)==72&&offsetof(X4StreamRequestConfig,os_name)==24&&
+    offsetof(X4StreamRequestConfig,display_info)==48&&offsetof(X4StreamRequestConfig,cpu_variant)==49&&
+    offsetof(X4StreamRequestConfig,decoder_depth)==50&&offsetof(X4StreamRequestConfig,interaction_modes)==51&&
+    offsetof(X4StreamRequestConfig,convert_mode)==52&&offsetof(X4StreamRequestConfig,sharpness)==53&&
+    offsetof(X4StreamRequestConfig,resolution_request_mode)==54&&offsetof(X4StreamRequestConfig,h264_profile)==56&&
+    offsetof(X4StreamRequestConfig,max_fs)==60&&offsetof(X4StreamRequestConfig,max_mbps)==64,
+    "current base request ABI and exact interaction/picture offsets");
 static struct { bool available; unsigned modes; uint64_t begin_us; } interaction_main;
+/* The extracted begin helper also resets menu measurements. Their real type
+ * is used here; the menu owner itself is not run by this capture-only test. */
+static X4UiPerf menu_copy_times,menu_prepare_times;
+static uint64_t menu_log_at,menu_interval_frames,menu_interval_open_frames;
+static unsigned menu_cache_resets;
+void x4_touch_menu_cache_reset(void){++menu_cache_resets;}
 static uint64_t sceKernelGetProcessTime(void) { return 123456; }
 @BEGIN_MAIN@
 typedef struct { unsigned char lgMotor,smMotor; } TestVibe;
@@ -109,10 +122,10 @@ static void edit_modes(X4StreamSettingsUi *ui,unsigned modes)
 {
     assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_OPEN,true));
     assert(ui->open&&ui->row==0&&ui->interaction_modes==0);
-    for(unsigned row=1;row<=6;++row) {
+    for(unsigned row=1;row<=7;++row) {
         assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_DOWN,true)&&ui->row==row);
         unsigned bit=row==4?X4_INTERACTION_INPUT_60HZ:row==5?X4_INTERACTION_RUMBLE_OFF:
-            row==6?X4_INTERACTION_AUDIO_PREVIOUS:0;
+            row==6?X4_INTERACTION_AUDIO_PREVIOUS:row==7?X4_INTERACTION_VSYNC_OFF:0;
         if(modes&bit)assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_RIGHT,true));
         assert(x4_stream_settings_get().interaction_modes==0);
     }
@@ -131,7 +144,12 @@ int main(void)
         assert(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
         assert(!ui.open&&ui.applied&&x4_stream_settings_get().interaction_modes==modes);
         @MAIN_CAPTURE@
+        menu_copy_times.n=7;menu_prepare_times.n=8;
+        menu_log_at=menu_interval_frames=menu_interval_open_frames=9;
+        unsigned previous_resets=menu_cache_resets;
         @MAIN_BEGIN@
+        assert(!menu_copy_times.n&&!menu_prepare_times.n&&!menu_log_at&&
+            !menu_interval_frames&&!menu_interval_open_frames&&menu_cache_resets==previous_resets+1);
         TestMedia media=media_capture_request(&request_cfg);
         TestRtc rtc=rtc_capture_request(&request_cfg);
         /* A later menu commit changes the next session only. */
@@ -149,7 +167,7 @@ int main(void)
             received_vibration.smMotor==(modes&X4_INTERACTION_RUMBLE_OFF?0:37));
         printf("PASS R3 combination %u: captured destinations and cancel unchanged\n",modes);
     }
-    puts("PASS interaction capture: 8 real R3/config combinations, exact destination fragments, immutable session, no video/main loop/native worker");
+    puts("PASS interaction capture: 16 real R3/config combinations, exact destination fragments, menu metric reset, immutable session, no video/main loop/native worker");
     return 0;
 }
 '''

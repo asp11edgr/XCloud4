@@ -14,7 +14,10 @@ arguments=argparse.ArgumentParser()
 arguments.add_argument('--constructor-log',type=Path)
 args=arguments.parse_args()
 root = Path(__file__).resolve().parents[1]
-blocks = re.findall(r"```json\n(.*?)\n```", (root / "docs/STREAM_REQUEST_PROFILES.md").read_text(encoding="utf-8"), re.S)
+# Exact historical 0.7.46 document, source 02122f101201bdd27ba9d61c5d6954d6e5e24140.
+# SHA-256 48434dbe5a5b4b904b0b9b4a61b1540c940df6fe523c114332d4a82a6ec08e9f.
+# Independent wire goldens; its historical prose is not current product policy.
+blocks = re.findall(r"```json\n(.*?)\n```", (root / "tests/fixtures/stream_request_profiles_0746.md").read_text(encoding="utf-8"), re.S)
 assert len(blocks) == 10
 objects = [json.loads(text) for text in blocks]
 base_device, base_play = objects[:2]

@@ -3,12 +3,18 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import tempfile
 
 root = Path(__file__).resolve().parents[1]
 source = (root / 'src/core/main.c').read_text(encoding='utf-8')
+screen_header = (root / 'src/ui/screen.h').read_text(encoding='utf-8')
+# This production typedef is flat. Keep its exact fields rather than creating
+# a stale substitute for the menu owner's snapshot contract.
+cache_type = re.search(r'typedef struct \{[^{}]+\} X4TouchMenuCacheStats;', screen_header)
+assert cache_type, 'production X4TouchMenuCacheStats typedef'
 start = source.index('/* Main is the sole writer and exporter.')
 end = source.index('\n#endif', start)
 prefix = r'''
@@ -17,6 +23,18 @@ prefix = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "@UI_PERF_HEADER@"
+@MENU_CACHE_TYPE@
+/* These owners are outside the rumble harness. Their doubles expose an
+ * explicit empty state while the real main JSON writer still executes. */
+static unsigned menu_cache_resets,menu_cache_snapshots,loading_metrics_writes;
+void x4_touch_menu_cache_reset(void){++menu_cache_resets;}
+void x4_touch_menu_cache_snapshot(X4TouchMenuCacheStats *out){
+ assert(out);++menu_cache_snapshots;memset(out,0,sizeof(*out));
+}
+void x4_loading_screen_metrics_write(FILE *file){
+ ++loading_metrics_writes;fputs("{\"fixture_no_loading_owner\":true}",file);
+}
 enum {X4_INTERACTION_RUMBLE_OFF=2, X4_MON_PHASE_MAIN_POLL=14,
  X4_MON_PHASE_MAIN_STATUS=15, X4_MON_PHASE_MAIN_IDLE=16};
 typedef struct {uint8_t lgMotor,smMotor;} OrbisPadVibeParam;
@@ -33,9 +51,15 @@ static int scePadSetVibration(int handle,OrbisPadVibeParam *value){
  return native_result;
 }
 '''
+prefix = prefix.replace('@UI_PERF_HEADER@', (root / 'src/ui/ui_perf.h').as_posix())
+prefix = prefix.replace('@MENU_CACHE_TYPE@', cache_type.group(0))
 suffix = r'''
 int main(void){
+ menu_copy_times.n=7;menu_prepare_times.n=8;
+ menu_log_at=menu_interval_frames=menu_interval_open_frames=9;
  interaction_main_begin(0,clock_us);
+ assert(menu_cache_resets==1&&!menu_copy_times.n&&!menu_prepare_times.n&&
+     !menu_log_at&&!menu_interval_frames&&!menu_interval_open_frames);
  InteractionRumble s={.handle=-1};
  interaction_rumble_step(&s,1,(OrbisPadVibeParam){0},clock_us);
  assert(calls==1);
@@ -84,6 +108,7 @@ int main(void){
  assert(interaction_main.gap[0].phase==X4_MON_PHASE_MAIN_STATUS);
  assert(interaction_main.errors==1);
  x4_main_interaction_metrics_write(stdout);puts("");
+ assert(menu_cache_snapshots==1&&loading_metrics_writes==1);
  return 0;
 }
 '''
@@ -103,4 +128,11 @@ with tempfile.TemporaryDirectory(prefix='x4-rumble-main-') as tmp:
     assert report['call_duration_us']['p50_upper'] == 50
     assert report['call_duration_us']['max'] == 25
     assert report['main_loop_gaps_over_20ms']['count'] == 1
+    assert report['menu_ui']['steady_overlay_us']['n'] == 0
+    assert report['menu_ui']['preparation_us']['n'] == 0
+    assert report['menu_ui']['regenerations'] == 0
+    assert report['menu_ui']['composed_frames'] == 0
+    assert report['menu_ui']['copied_bytes'] == 0
+    assert report['menu_ui']['cache_bytes'] == 0
+    assert report['loading_ui'] == {'fixture_no_loading_owner': True}
 print('PASS real main rumble: 16ms cap, latest intensities, latched stop, failed-call retry, final stop and metric JSON')

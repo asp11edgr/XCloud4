@@ -3,6 +3,12 @@
  * Only the native PS4 module/HTTP ABI is simulated. No request leaves the
  * process; fixture credentials are not captured or printed. */
 #define _POSIX_C_SOURCE 200809L
+#include <strings.h>
+/* Some historical callers include this fixture without the runner's host
+ * switch. Only host wait types are needed; no native wait API is exercised. */
+#ifndef X4_STREAM_WAIT_HOST
+#define X4_STREAM_WAIT_HOST 1
+#endif
 #include "../src/auth/xbox_live.c"
 #include "../src/auth/ca_bundle.h"
 

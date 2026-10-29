@@ -76,6 +76,9 @@ typedef struct {
 /* Public operations belong to main except the synchronized input source and
  * cancel/keyframe-request flags. */
 X4Auth *x4_auth_create(void);
+/* Public, non-secret country captured for the last/current GSSV job. A menu
+ * change does not change this value until the next job is prepared. */
+X4AccessCountry x4_auth_access_country(const X4Auth *auth);
 /* Main thread only, while no worker is busy. Registration persists across
  * sign-ins. A completed worker is joined before replacing the registration;
  * a join error preserves the old registration. The receiver context must
