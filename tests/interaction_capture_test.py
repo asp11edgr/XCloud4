@@ -125,15 +125,22 @@ static void edit_modes(X4StreamSettingsUi *ui,unsigned modes)
     for(unsigned row=1;row<=7;++row) {
         assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_DOWN,true)&&ui->row==row);
         unsigned bit=row==4?X4_INTERACTION_INPUT_60HZ:row==5?X4_INTERACTION_RUMBLE_OFF:
-            row==6?X4_INTERACTION_AUDIO_PREVIOUS:row==7?X4_INTERACTION_VSYNC_OFF:0;
+            row==6?X4_INTERACTION_AUDIO_PREVIOUS:0;
         if(modes&bit)assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_RIGHT,true));
         assert(x4_stream_settings_get().interaction_modes==0);
     }
+    ui->row=7;
+    X4StreamRequestConfig policy_request={.interaction_modes=(unsigned char)modes};
+    unsigned moves=(unsigned)x4_stream_request_vsync_policy(&policy_request);
+    while(moves--)assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_RIGHT,true));
+    ui->row=16;
+    if(modes&X4_INTERACTION_MAILBOX)assert(x4_stream_settings_ui_handle(ui,X4_SETTINGS_RIGHT,true));
     assert(ui->interaction_modes==modes);
 }
 int main(void)
 {
-    for(unsigned modes=0;modes<=X4_INTERACTION_MASK;++modes) {
+    for(unsigned modes=0;modes<64u;++modes) {
+        if((modes&X4_INTERACTION_VSYNC_MASK)==X4_INTERACTION_VSYNC_MASK)continue;
         assert(x4_stream_settings_set_extended(X4_REQUEST_1080P_G8,X4_COLOR_AUTO_709,
             X4_CPU_0,X4_DEPTH_AUTO,0));
         X4StreamSettingsUi ui={0};
@@ -167,7 +174,7 @@ int main(void)
             received_vibration.smMotor==(modes&X4_INTERACTION_RUMBLE_OFF?0:37));
         printf("PASS R3 combination %u: captured destinations and cancel unchanged\n",modes);
     }
-    puts("PASS interaction capture: 16 real R3/config combinations, exact destination fragments, menu metric reset, immutable session, no video/main loop/native worker");
+    puts("PASS interaction capture: 48 real R3/config combinations, exact destination fragments, menu metric reset, immutable session, no video/main loop/native worker");
     return 0;
 }
 '''

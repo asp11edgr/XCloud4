@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "gamepad.h"
 
 /* Original bounded Xbox FourMotorRumble decoder. No hardware API is called
  * here. The data-channel producer and the main-thread poller never wait. */
@@ -14,12 +15,18 @@ typedef struct {
 } X4RumbleEvent;
 typedef struct {
     uint8_t lgMotor, smMotor;
-    uint64_t epoch, sequence;
+    uint64_t epoch, sequence, generation;
+} X4RumbleMotorOutput;
+typedef struct {
+    uint8_t lgMotor, smMotor;
+    uint64_t epoch, sequence, generation; /* Index 0. Generation zero is legacy. */
+    X4RumbleMotorOutput others[X4_GAMEPAD_COUNT - 1];
 } X4RumbleOutput;
 typedef struct {
     uint64_t binary_messages, reports, valid, accepted, malformed, unsupported;
     uint64_t contention_dropped, inactive_dropped, superseded;
     uint64_t epoch;
+    uint64_t received_by_index[X4_GAMEPAD_COUNT];
     bool enabled;
 } X4RumbleSnapshot;
 enum {
@@ -29,7 +36,7 @@ enum {
 };
 #define X4_RUMBLE_MAX_DURATION_MS 5000u
 
-/* Exact modern13 / legacy12 layouts, type128/subtype0/index0, percentages
+/* Exact modern13 / legacy12 layouts, type128/subtype0/index0-3, percentages
  * <=100. Unknown/combined report types are not guessed. */
 int x4_rumble_parse(const void *data, size_t size, X4RumbleEvent *event);
 uint8_t x4_rumble_motor_byte(uint8_t percent);
@@ -40,6 +47,9 @@ bool x4_rumble_begin(X4Rumble *);
 /* May run concurrently with receive/poll. Poll immediately returns zero.
  * The caller must also physically zero the controller on every close path. */
 void x4_rumble_disable(X4Rumble *);
+/* RTC sender only. Binding remains active until the next begin. */
+bool x4_rumble_set_targets(X4Rumble *, uint8_t mask,
+    const uint64_t generations[X4_GAMEPAD_COUNT]);
 /* Optional borrowed mailbox outlives every joined RTC producer. Callback
  * receives bytes only; no allocation, print, sleep, or hardware operation. */
 int x4_rumble_receive(X4Rumble *, const void *data, size_t size, uint64_t now_us);

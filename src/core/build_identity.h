@@ -4,13 +4,31 @@
 #ifndef X4_PUBLIC
 #define X4_PUBLIC 0
 #endif
-#if X4_PUBLIC
-#define X4_PRODUCT_VERSION "1.2.1-beta"
+#if X4_VIDEO_PROBE && X4_PROBE_T27
+#define X4_PRODUCT_VERSION "0.7.63-probe.t27"
+/* Experiment-label SHA1, not a commit; complete source manifest in delivery. */
+#define X4_SOURCE_ID "29673b7b9eaab5c2010333ae3ef09446a63af04f"
 #else
-#define X4_PRODUCT_VERSION "0.7.58-lab"
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#define X4_PRODUCT_VERSION "0.7.62-probe.t26b"
+/* Experiment label hash, not a commit: SHA-1 of the literal UTF-8 string
+ * XCloud4-probe-t26b:6cdb12365ec29e7ac1ab5169461d1284c38d5dc582efe8ca46c8b63d2405b6aa */
+#define X4_SOURCE_ID "858a20ad1b27ba46d7db0ef97e76d19426a6e5ce"
+#else
+#if X4_PUBLIC
+#define X4_PRODUCT_VERSION "1.3.0-beta"
+#else
+#define X4_PRODUCT_VERSION "0.7.87-lab"
 #endif
-/* Base revision; the task delivery records the complete uncommitted source. */
-#define X4_SOURCE_ID "f18bbebac41f8493ef1bfd498f74cf076481cb20"
+/* SHA-1 labels of "XCloud4 T43c public 01.31" / "XCloud4 T43c Lab 01.55".
+ * They are not Git commits; the final SHA-256 manifest identifies the source. */
+#if X4_PUBLIC
+#define X4_SOURCE_ID "af6639e7cf320bf046f6235a5bb3019ca043ab4b"
+#else
+#define X4_SOURCE_ID "425c8c2cbf2179ab53cfce79eb56516dd0d834a1"
+#endif
+#endif /* X4_VIDEO_PROBE && X4_PROBE_T26 */
+#endif /* X4_VIDEO_PROBE && X4_PROBE_T27 */
 #if X4_RECEIVER_NACK
 #define X4_NACK_ID "-n1"
 #else

@@ -255,11 +255,147 @@ static void recent_selection_across_refresh_and_empty_catalog(void)
     CHECK(browser.recent_selected==2);CHECK(!strcmp(browser.recent_selected_id,"TITLE_3"));
     catalog.count=0;x4_catalog_browser_rebuild(&browser,&catalog);x4_recent_refresh_catalog(&history,&catalog);
     unsigned source;CHECK(!x4_catalog_browser_resolved_index(&browser,&catalog,&history,&source));
-    CHECK(history.entries[2].product_id[0]==0);
+    CHECK(!strcmp(history.entries[2].product_id,"PRODUCT3"));
+    CHECK(!strcmp(history.entries[2].name,"Game 3"));
     CHECK(x4_catalog_browser_nav(&browser,&catalog,&history,0,1));CHECK(browser.section==X4_CATALOG_SECTION_CATALOG);
     CHECK(x4_catalog_browser_nav(&browser,&catalog,&history,0,-1));CHECK(browser.section==X4_CATALOG_SECTION_RECENT);
     CHECK(x4_catalog_browser_query_append(&browser,'A'));CHECK(browser.section==X4_CATALOG_SECTION_CATALOG);
 }
+static void home_navigation(void)
+{
+    fill(12);
+    x4_recent_init(&history);
+    X4HomeRows rows = { .count = 3, .rows = {
+        { .kind = X4_HOME_CONTINUE, .count = 6, .indices = {0, 1, 2, 3, 4, 5} },
+        { .kind = X4_HOME_MINE, .count = 2, .indices = {6, 7} },
+        { .kind = X4_HOME_NEW, .count = 3, .indices = {8, 9, 10} }
+    } };
+    x4_catalog_browser_home_apply(&browser, &catalog, &rows);
+    browser.apple_mode = true;
+    CHECK(browser.hero_focused && browser.home_first_row == 0);
+    CHECK(x4_catalog_browser_home_tick(&browser, &catalog, 100));
+    CHECK(!strcmp(browser.home_background_id, "PRODUCT0"));
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, 1, 0));
+    for (unsigned i = 0; i < 4; ++i)
+        CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 1, 0, 0));
+    CHECK(X4_CATALOG_DISCOVER_ROW_VISIBLE == 5);
+    CHECK(x4_catalog_browser_home_row_start(&browser, 0) == 0);
+    unsigned source;
+    CHECK(x4_catalog_browser_resolved_index(&browser, &catalog, &history, &source) && source == 4);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 1, 0, 0));
+    CHECK(x4_catalog_browser_home_row_start(&browser, 0) == 1);
+    CHECK(x4_catalog_browser_resolved_index(&browser, &catalog, &history, &source) && source == 5);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, -1, 0, 0));
+    CHECK(x4_catalog_browser_home_row_start(&browser, 0) == 0);
+    CHECK(!x4_catalog_browser_home_tick(&browser, &catalog, 200));
+    CHECK(!x4_catalog_browser_home_tick(&browser, &catalog, 300199));
+    CHECK(x4_catalog_browser_home_tick(&browser, &catalog, 300200));
+    CHECK(!strcmp(browser.home_background_id, "PRODUCT4"));
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, 1, 0));
+    CHECK(browser.home_first_row == 0 && browser.home_row == 1);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, 1, 0));
+    CHECK(browser.home_first_row == 1 && browser.home_row == 2);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, -1, 0));
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, -1, 0));
+    CHECK(browser.home_first_row == 0 && browser.discover_row_selected == 4);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, -1, 0));
+    CHECK(browser.hero_focused);
+    CHECK(x4_catalog_browser_resolved_index(&browser, &catalog, &history, &source) && source == 4);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 0, -1, 0));
+    CHECK(browser.top_bar_focused);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, 1, 0, 0));
+    CHECK(browser.active_tab == X4_CAT_TAB_CATALOG);
+    CHECK(x4_catalog_browser_apple_nav(&browser, &catalog, &history, -1, 0, 0));
+    CHECK(browser.active_tab == X4_CAT_TAB_DISCOVER);
+    catalog.state = X4_CATALOG_LOADING;
+    CHECK(x4_catalog_browser_home_tick(&browser, &catalog, 400000));
+    CHECK(!browser.home_background_id[0]);
+    CHECK(!x4_catalog_browser_resolved_index(&browser, &catalog, &history, &source));
+}
+
+static bool apple_move(int dx,int dy,int tab)
+{
+    return x4_catalog_browser_apple_nav(&browser,&catalog,&history,dx,dy,tab);
+}
+
+static void secondary_tab_grid_navigation(void)
+{
+    fill(10);x4_recent_init(&history);
+    CHECK(apple_move(0,0,1));CHECK(browser.active_tab==X4_CAT_TAB_CATALOG);
+    for(unsigned i=0;i<3;++i) CHECK(apple_move(1,0,0));
+    CHECK(selected()==3);CHECK(!apple_move(1,0,0));
+    CHECK(apple_move(0,1,0));CHECK(selected()==7);
+    CHECK(apple_move(0,1,0));CHECK(selected()==9); /* Clamp to the short third row. */
+    CHECK(!apple_move(1,0,0));CHECK(!apple_move(0,1,0));
+    CHECK(apple_move(0,-1,0));CHECK(selected()==7); /* Restore column three. */
+    CHECK(apple_move(0,-1,0));CHECK(selected()==3);
+    CHECK(apple_move(0,-1,0));CHECK(browser.top_bar_focused);
+    CHECK(apple_move(0,1,0));CHECK(!browser.top_bar_focused);CHECK(selected()==3);
+
+    CHECK(x4_catalog_browser_cycle_filter(&browser,1));
+    x4_catalog_browser_rebuild(&browser,&catalog);
+    CHECK(browser.selected==0);CHECK(selected()==0);
+    CHECK(apple_move(1,0,0));CHECK(selected()==2);
+    query("Game 4");CHECK(browser.selected==0);CHECK(selected()==4);
+
+    publish_ids(10,1,1);
+    CHECK(apple_move(0,0,1));CHECK(browser.active_tab==X4_CAT_TAB_RECENTS);
+    for(unsigned i=0;i<3;++i) CHECK(apple_move(1,0,0));
+    CHECK(browser.recent_selected==3);CHECK(!apple_move(1,0,0));
+    CHECK(apple_move(0,1,0));CHECK(browser.recent_selected==7);
+    CHECK(apple_move(0,1,0));CHECK(browser.recent_selected==9);
+    CHECK(apple_move(0,-1,0));CHECK(browser.recent_selected==7);
+    CHECK(apple_move(0,0,-1));CHECK(selected()==4);
+    CHECK(apple_move(0,0,1));CHECK(browser.recent_selected==7);
+}
+
+static void secondary_background_and_unavailable_recent(void)
+{
+    fill(10);x4_recent_init(&history);
+    CHECK(apple_move(0,0,1));CHECK(browser.active_tab==X4_CAT_TAB_CATALOG);
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,100));
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,300099));
+    const char *id=x4_catalog_browser_tab_background(&browser,&catalog,&history,300100);
+    CHECK(id&&!strcmp(id,"PRODUCT0"));
+    CHECK(apple_move(1,0,0));
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,300110));
+    CHECK(!browser.tab_background_id[0]);
+    CHECK(apple_move(1,0,0));
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,500000));
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,799999));
+    id=x4_catalog_browser_tab_background(&browser,&catalog,&history,800000);
+    CHECK(id&&!strcmp(id,"PRODUCT2"));
+    query("no match");CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,800100));
+
+    publish_ids(10,1,1);
+    CHECK(apple_move(0,0,1));CHECK(browser.active_tab==X4_CAT_TAB_RECENTS);
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,800200));
+    id=x4_catalog_browser_tab_background(&browser,&catalog,&history,1100200);
+    CHECK(id&&!strcmp(id,"PRODUCT9"));
+    unsigned source;
+    CHECK(x4_catalog_browser_resolved_index(&browser,&catalog,&history,&source)&&source==9);
+    catalog.count=9;
+    x4_recent_refresh_catalog(&history,&catalog);
+    CHECK(!x4_catalog_browser_resolved_index(&browser,&catalog,&history,&source));
+    CHECK(!strcmp(history.entries[0].product_id,"PRODUCT9"));
+    char ids[][96]={"TITLE_9"};
+    x4_recent_begin(&history,1,2);
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,1100201));
+    CHECK(x4_recent_publish(&history,1,2,ids,1,0,200,&catalog));
+    x4_catalog_browser_sync_recents(&browser,&history);
+    CHECK(!strcmp(history.entries[0].product_id,"PRODUCT9"));
+    CHECK(!x4_catalog_browser_resolved_index(&browser,&catalog,&history,&source));
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,1100202));
+    id=x4_catalog_browser_tab_background(&browser,&catalog,&history,1400202);
+    CHECK(id&&!strcmp(id,"PRODUCT9"));
+
+    x4_recent_begin(&history,2,3);
+    CHECK(x4_recent_publish(&history,2,3,ids,1,0,200,&catalog));
+    x4_catalog_browser_sync_recents(&browser,&history);
+    CHECK(!history.entries[0].product_id[0]);
+    CHECK(!x4_catalog_browser_tab_background(&browser,&catalog,&history,1500000));
+}
+
 int main(void)
 {
     RUN(grid_navigation);RUN(incomplete_pages);RUN(filters_and_search);RUN(utf8_names);
@@ -268,5 +404,7 @@ int main(void)
     RUN(mru_ids_not_products_and_errors);RUN(recent_navigation_and_current_access);
     RUN(recent_grid_visual_columns);
     RUN(recent_selection_across_refresh_and_empty_catalog);
+    RUN(home_navigation);RUN(secondary_tab_grid_navigation);
+    RUN(secondary_background_and_unavailable_recent);
     printf("PASS catalog browser/server MRU: %u cases, %u checks\n",cases,checks);return 0;
 }

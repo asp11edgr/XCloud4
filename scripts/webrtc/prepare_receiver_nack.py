@@ -135,13 +135,15 @@ def apply(base):
     text = edits[capi]
     marker = '// XCloud4 bounded receiver NACK owner API.\n'
     owner_api = '\n#ifdef X4_OPENORBIS\n#if RTC_ENABLE_MEDIA\n' + marker + r'''
-extern "C" int x4_rtc_configure_receiver_nack(int tr, int enabled, uint32_t epoch) {
+extern "C" int x4_rtc_configure_receiver_nack(int tr, int enabled, uint32_t epoch, int policy) {
+    if (policy < 0 || policy > 3) return RTC_ERR_INVALID;
+    const bool legacy = policy == 1, grace43c = policy == 0, policy46b = policy == 3;
     return wrap([&] {
         auto track = getTrack(tr);
         auto existing = track->getMediaHandler();
         if (auto generator = std::dynamic_pointer_cast<X4ReceiverNack>(existing)) {
             generator->duplicateInstall();
-            if (!generator->sameConfiguration(enabled != 0, epoch))
+            if (!generator->sameConfiguration(enabled != 0, epoch, legacy, grace43c, policy46b))
                 throw std::invalid_argument("Receiver NACK already configured");
             return RTC_ERR_SUCCESS;
         }
@@ -150,7 +152,7 @@ extern "C" int x4_rtc_configure_receiver_nack(int tr, int enabled, uint32_t epoc
         if (!std::dynamic_pointer_cast<RtcpReceivingSession>(existing) || existing->next() ||
             track->description().type() != "video")
             throw std::invalid_argument("Unexpected receiver NACK handler chain");
-        auto generator = std::make_shared<X4ReceiverNack>(enabled != 0, epoch);
+        auto generator = std::make_shared<X4ReceiverNack>(enabled != 0, epoch, legacy, grace43c, policy46b);
         generator->setNext(existing);
         track->setMediaHandler(generator);
         return RTC_ERR_SUCCESS;
@@ -191,6 +193,13 @@ extern "C" int x4_rtc_poll_receiver_nack(int tr) {
         });
     });
 }
+extern "C" int x4_rtc_receiver_nack_metrics(int tr, X4ReceiverNackMetrics *out) {
+    if (!out) return RTC_ERR_INVALID;
+    return wrap([&] {
+        auto generator = std::dynamic_pointer_cast<X4ReceiverNack>(getTrack(tr)->getMediaHandler());
+        return generator && generator->metrics(*out) ? RTC_ERR_SUCCESS : RTC_ERR_NOT_AVAIL;
+    });
+}
 extern "C" int x4_rtc_close_receiver_nack(int tr) {
     return wrap([&] {
         auto generator = std::dynamic_pointer_cast<X4ReceiverNack>(getTrack(tr)->getMediaHandler());
@@ -200,7 +209,12 @@ extern "C" int x4_rtc_close_receiver_nack(int tr) {
 ''' + '#endif\n#endif\n'
     # Permit only the complete prior experimental body for this explicit
     # migration. A marker alone does not prove all four owner APIs exist.
-    legacy_api = owner_api.replace(
+    t43c_api = owner_api.replace('policy > 3', 'policy > 2').replace(
+        ', policy46b = policy == 3;', ';').replace(', grace43c, policy46b)', ', grace43c)')
+    previous_api = t43c_api.replace('int policy) {\n    if (policy < 0 || policy > 2) return RTC_ERR_INVALID;\n'
+        '    const bool legacy = policy == 1, grace43c = policy == 0;', 'int legacy) {'
+    ).replace('epoch, legacy, grace43c)', 'epoch, legacy != 0)')
+    legacy_api = previous_api.replace(
         'x4ReceiverNackAcceptsNack(rtp->format, rtp->rtcpFbs);',
         'rtp->format == "H264" && rtp->hasFeedback("nack");')
     if marker not in text:
@@ -209,6 +223,10 @@ extern "C" int x4_rtc_close_receiver_nack(int tr) {
         raise SystemExit('Duplicate receiver NACK owner API marker')
     elif text.endswith(owner_api):
         pass
+    elif text.endswith(t43c_api):
+        text = text[:-len(t43c_api)] + owner_api
+    elif text.endswith(previous_api):
+        text = text[:-len(previous_api)] + owner_api
     elif text.endswith(legacy_api):
         text = text[:-len(legacy_api)] + owner_api
     else:
@@ -216,6 +234,19 @@ extern "C" int x4_rtc_close_receiver_nack(int tr) {
     edits[capi] = text
     old = '\t${CMAKE_CURRENT_SOURCE_DIR}/src/rtcpreceivingsession.cpp\n'
     patch('CMakeLists.txt', old, old + '\t${CMAKE_CURRENT_SOURCE_DIR}/src/rtc_receiver_nack.cpp\n')
+    cmake = vendor / 'CMakeLists.txt'
+    # The project build overrides the archive's handler in both editions
+    # to enable the app-owned recovery extension.
+    mode_prefix = (
+        'set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/rtc_receiver_nack.cpp"\n'
+        '    PROPERTIES COMPILE_DEFINITIONS "'
+    )
+    old_mode = mode_prefix + 'X4_RECOVERY43=0")\n'
+    mode = mode_prefix + 'X4_RECOVERY43=0;X4_RECEIVER_NACK_VENDOR=1")\n'
+    if old_mode in edits[cmake]:
+        edits[cmake] = replace(edits[cmake], old_mode, mode, 'vendor NACK compile mode')
+    elif mode not in edits[cmake]:
+        edits[cmake] += '\n' + mode
 
     # Complete anchor validation precedes any vendor source mutation.
     for path, text in edits.items():

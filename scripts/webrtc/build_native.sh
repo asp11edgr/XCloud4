@@ -3,7 +3,7 @@
 set -euo pipefail
 : "${OO_PS4_TOOLCHAIN:?Load ~/.config/xcloud4/env.sh first}"
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-RTC_ROOT=${X4_WEBRTC_ROOT:-"$HOME/.local/share/xcloud4/webrtc"}
+RTC_ROOT=${X4_WEBRTC_ROOT:-"$HOME/.local/share/xcloud4/webrtc-clean-21"}
 PREFIX="$RTC_ROOT/prefix"
 mkdir -p "$RTC_ROOT" "$PREFIX/include" "$PREFIX/lib"
 

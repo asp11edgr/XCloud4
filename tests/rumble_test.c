@@ -82,7 +82,7 @@ static void test_bounds(void)
     CHECK(x4_rumble_parse(p, 13, &e) == X4_RUMBLE_UNSUPPORTED);
     memcpy(p, modern, 13); p[2] = 1;
     CHECK(x4_rumble_parse(p, 13, &e) == X4_RUMBLE_UNSUPPORTED);
-    memcpy(p, modern, 13); p[3] = 1;
+    memcpy(p, modern, 13); p[3] = 4;
     CHECK(x4_rumble_parse(p, 13, &e) == X4_RUMBLE_UNSUPPORTED);
     for (unsigned at = 4; at <= 7; ++at) {
         memcpy(p, modern, 13); p[at] = 101;

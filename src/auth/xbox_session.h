@@ -1,7 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include <stdatomic.h>
+#include <stdbool.h>
 #include "../ui/access_country.h"
 
 /* Public view of one Xbox cloud session preparation. This milestone asks
@@ -55,6 +58,12 @@ typedef struct {
     int ready_seen, cleanup_failed;
     int connection_authorized, passport_http_status, connect_http_status;
     int rtc_connected, sdp_http_status, ice_http_status, keepalive_http_status;
+    int rtt_ms; /* last existing worker sample; -1 when unknown */
+    /* Reconnection keeps the same Xbox session and visible session state. */
+    int reconnecting, ever_connected;
+    unsigned reconnect_attempt, reconnects;
+    uint64_t recovered_until_us, inactivity_until_us;
+    unsigned inactivity_seconds;
     uint64_t video_packets, audio_packets;
     int input_ready, input_error;
     uint64_t input_packets, input_dropped;
@@ -74,3 +83,11 @@ typedef struct {
  * immediately to a bounded queue; decoding/rendering must happen elsewhere.
  * Caller keeps user alive until cancellation and worker join have completed. */
 typedef void (*X4SessionMediaCallback)(void *user, int kind, const uint8_t *rtp, size_t size);
+
+/* Private auth-to-session bridge; installed before the joined worker starts.
+ * Only an atomic request is shared with main; no RTC pointer crosses it. */
+struct X4XboxWork;
+bool x4_xbox_work_set_reload_request(struct X4XboxWork *work, _Atomic int *requested);
+/* Same worker owns both fields; only reconnect authorization reads this
+ * attempt's immutable absolute deadline, through its explicit HTTP API. */
+bool x4_xbox_work_set_reconnect_deadline(struct X4XboxWork *work, uint64_t *deadline_us);

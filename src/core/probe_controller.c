@@ -6,7 +6,10 @@
 #ifndef X4_VIDEO_PROBE
 #define X4_VIDEO_PROBE 0
 #endif
-#if X4_VIDEO_PROBE
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#include "../video/probe_t26_controller.h"
+int x4_probe_controller_run(void) { return x4_t26_controller_run(); }
+#elif X4_VIDEO_PROBE
 #include "lifecycle.h"
 #include "build_identity.h"
 #include "../video/display.h"

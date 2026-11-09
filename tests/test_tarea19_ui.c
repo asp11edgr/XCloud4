@@ -434,41 +434,42 @@ static void test_no_overlap_long_names_es_en(void)
 static void test_fortnite_quality_1step(void)
 {
     printf("6. Testing Fortnite quality 1-step selection (Point 2)...\n");
-    X4Screen s = {0};
-    s.page = 8;
-    s.selected = 0; /* 1080p Alta */
+    X4Screen s = {.page = 8, .selected = 0};
+#if X4_PUBLIC
+    const int last = (int)X4_PIC_QUALITY_1080P_MAX;
+    assert(last == 3); /* Public T27: Alta, 1080p, 720p, Maximum. */
+#else
+    const int last = (int)X4_PIC_QUALITY_720P;
+    assert(last == 2); /* Lab retains the original three choices. */
+#endif
 
-    /* 1 press DOWN -> selects 1080p (index 1) */
+    /* Every direction advances one choice; neither end wraps or escapes. */
+    for (int selected = 1; selected <= last; ++selected) {
+        x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
+        assert(s.page == 8 && s.selected == selected);
+    }
     x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
-    assert(s.selected == 1);
-
-    /* 2nd press DOWN -> selects 720p (index 2) */
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
-    assert(s.selected == 2);
-
-    /* 3rd press DOWN -> stays clamped at 2 (720p) */
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
-    assert(s.selected == 2);
-
-    /* 1 press UP -> selects 1080p (index 1) */
+    assert(s.page == 8 && s.selected == last);
+    for (int selected = last - 1; selected >= 0; --selected) {
+        x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
+        assert(s.page == 8 && s.selected == selected);
+    }
     x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
-    assert(s.selected == 1);
+    assert(s.page == 8 && s.selected == 0);
 
-    /* 2nd press UP -> selects 1080p Alta (index 0) */
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
-    assert(s.selected == 0);
-
-    /* 3rd press UP -> stays clamped at 0 (1080p Alta) */
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
-    assert(s.selected == 0);
-
-    /* Also verify RIGHT/LEFT step identically */
+    for (int selected = 1; selected <= last; ++selected) {
+        x4_screen_update(&s, ORBIS_PAD_BUTTON_RIGHT, 0);
+        assert(s.page == 8 && s.selected == selected);
+    }
     x4_screen_update(&s, ORBIS_PAD_BUTTON_RIGHT, 0);
-    assert(s.selected == 1);
+    assert(s.page == 8 && s.selected == last);
+    for (int selected = last - 1; selected >= 0; --selected) {
+        x4_screen_update(&s, ORBIS_PAD_BUTTON_LEFT, 0);
+        assert(s.page == 8 && s.selected == selected);
+    }
     x4_screen_update(&s, ORBIS_PAD_BUTTON_LEFT, 0);
-    assert(s.selected == 0);
-
-    printf("PASS: Fortnite quality 1-step selection\n");
+    assert(s.page == 8 && s.selected == 0);
+    printf("PASS: Fortnite quality one-step navigation and both limits (%d choices)\n", last + 1);
 }
 
 static void test_uncropped_image_rule(void)

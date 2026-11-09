@@ -5,13 +5,25 @@
 #include "nack_sequence_binding.h"
 #include "../streaming/nack_grace_inbox.h"
 #include "../streaming/rtc_receive_diag.h"
+#include "../streaming/receiver_nack_state.h"
 #include "../video/live_h264.h"
 #include "../video/display.h"
 #include "../audio/live_audio.h"
+/* Legacy ingress harnesses deliberately omit the transport bridge. The new
+ * observation harness opts in with explicit doubles; native Lab is enabled. */
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE && !X4_PUBLIC && \
+    (!defined(X4_INGRESS_HOST_TEST) || defined(X4_RECOVERY43_MEDIA_HOST_TEST))
+#define X4_RECOVERY43_MEDIA 1
+#include "../streaming/recovery43_bridge.h"
+#else
+#define X4_RECOVERY43_MEDIA 0
+#endif
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
 #include "../video/stream_pipeline.h"
 #include "../video/stream_cpu.h"
 #include "../streaming/keyframe_limiter.h"
+/* Private reconnect bridge: AU queue only; no decoder/display ownership. */
+extern int x4_stream_pipeline_begin_receive_epoch(X4StreamPipeline *);
 #endif
 #if X4_VIDEO_PROBE
 #include "../video/probe_hash.h"
@@ -212,7 +224,14 @@ struct X4LiveMedia {
     X4LiveMediaSnapshot worker_view;
     int audio_error, audio_payload_type;
     atomic_bool keyframe, ingress_gap;
-    atomic_uint_fast64_t packets, dropped, requests;
+    /* Session worker publishes after RTC close joined callbacks. Only the
+     * video owner resets track/reorder/AU state; the callback never waits. */
+    atomic_bool receive_epoch_hold;
+    atomic_uint receive_epoch_callbacks;
+    atomic_uint_fast64_t receive_epoch_requested, receive_epoch_applied;
+    atomic_uint_fast64_t retired_video_source, receive_epoch_rejected;
+    atomic_int receive_epoch_result;
+    atomic_uint_fast64_t packets, video_bytes, dropped, requests;
     atomic_uint_fast64_t post_halt_video_packets, first_post_halt_video_us;
     uint64_t lost, dropped_frames;
     bool stall_tracking;
@@ -253,6 +272,22 @@ struct X4LiveMedia {
     uint64_t ingress_wait_started_us, ingress_wait_elapsed_us;
     bool stream_audio_previous;
 #endif
+#if X4_RECOVERY43_MEDIA
+    /* Appended diagnostics only; worker counters and main observations have
+     * separate owners. Existing fields and audio/input offsets do not move. */
+    uint64_t recovery43_incomplete, recovery43_reported_incomplete, recovery43_reported_discarded;
+    uint64_t recovery43_last_presentations, recovery43_last_observed_us;
+#endif
+    /* Adaptive video has its own startup allocation; retain the legacy
+     * embedded tickets and the offsets of all other media owners. */
+    X4IngressTicket *adaptive_reorder_tickets;
+#if X4_RECOVERY43_MEDIA
+    uint64_t adaptive_completed, adaptive_capacity, adaptive_deadline, adaptive_oversized;
+    uint64_t adaptive_returns, adaptive_late_returns, adaptive_report_us;
+    uint16_t adaptive_hold_end;
+    bool adaptive_holding, adaptive_hold_startup;
+#endif
+    bool grace43c, grace46b, startup_seen;
 };
 static bool mailbox_lock(X4LiveMedia *m)
 {
@@ -311,6 +346,11 @@ static void reset_au(X4LiveMedia *m, bool gap, unsigned reason, unsigned detail)
         (m->idr ? 8u : 0u) | (m->damaged ? 16u : 0u) | (!m->au_size ? 32u : 0u) |
         (waiting_before ? 64u : 0u);
     if (gap && m->au_open) {
+#if X4_RECOVERY43_MEDIA
+        /* Exact assembler gap-reset count, also included in dropped_frames.
+         * WAIT-IDR filtering is a deliberate discard, not a new network gap. */
+        ++m->recovery43_incomplete;
+#endif
         if (reason < RESET_COUNT) ++m->discard_counts[reason];
         for (unsigned i = 0; i < 13; ++i) if (m->damage_bits & (1u << i)) ++m->damage_counts[i];
     }
@@ -538,11 +578,15 @@ X4LiveMedia *x4_live_media_create_request(int *error, const X4StreamRequestConfi
     X4LiveMedia *m = calloc(1, sizeof(*m));
     if (!m) { if (error) *error = rc; return NULL; }
     atomic_init(&m->keyframe, true); atomic_init(&m->ingress_gap, false);
+    atomic_init(&m->receive_epoch_hold,false);atomic_init(&m->receive_epoch_callbacks,0);
+    atomic_init(&m->receive_epoch_requested,0);atomic_init(&m->receive_epoch_applied,0);
+    atomic_init(&m->retired_video_source,0);atomic_init(&m->receive_epoch_rejected,0);
+    atomic_init(&m->receive_epoch_result,0);
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     x4_keyframe_limiter_init(&m->keyframe_limiter);
     atomic_store_explicit(&m->keyframe,false,memory_order_relaxed);
 #endif
-    atomic_init(&m->packets, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
+    atomic_init(&m->packets, 0); atomic_init(&m->video_bytes, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
     atomic_init(&m->started, false); atomic_init(&m->stop, false); atomic_init(&m->start_complete, false);
     atomic_init(&m->video_stopped, false);
     atomic_init(&m->post_halt_video_packets, 0); atomic_init(&m->first_post_halt_video_us, 0);
@@ -569,7 +613,21 @@ X4LiveMedia *x4_live_media_create_request(int *error, const X4StreamRequestConfi
     rc = x4_video_ingress_init(&m->ingress, 256);
     if (rc < 0) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
     m->au = malloc(X4_LIVE_AU_MAX); if (!m->au) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
-    rc = x4_live_reorder_init_video(&m->reorder, 128, 32, 25000, m->reorder_tickets); if (rc < 0) goto fail;
+    unsigned reorder_window = X4_LIVE_VIDEO_REORDER_LEGACY_CAPACITY;
+    X4IngressTicket *reorder_tickets = m->reorder_tickets;
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+    X4StreamNackPolicy nack_policy = x4_stream_request_nack_policy(&selected);
+    m->grace46b = nack_policy == X4_NACK_POLICY_T46B;
+    m->grace43c = nack_policy == X4_NACK_POLICY_T43C || m->grace46b;
+    if (nack_policy != X4_NACK_POLICY_T43) {
+        reorder_window = X4_LIVE_VIDEO_REORDER_CAPACITY;
+        m->adaptive_reorder_tickets = calloc(reorder_window, sizeof(*reorder_tickets));
+        if (!m->adaptive_reorder_tickets) { rc = X4_LIVE_ERR_MEMORY; goto fail; }
+        reorder_tickets = m->adaptive_reorder_tickets;
+    }
+#endif
+    rc = x4_live_reorder_init_video(&m->reorder, reorder_window, 32, 25000, reorder_tickets);
+    if (rc < 0) goto fail;
 #if !X4_STREAM_PROFILE || X4_VIDEO_PROBE
     for (unsigned i = 0; i < RGB_SLOTS; ++i) {
         m->rgb[i].pixels = calloc((size_t)X4_LIVE_RGB_PIXELS, sizeof(uint32_t));
@@ -594,7 +652,7 @@ X4LiveMedia *x4_live_media_create_request(int *error, const X4StreamRequestConfi
     X4MonitorConfig config = {.width = 960, .height = 540, .max_fps = 30,
         .bitrate_kbps = 5000, .readers = X4_LIVE_COPY_READERS,
         .budget_us = WORKER_BUDGET_US, .decode_limit = WORKER_DECODE_LIMIT,
-        .queue_capacity = 256, .reorder_capacity = 128, .reorder_depth = 32,
+        .queue_capacity = 256, .reorder_capacity = reorder_window, .reorder_depth = 32,
         .reorder_wait_us = 25000, .h264_profile = 0x42e01f,
         .max_fs = 3600, .max_mbps = 108000};
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
@@ -641,7 +699,7 @@ X4LiveMedia *x4_live_media_probe_create_memory(const X4ProbeCase *sample, X4Prob
     m->video.probe_status = m->probe_view = m->probe_owner;
     atomic_init(&m->probe_owner_done, false);
     atomic_init(&m->keyframe, false); atomic_init(&m->ingress_gap, false);
-    atomic_init(&m->packets, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
+    atomic_init(&m->packets, 0); atomic_init(&m->video_bytes, 0); atomic_init(&m->dropped, 0); atomic_init(&m->requests, 0);
     atomic_init(&m->started, false); atomic_init(&m->stop, false); atomic_init(&m->start_complete, false);
     atomic_init(&m->video_stopped, false);
     atomic_init(&m->post_halt_video_packets, 0); atomic_init(&m->first_post_halt_video_us, 0);
@@ -765,7 +823,7 @@ static void callback_max(atomic_uint_fast64_t *counter, uint64_t value)
         if (atomic_compare_exchange_strong_explicit(counter, &old, value,
             memory_order_relaxed, memory_order_relaxed)) break;
 }
-void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t size)
+static void receive_current_epoch(void *context, int kind, const uint8_t *p, size_t size, bool proven, uint64_t epoch)
 {
     X4LiveMedia *m = context; if (!m || !atomic_load_explicit(&m->started, memory_order_acquire) || atomic_load(&m->stop)) return;
 #if X4_VIDEO_PROBE
@@ -777,7 +835,9 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         bool valid = x4_live_rtp_parse(p, size, &audio_r) >= 0;
         x4_trace_monitor_rx(m->trace, X4_MON_RX_AUDIO, valid,
             valid ? audio_r.ssrc : 0, valid ? audio_r.sequence : 0, size, arrival);
-        x4_live_audio_receive(m->audio, p, size); return;
+        if(proven)x4_live_audio_receive_for_epoch(m->audio,p,size,epoch);
+        else x4_live_audio_receive(m->audio,p,size);
+        return;
     }
     if (kind != X4_LIVE_KIND_VIDEO) return;
     if (atomic_load_explicit(&m->video_stopped, memory_order_acquire) ||
@@ -832,7 +892,10 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         atomic_store(&m->ingress_gap, true); atomic_store(&m->keyframe, true);
 #endif
     }
-    else atomic_fetch_add(&m->packets, 1);
+    else {
+        atomic_fetch_add(&m->packets, 1);
+        atomic_fetch_add(&m->video_bytes, size);
+    }
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     /* Publication precedes the retained wake token. This callback never waits
      * for the assembler, Decode or any consumer-owned mutex. */
@@ -871,6 +934,34 @@ void x4_live_media_receive(void *context, int kind, const uint8_t *p, size_t siz
         ((uint64_t)active << 32) | (parsed >= 0 ? r.sequence : 0u), (cb32 << 32) | reserve32);
     atomic_fetch_sub_explicit(&m->callback_active, 1, memory_order_relaxed);
 }
+/* No lock/allocation/sleep in this callback. seq_cst pairs entry with the
+ * epoch gate: an old entrant remains counted, or observes hold and returns. */
+static void receive_epoch_entry(void *context,int kind,const uint8_t *p,size_t size,bool proven,uint64_t epoch)
+{
+    X4LiveMedia *m=context;if(!m)return;
+#if X4_VIDEO_PROBE
+    if(m->local_probe)return;
+#endif
+    atomic_fetch_add_explicit(&m->receive_epoch_callbacks,1,memory_order_seq_cst);
+    bool reject=atomic_load_explicit(&m->receive_epoch_hold,memory_order_seq_cst);
+    if(proven&&epoch!=atomic_load_explicit(&m->receive_epoch_applied,memory_order_acquire))reject=true;
+    if(!reject&&!proven&&kind==X4_LIVE_KIND_VIDEO){
+        X4LiveRtp r;
+        uint64_t retired=atomic_load_explicit(&m->retired_video_source,memory_order_acquire);
+        reject=retired&&x4_live_rtp_parse(p,size,&r)>=0&&(uint32_t)retired==r.ssrc;
+    }
+    if(reject)atomic_fetch_add_explicit(&m->receive_epoch_rejected,1,memory_order_relaxed);
+    else receive_current_epoch(context,kind,p,size,proven,epoch);
+    atomic_fetch_sub_explicit(&m->receive_epoch_callbacks,1,memory_order_seq_cst);
+}
+
+void x4_live_media_receive(void *context,int kind,const uint8_t *p,size_t size)
+{receive_epoch_entry(context,kind,p,size,false,0);}
+uint64_t x4_live_media_current_epoch(const X4LiveMedia *m)
+{return m?atomic_load_explicit(&m->receive_epoch_applied,memory_order_acquire):0;}
+void x4_live_media_receive_for_epoch(void *context,int kind,const uint8_t *p,size_t size,uint64_t epoch)
+{receive_epoch_entry(context,kind,p,size,true,epoch);}
+
 static void grace_record(X4LiveMedia *m,unsigned kind,unsigned flags,uint64_t identity,
     uint64_t source,uint64_t a,uint64_t b,uint64_t c)
 {
@@ -1173,10 +1264,83 @@ static void consume_reordered(X4LiveMedia *m,const uint8_t *p,size_t size,
     }
     depacketize(m,&r,&ticket);
 }
+/* Worker-only adaptive hold. The earliest resident packet fixes the
+ * clock origin independently of NACK reservation/transport/feedback. */
+static void adaptive_gap_abandon(X4LiveMedia *m, uint64_t now, bool capacity)
+{
+    uint64_t deadline;
+    unsigned current_ms = 0;
+#if defined(X4_OPENORBIS)
+    if (m->grace46b) current_ms = x4_rtc_diag_video_grace46b_ms();
+    else if (m->grace43c) current_ms = x4_rtc_diag_video_grace43c_ms();
+#endif
+    bool startup;
+    uint32_t gap = x4_live_reorder_video_gap_policy(&m->reorder, current_ms, &deadline, &startup);
+    uint16_t expected = m->reorder.expected;
+#if X4_RECOVERY43_MEDIA
+    if (m->adaptive_holding && (uint16_t)(expected - m->adaptive_hold_end) < 32768u) {
+        ++m->adaptive_completed;
+#if defined(X4_OPENORBIS)
+        if (m->adaptive_hold_startup) x4_rtc_diag_startup_release(X4_STARTUP_RELEASE_REPAIRED);
+#endif
+        m->adaptive_holding = false;
+    }
+    if (gap && !m->adaptive_holding) {
+        m->adaptive_holding = true;
+        m->adaptive_hold_end = (uint16_t)(expected + gap);
+        m->adaptive_hold_startup = startup;
+    }
+#endif
+    if (!gap || (!capacity && gap <= m->reorder.window && (!now || now < deadline))) return;
+    uint16_t buffered = m->reorder.buffered;
+    uint32_t lost = x4_live_reorder_abandon_gap_limited(&m->reorder,
+        x4_live_reorder_advance_bound(&m->reorder));
+    if (!lost) return;
+#if X4_RECOVERY43_MEDIA
+    if (capacity) ++m->adaptive_capacity;
+    else if (gap > m->reorder.window) ++m->adaptive_oversized;
+    else ++m->adaptive_deadline;
+#if defined(X4_OPENORBIS)
+    if (startup) x4_rtc_diag_startup_release(capacity || gap > m->reorder.window ?
+        X4_STARTUP_RELEASE_CAPACITY : X4_STARTUP_RELEASE_EXPIRED);
+#endif
+    m->adaptive_holding = false;
+#endif
+    unsigned reason = capacity || gap > m->reorder.window ? 8u : 2u;
+    x4_trace_record(m->trace, MT_REORDER_GAP, reason,
+        ((uint64_t)expected << 32) | lost, buffered);
+    m->lost += lost;
+    reset_au(m, true, RESET_REORDER, reason);
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+    x4_stream_pipeline_rtp_gap(m->stream, sceKernelGetProcessTime());
+#endif
+}
+
+static void drain_adaptive(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin, bool allow_expire)
+{
+    for (unsigned n = 0; n < m->reorder.window && m->reorder.buffered && !m->video.error; ++n) {
+        if (atomic_load_explicit(&m->receive_epoch_hold, memory_order_seq_cst) ||
+            tick_budget(m, begin, decode_begin)) break;
+        const bool idle=allow_expire&&!x4_video_ingress_depth(&m->ingress);
+        adaptive_gap_abandon(m,idle?sceKernelGetProcessTime():0,false);
+        size_t size = 0;
+        uint32_t lost = 0;
+        X4IngressTicket ticket = {0};
+        const uint8_t *p = x4_live_reorder_next_video_ticket_limited(&m->reorder,
+            0, &size, &lost, NULL, false, x4_live_reorder_advance_bound(&m->reorder), &ticket);
+        if (!p) break;
+        consume_reordered(m, p, size, &ticket, false);
+    }
+}
+
 static void drain_reordered(X4LiveMedia *m, uint64_t begin, uint64_t decode_begin, bool allow_expire)
 {
+    if (m->adaptive_reorder_tickets) {
+        drain_adaptive(m,begin,decode_begin,allow_expire);
+        return;
+    }
     for (unsigned n = 0; n < 128 && !m->video.error; ++n) {
-        if (tick_budget(m, begin, decode_begin)) break;
+        if (atomic_load_explicit(&m->receive_epoch_hold,memory_order_seq_cst)||tick_budget(m, begin, decode_begin)) break;
         size_t size = 0; uint32_t lost = 0;
         unsigned reason = 0;
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
@@ -1230,8 +1394,34 @@ static void retire_video_counters(X4LiveMedia *m)
 #undef MAXIMUM
 }
 #endif
+#if X4_RECOVERY43_MEDIA
+static void adaptive_reorder_report(X4LiveMedia *m, bool final)
+{
+    if (!m->adaptive_reorder_tickets) return;
+    uint64_t now = sceKernelGetProcessTime();
+    if (!final && !m->adaptive_report_us) { m->adaptive_report_us = now; return; }
+    if (!final && now - m->adaptive_report_us < UINT64_C(10000000)) return;
+    m->adaptive_report_us = now;
+    printf("XCloud4: reorden43b final=%u plazas=%u pico=%u capacidad=%llu plazo=%llu "
+           "completados=%llu fuera_de_rango=%llu retornos_observados=%llu retornos_tardios=%llu\n",
+        final ? 1u : 0u, m->reorder.window, m->reorder_peak_packets,
+        (unsigned long long)m->adaptive_capacity, (unsigned long long)m->adaptive_deadline,
+        (unsigned long long)m->adaptive_completed, (unsigned long long)m->adaptive_oversized,
+        (unsigned long long)m->adaptive_returns, (unsigned long long)m->adaptive_late_returns);
+}
+#endif
 static void prepare_worker_view(X4LiveMedia *m, X4LiveMediaSnapshot *out)
 {
+#if X4_RECOVERY43_MEDIA
+    adaptive_reorder_report(m, false);
+    /* Deltas of existing worker-owned totals; no packet-path registry lookup.
+     * PLI is recorded by its actual transport caller, never overwritten here. */
+    x4_recovery43_note_media(atomic_load_explicit(&m->grace_inbox.epoch,memory_order_acquire),
+        m->recovery43_incomplete-m->recovery43_reported_incomplete,
+        m->dropped_frames-m->recovery43_reported_discarded,0,0);
+    m->recovery43_reported_incomplete=m->recovery43_incomplete;
+    m->recovery43_reported_discarded=m->dropped_frames;
+#endif
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     X4StreamPipelineSnapshot stream=m->stream_worker_shadow;
     if(x4_stream_pipeline_try_snapshot(m->stream,&stream))m->stream_worker_shadow=stream;
@@ -1545,7 +1735,7 @@ static void video_batch(X4LiveMedia *m)
     if (m->video.error) goto finish;
     uint8_t packet[X4_LIVE_RTP_MAX];
     for (unsigned n = 0; n < 512; ++n) {
-        if (tick_budget(m, begin, decode_begin)) break;
+        if (atomic_load_explicit(&m->receive_epoch_hold,memory_order_seq_cst)||tick_budget(m, begin, decode_begin)) break;
         uint64_t arrival = 0;
         uint64_t pop_before = atomic_load_explicit(&m->ingress.pop_contended, memory_order_relaxed);
         X4IngressTicket ticket = {0};
@@ -1588,6 +1778,9 @@ static void video_batch(X4LiveMedia *m)
         }
         if (track == X4_LIVE_TRACK_NEW) {
             memset(m->reorder_tickets, 0, sizeof(m->reorder_tickets));
+#if X4_RECOVERY43_MEDIA
+            m->adaptive_holding = false;
+#endif
             x4_trace_record(m->trace, MT_TRACK, locked ? 1u : 0u, ++m->trace_track_epoch, r.sequence);
             reset_au(m, true, RESET_TRACK, locked ? 1u : 0u); x4_live_reorder_reset(&m->reorder); m->sps_size = m->pps_size = 0;
             /* Session/Track owner establish the expected source and transport.
@@ -1608,16 +1801,21 @@ static void video_batch(X4LiveMedia *m)
 #endif
             }
         }
-        grace_controls(m);
-        if(m->reorder.started&&m->grace.active_count)
-            (void)grace_query(m,0,false);
+        const bool adaptive = m->adaptive_reorder_tickets != NULL;
+        if (!adaptive) {
+            grace_controls(m);
+            if(m->reorder.started&&m->grace.active_count)
+                (void)grace_query(m,0,false);
+        }
         /* Deadline fallback precedes accepting a delayed queued
          * return, even if the work budget has just elapsed. This bounded
          * advance performs no Decode/emit and cannot prolong grace to the
          * callback-to-worker delay. Physical pressure is decided only by an
          * actual failed admission; an expected packet can unlock a full
          * sparse store using its existing ingress-pop buffer. */
-        grace_abandon_before_insert(m);
+        const uint64_t noticed_us=arrival&&arrival<=popped?arrival:popped;
+        if (adaptive) adaptive_gap_abandon(m,noticed_us,false);
+        else grace_abandon_before_insert(m);
         uint16_t expected = m->reorder.expected, buffered = m->reorder.buffered;
         /* A duplicate means the same complete wire sequence, not a collision
          * between low seven bits. All decisions are worker-owned. */
@@ -1629,7 +1827,37 @@ static void video_batch(X4LiveMedia *m)
                 nack_reject = 2u;
         }
         uint64_t stored_us=sceKernelGetProcessTime();
-        int rc = x4_live_reorder_insert_ticket(&m->reorder,packet,size,r.sequence,stored_us,&ticket);
+        int rc;
+        if (adaptive) {
+#if defined(X4_OPENORBIS)
+            unsigned grace_ms = m->grace43c ?
+                (x4_rtc_diag_startup_active(noticed_us) ?
+                    X4_NACK_STARTUP_GRACE_MS : m->grace46b ?
+                    x4_rtc_diag_video_grace46b_ms() : x4_rtc_diag_video_grace43c_ms()) :
+                x4_rtc_diag_video_grace_ms();
+#else
+            unsigned grace_ms = 60;
+#endif
+            rc = x4_live_reorder_insert_video_ticket(&m->reorder, packet, size,
+                r.sequence, noticed_us, &ticket, grace_ms);
+#if X4_RECOVERY43_MEDIA
+            if (rc == X4_LIVE_REORDER_JUMP) m->adaptive_holding = false;
+            if (ticket.identity) {
+                ++m->adaptive_returns;
+                if (rc == X4_LIVE_REORDER_LATE) ++m->adaptive_late_returns;
+            }
+#endif
+        } else {
+            rc = x4_live_reorder_insert_ticket(&m->reorder, packet, size, r.sequence, stored_us, &ticket);
+        }
+#if X4_RECOVERY43_MEDIA
+        /* Observe the real admission result, not the repair cache's TTL.
+         * The immutable packet epoch prevents attribution to a newer peer. */
+        if(ticket.sequence.transport_epoch &&
+            (rc==X4_LIVE_REORDER_LATE || rc==X4_LIVE_REORDER_DUPLICATE))
+            x4_recovery43_delivery(ticket.sequence.transport_epoch,r.sequence,r.timestamp,
+                rc==X4_LIVE_REORDER_LATE?X4_RECOVERY43_DELIVERY_LATE:X4_RECOVERY43_DELIVERY_DUPLICATE);
+#endif
         if(rc>=0&&(unsigned)rc<sizeof(m->reorder_admission)/sizeof(m->reorder_admission[0]))
             ++m->reorder_admission[rc];
         if(m->reorder.buffered>m->reorder_peak_packets) m->reorder_peak_packets=m->reorder.buffered;
@@ -1639,16 +1867,19 @@ static void video_batch(X4LiveMedia *m)
             /* The attempted new packet was not stored. Preserve every
              * resident payload/ticket, end the obstructing hold explicitly,
              * and apply the existing AU recovery before draining. */
-            (void)grace_query(m,0,true);
-            grace_abandon_before_insert(m);
+            if (adaptive) adaptive_gap_abandon(m, stored_us, true);
+            else {
+                (void)grace_query(m,0,true);
+                grace_abandon_before_insert(m);
+            }
         }
-        if(rc!=X4_LIVE_REORDER_STORED && ticket.sequence.sequence_epoch &&
+        if(!adaptive && rc!=X4_LIVE_REORDER_STORED && ticket.sequence.sequence_epoch &&
             ticket.extended_sequence==ticket.sequence.anchor_extended &&
             r.timestamp==ticket.sequence.anchor_rtp_timestamp)
             grace_binding_reject(m,X4_BINDING_UNPROVEN|(ticket.sequence.reason<<8),ticket.sequence.sequence_epoch,
                 ((uint64_t)ticket.sequence.transport_epoch<<32)|ticket.sequence.sequence_epoch,
                 ticket.source,ticket.sequence.anchor_extended,rc,m->grace_binding.committed.sequence_epoch);
-        if(rc==X4_LIVE_REORDER_JUMP) {
+        if(!adaptive && rc==X4_LIVE_REORDER_JUMP) {
             for(unsigned i=0;i<64;++i) if(m->grace.ranges[i].active)
                 grace_effects(m,x4_nack_grace_cancel(&m->grace,m->grace.ranges[i].identity,X4_GRACE_RELEASE_DISTANCE));
             m->grace_force_gap=false; m->grace_force_ranges=0;
@@ -1666,7 +1897,7 @@ static void video_batch(X4LiveMedia *m)
             grace_record(m,GR_WORKER_ACCEPT,rc,ticket.identity,ticket.source,
                 ticket.extended_sequence,((uint64_t)expected<<32)|buffered,deadline);
         }
-        if(rc==X4_LIVE_REORDER_STORED) {
+        if(!adaptive && rc==X4_LIVE_REORDER_STORED) {
             uint64_t canonical=0;
             int binding=x4_nack_binding_stored(&m->grace_binding,&ticket.sequence,ticket.source,
                 ticket.extended_sequence,r.sequence,r.timestamp,ticket.authenticated_us,
@@ -1693,6 +1924,9 @@ static void video_batch(X4LiveMedia *m)
                  * after rejection. Account this real local discard, never
                  * STORED/grace accepted/AU. Keep all128 residents intact. */
                 ++m->reorder_direct_budget_drops;
+#if X4_RECOVERY43_MEDIA
+                if (adaptive) m->adaptive_holding = false;
+#endif
                 atomic_fetch_add(&m->dropped,1); ++m->lost;
                 grace_record(m,GR_DIRECT_BUDGET_DROP,m->trace_budget_reason,
                     ticket.identity,ticket.source,ticket.extended_sequence,
@@ -1703,10 +1937,10 @@ static void video_batch(X4LiveMedia *m)
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
                 x4_stream_pipeline_rtp_gap(m->stream, sceKernelGetProcessTime());
 #endif
-                (void)grace_query(m,0,false); /* Passed, never grace acceptance. */
+                if (!adaptive) (void)grace_query(m,0,false); /* Passed, never grace acceptance. */
             } else {
                 uint64_t canonical=0;
-                if(grace_ticket_map(m,&ticket,&r,&canonical))
+                if(!adaptive && grace_ticket_map(m,&ticket,&r,&canonical))
                     grace_effects(m,x4_nack_grace_accepted_extended(&m->grace,r.ssrc,
                         ticket.sequence.sequence_epoch,canonical,x4_trace_now_us()));
                 consume_reordered(m,packet,size,&ticket,true);
@@ -1931,6 +2165,78 @@ static void *probe_video_worker(void *context)
 static unsigned ingress_wait_timeout(const X4LiveMedia *m)
 {return (X4_NACK_GRACE_MS||m->reorder.buffered||m->grace.active_count)?1000u:20000u;}
 #endif
+/* Video owner only. Peer close plus the callback gate establish producer
+ * quiescence. This is also the sole ingress consumer; native leases survive. */
+static void receive_epoch_service(X4LiveMedia *m)
+{
+    uint64_t requested=atomic_load_explicit(&m->receive_epoch_requested,memory_order_acquire);
+    if(requested==atomic_load_explicit(&m->receive_epoch_applied,memory_order_relaxed))return;
+    int rc=0;
+    if(!x4_video_ingress_quiesce_reset(&m->ingress,false))rc=X4_LIVE_ERR_STATE;
+    if(!rc){
+        if(m->track.locked)atomic_store_explicit(&m->retired_video_source,
+            (UINT64_C(1)<<63)|m->track.ssrc,memory_order_release);
+        reset_au(m,true,RESET_INGRESS,0);
+        m->discard_timestamp_valid=false;m->sps_size=m->pps_size=0;
+        x4_live_track_init(&m->track,-1);x4_live_reorder_reset(&m->reorder);
+#if X4_RECOVERY43_MEDIA
+        m->adaptive_holding = false;
+#endif
+        memset(m->reorder_tickets,0,sizeof(m->reorder_tickets));
+        grace_effects(m,x4_nack_grace_unbind_source(&m->grace));
+        /* Request ordinals are local to the new peer. Preserve cumulative
+         * counters, not old ordinal identities, ranges or sequence bindings. */
+        X4NackGraceCounters grace_counters=m->grace.counters;
+        x4_nack_grace_init(&m->grace,m->trace_session,X4_NACK_GRACE_MS==45);
+        m->grace.counters=grace_counters;
+        memset(m->grace_decode_start,0,sizeof(m->grace_decode_start));
+        memset(m->grace_copy_start,0,sizeof(m->grace_copy_start));
+        memset(m->grace_convert_start,0,sizeof(m->grace_convert_start));
+        m->grace_force_ranges=0;
+        x4_nack_binding_init(&m->grace_binding,0,0);m->binding_reject_valid=false;
+        X4NackGraceControl discarded;
+        while(x4_nack_grace_inbox_pop(&m->grace_inbox,&discarded)){}
+        m->grace_force_gap=false;m->grace_hold_logged=0;m->stall_tracking=false;
+        atomic_store_explicit(&m->ingress_gap,false,memory_order_relaxed);
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+        rc=x4_stream_pipeline_begin_receive_epoch(m->stream);
+        x4_keyframe_limiter_request(&m->keyframe_limiter,X4_KEYFRAME_ASSEMBLY);
+#endif
+        if(!rc)atomic_store_explicit(&m->ingress.accepting,true,memory_order_release);
+    }
+    atomic_store_explicit(&m->receive_epoch_result,rc,memory_order_relaxed);
+    atomic_store_explicit(&m->receive_epoch_applied,requested,memory_order_release);
+}
+
+int x4_live_media_begin_epoch(X4LiveMedia *m)
+{
+    if(!m||!atomic_load_explicit(&m->started,memory_order_acquire)||atomic_load(&m->stop))
+        return X4_LIVE_ERR_STATE;
+#if X4_VIDEO_PROBE
+    if(m->local_probe)return X4_LIVE_ERR_STATE;
+#endif
+    if(atomic_exchange_explicit(&m->receive_epoch_hold,true,memory_order_seq_cst))return X4_LIVE_ERR_STATE;
+    uint64_t began=sceKernelGetProcessTime();
+    while(atomic_load_explicit(&m->receive_epoch_callbacks,memory_order_seq_cst)){
+        if(atomic_load(&m->stop)||sceKernelGetProcessTime()-began>=500000)return X4_LIVE_ERR_STATE;
+        sceKernelUsleep(500);
+    }
+    uint64_t requested=atomic_fetch_add_explicit(&m->receive_epoch_requested,1,memory_order_acq_rel)+1;
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+    (void)x4_stream_wait_notify(&m->ingress_wait);
+#endif
+    while(atomic_load_explicit(&m->receive_epoch_applied,memory_order_acquire)!=requested){
+        if(atomic_load(&m->stop)||sceKernelGetProcessTime()-began>=500000)return X4_LIVE_ERR_STATE;
+        sceKernelUsleep(500);
+    }
+    int rc=atomic_load_explicit(&m->receive_epoch_result,memory_order_relaxed);
+    if(!rc)rc=x4_live_audio_begin_epoch(m->audio);
+    if(!rc)atomic_store_explicit(&m->receive_epoch_hold,false,memory_order_seq_cst);
+    printf("XCloud4: media receive epoch=%llu rc=%d old_packets_rejected=%llu\n",
+        (unsigned long long)requested,rc,(unsigned long long)atomic_load(&m->receive_epoch_rejected));
+    return rc;
+}
+
 static void *video_worker(void *context)
 {
     X4LiveMedia *m = context;
@@ -1964,6 +2270,7 @@ static void *video_worker(void *context)
         RGB_SLOTS, WORKER_BUDGET_US, WORKER_DECODE_LIMIT);
 #endif
     while (rc >= 0 && !atomic_load(&m->stop)) {
+        receive_epoch_service(m);
         x4_trace_poll(m->trace);
         reset_worker_maxima(m);
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
@@ -1984,6 +2291,9 @@ static void *video_worker(void *context)
                         x4_stream_pipeline_note_ingress_stall_recovery(m->stream);
                         reset_au(m, true, RESET_INGRESS, 0);
                         x4_live_reorder_reset(&m->reorder);
+#if X4_RECOVERY43_MEDIA
+                        m->adaptive_holding = false;
+#endif
                         m->sps_size = m->pps_size = 0;
                         x4_keyframe_limiter_request(&m->keyframe_limiter, X4_KEYFRAME_ASSEMBLY);
                         m->stall_tracking = false;
@@ -2033,6 +2343,9 @@ static void *video_worker(void *context)
     }
     m->diagnostic_worker_phase = X4_MON_PHASE_STOPPING;
     grace_controls(m);
+#if X4_RECOVERY43_MEDIA
+    adaptive_reorder_report(m, true);
+#endif
     grace_effects(m,x4_nack_grace_close_reason(&m->grace,X4_GRACE_RELEASE_CLOSE));
     const uint64_t grace_counters[]={atomic_load(&m->grace_inbox.admitted),
         atomic_load(&m->grace_inbox.omitted),atomic_load(&m->grace_inbox.stale),
@@ -2058,7 +2371,7 @@ static void *video_worker(void *context)
      * earlier counters. These facts are storage/admission, not decoded video. */
     grace_record(m,GR_COUNTER,0,0,0,129,m->grace.counters.distance_ranges,0);
     grace_record(m,GR_COUNTER,0,0,0,130,m->reorder_peak_packets,m->reorder.window);
-    grace_record(m,GR_COUNTER,0,0,0,131,m->reorder_peak_bytes,X4_LIVE_VIDEO_REORDER_BYTE_LIMIT);
+    grace_record(m,GR_COUNTER,0,0,0,131,m->reorder_peak_bytes,(uint64_t)m->reorder.window * X4_LIVE_RTP_MAX);
     grace_record(m,GR_COUNTER,0,0,0,132,m->reorder.max_forward,m->reorder.discontinuity_rebases);
     grace_record(m,GR_COUNTER,0,0,0,133,m->reorder.direct_packets,0);
     for(unsigned i=0;i<sizeof(m->reorder_admission)/sizeof(m->reorder_admission[0]);++i)
@@ -2124,9 +2437,42 @@ int x4_live_media_stream_present(X4LiveMedia *m,
     void (*overlay)(uint32_t *, void *), void *context)
 {
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
-    return m ? x4_stream_pipeline_present(m->stream, overlay, context) : X4_LIVE_ERR_ARGUMENT;
+    if(!m)return X4_LIVE_ERR_ARGUMENT;
+    int rc=x4_stream_pipeline_present(m->stream,overlay,context);
+#if X4_RECOVERY43_MEDIA || defined(X4_OPENORBIS)
+    X4StreamPipelineSnapshot observed;
+    if ((!m->startup_seen || X4_RECOVERY43_MEDIA) &&
+        x4_stream_pipeline_try_snapshot(m->stream, &observed) && observed.presentations) {
+#if defined(X4_OPENORBIS)
+        if (!m->startup_seen) {
+            m->startup_seen = true;
+            x4_rtc_diag_video_presented(sceKernelGetProcessTime());
+        }
+#endif
+#if X4_RECOVERY43_MEDIA
+        if (observed.presentations == m->recovery43_last_presentations) return rc;
+        uint64_t now=sceKernelGetProcessTime();
+        /* Main observation time, not VideoOut hardware ptime. A missed
+         * try-snapshot can coarsen this interval; it never delays a flip. */
+        if(m->recovery43_last_observed_us && now>m->recovery43_last_observed_us &&
+            now-m->recovery43_last_observed_us>100000)
+            x4_recovery43_note_media(atomic_load_explicit(&m->grace_inbox.epoch,memory_order_acquire),0,0,0,1);
+        m->recovery43_last_presentations=observed.presentations;
+        m->recovery43_last_observed_us=now;
+#endif
+    }
+#endif
+    return rc;
 #else
     (void)m; (void)overlay; (void)context; return X4_LIVE_ERR_STATE;
+#endif
+}
+int x4_live_media_stream_redraw_notice(X4LiveMedia *m,void (*overlay)(uint32_t *,void *),void *context)
+{
+#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+    return m?x4_stream_pipeline_redraw_notice(m->stream,overlay,context):X4_LIVE_ERR_ARGUMENT;
+#else
+    (void)m;(void)overlay;(void)context;return X4_LIVE_ERR_STATE;
 #endif
 }
 void x4_live_media_stream_note_menu_open(X4LiveMedia *m,bool open)
@@ -2304,6 +2650,7 @@ void x4_live_media_snapshot(const X4LiveMedia *m, X4LiveMediaSnapshot *s)
 #endif
         x4_live_audio_snapshot(m->audio, &a);
     s->video_packets = atomic_load(&m->packets); s->video_dropped_packets = atomic_load(&m->dropped);
+    s->video_bytes = atomic_load(&m->video_bytes); s->audio_bytes = a.bytes;
     s->audio_packets = a.packets; s->audio_frames = a.frames; s->audio_dropped_packets = a.dropped;
     s->audio_lost_packets = a.lost; s->audio_dropped_frames = a.bad_frames; s->audio_underflows = a.underflows;
     s->dropped = s->video_dropped_packets + s->video_lost_packets + s->video_dropped_frames + a.dropped + a.lost + a.bad_frames;
@@ -2537,5 +2884,5 @@ int x4_live_media_close(X4LiveMedia *m)
     }
 #endif
     for (unsigned i = 0; i < RGB_SLOTS; ++i) free(m->rgb[i].pixels);
-    x4_live_reorder_free(&m->reorder); free(m->au); free(m); return 0;
+    x4_live_reorder_free(&m->reorder); free(m->adaptive_reorder_tickets); free(m->au); free(m); return 0;
 }

@@ -303,7 +303,7 @@ def parse(data):
             raise ValueError('Unsupported layout at header word %d' % index)
     if any(h[i] > cap for i, cap in CAPS.items()):
         raise ValueError('Header count exceeds capacity')
-    if h[8] not in (1, 2, 4):
+    if h[8] not in (0, 1, 2, 4):
         raise ValueError('Invalid configured reader count')
     if not h[32] & 4 or signed(h[7]) < 0 or (h[32] & 1 and not h[32] & 2):
         raise ValueError('Trace not ended and joined/quiescent')

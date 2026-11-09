@@ -21,7 +21,7 @@ cleanup() {
 trap cleanup EXIT
 cp -- "$repo_dir/src/streaming/rtc_receive_diag.h" "$build_dir/x4_rtc_receive_diag.h"
 common=(-std=c++17 -O1 -g -Wall -Wextra -Werror -pthread \
-    -DX4_OPENORBIS -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -ffunction-sections -fdata-sections \
+    -DX4_OPENORBIS -DX4_RECOVERY43=0 -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -ffunction-sections -fdata-sections \
     -I"$build_dir" -I"$repo_dir/src/streaming" -I"$vendor_dir/include" \
     -I"$vendor_dir/include/rtc" -I"$vendor_dir/src" -I"$plog_include" \
     "$repo_dir/tests/receiver_nack_wire_test.cpp" \

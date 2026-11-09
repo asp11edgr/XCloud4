@@ -2,6 +2,7 @@
 #include "loading_screen.h"
 #include "apple_ui.h"
 #include "font.h"
+#include "ui2_theme.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,12 +33,18 @@
 #define HIST_BINS 256
 #define HIST_STEP 25ULL
 
+enum LoadingRegion { REGION_STAGE, REGION_STEPS, REGION_PROGRESS, REGION_NOTICE, REGION_COUNT };
+static const struct { int y,height; } regions[REGION_COUNT] = {
+    [REGION_STAGE]={624,74}, [REGION_STEPS]={710,110},
+    [REGION_PROGRESS]={832,46}, [REGION_NOTICE]={882,28}
+};
+
 static struct {
     uint32_t *backdrop,*frame,*base_zone;
     uint32_t quarter[QW*QH],blur[QW*QH];
     uint32_t *destinations[4];
     unsigned destination_generation[4],generation;
-    unsigned destination_static_generation[4],static_generation;
+    unsigned destination_region_generation[4][REGION_COUNT],region_generation[REGION_COUNT];
     unsigned destination_fade_rank[4];
     bool destination_fade_seeded[4];
     uint64_t begin_us,wait_us,first_us,animation_tick;
@@ -45,7 +52,7 @@ static struct {
     uint64_t frame_hist[HIST_BINS],frame_total_us,pending_static_us;
     uint64_t fade_hist[HIST_BINS],fade_total_us;
     unsigned visual_percent,visual_seconds,visual_queue_seconds,visual_eta_seconds;
-    bool visual_queue,visual_eta;
+    bool visual_queue,visual_eta,visual_delayed;
     enum X4LoadingStage visual_stage;
     enum X4Lang language;
     char title[128];
@@ -79,8 +86,6 @@ static uint64_t clock_us(void)
     return (uint64_t)t.tv_sec*1000000ULL+(uint64_t)t.tv_nsec/1000ULL;
 #endif
 }
-static const char *tr(const char *es,const char *en)
-{return loading.language==X4_LANG_EN?en:es;}
 static void record_render(uint64_t elapsed,bool fade)
 {
     unsigned b=(unsigned)(elapsed/HIST_STEP);
@@ -134,12 +139,12 @@ static void copy_region(uint32_t *dst,const uint32_t *src,int x,int y,int w,int 
     for(int row=y;row<y+h;++row)
         memcpy(dst+(size_t)row*WIDTH+x,src+(size_t)row*WIDTH+x,(size_t)w*4);
 }
-static uint32_t dim_rgb(unsigned r,unsigned g,unsigned b,int y)
+enum { BACKDROP_DIM = 61 };
+
+static uint32_t dim_rgb(unsigned r,unsigned g,unsigned b)
 {
-    /* Dark translucent appearance is baked into normal memory once; output
-     * is fully opaque. Keep the game recognizable without competing text. */
-    unsigned factor=(unsigned)(y<68?77:61);
-    return X4_RGB(r*factor/255,g*factor/255,b*factor/255);
+    /* Bake one opacity over the entire blurred image before caching it. */
+    return X4_RGB(r*BACKDROP_DIM/255,g*BACKDROP_DIM/255,b*BACKDROP_DIM/255);
 }
 static bool valid_game(const X4CoverRaster *r)
 {
@@ -167,170 +172,248 @@ static void prepare_backdrop(const X4CoverRaster *game)
             unsigned rr=0,gg=0,bb=0;
             for(int k=-6;k<=6;++k){int yy=y+k;if(yy<0)yy=0;if(yy>=QH)yy=QH-1;
                 uint32_t c=loading.blur[(size_t)yy*QW+x];rr+=c&255;gg+=(c>>8)&255;bb+=(c>>16)&255;}
-            loading.quarter[(size_t)y*QW+x]=dim_rgb(rr/13,gg/13,bb/13,y);
+            loading.quarter[(size_t)y*QW+x]=dim_rgb(rr/13,gg/13,bb/13);
         }
         for(unsigned y=0;y<HEIGHT;++y)for(unsigned x=0;x<WIDTH;++x)
             loading.backdrop[(size_t)y*WIDTH+x]=loading.quarter[(size_t)(y/8)*QW+x/8];
     }else x4_apple_bg_draw(loading.backdrop);
     /* All backing text is cached; no public game logo or Xbox artwork. */
-    x4_apple_draw_brand_logo(loading.backdrop,76,48);
-    x4_text_px(loading.backdrop,76,1000,19,X4_FONT_REGULAR,
-        tr("Preparando una conexión segura con tu partida","Preparing a secure connection to your game"),X4_RGB(155,168,190));
+    (void)x4_ui2_brand(loading.backdrop,X4_UI_SAFE_LEFT,55,32);
     ++loading.view.background_preparations;
 }
+static void centered_text_at(uint32_t *p,int center,int y,int size,int weight,
+    const char *text,int max_width,uint32_t color)
+{
+    char fit[256];
+    x4_text_fit_utf8(fit,sizeof(fit),size,weight,text,max_width);
+    int width=x4_text_width_px(size,weight,fit);
+    x4_text_px(p,center-width/2,y,size,weight,fit,color);
+}
+
 static void centered_text(uint32_t *p,int y,int size,int weight,const char *text,uint32_t color)
 {
-    char fit[256];x4_text_fit_utf8(fit,sizeof(fit),size,weight,text,820);
-    int width=x4_text_width_px(size,weight,fit);
-    x4_text_px(p,(WIDTH-width)/2,y,size,weight,fit,color);
+    centered_text_at(p,WIDTH/2,y,size,weight,text,820,color);
 }
+
+enum X4LoadingStep x4_loading_screen_step(enum X4LoadingStage stage)
+{
+    switch(stage){
+    case X4_LOADING_REQUEST:return X4_LOADING_STEP_SESSION;
+    case X4_LOADING_RESOURCES:
+    case X4_LOADING_AUTHORIZE:return X4_LOADING_STEP_SERVER;
+    case X4_LOADING_CONNECT:
+    case X4_LOADING_CONNECTED:return X4_LOADING_STEP_OPTIMIZE;
+    case X4_LOADING_FIRST_PICTURE:return X4_LOADING_STEP_READY;
+    case X4_LOADING_COMPLETE:return X4_LOADING_STEPS;
+    default:return X4_LOADING_STEP_INVALID;
+    }
+}
+
 static const char *stage_text(char out[160])
 {
-    if(loading.view.waiting_for_resources){
-        snprintf(out,160,tr("Los servidores de Xbox están llenos. Estás en la fila… %u:%02u",
-            "Xbox servers are busy. You're in line… %u:%02u"),
-            loading.view.queue_elapsed_seconds/60,loading.view.queue_elapsed_seconds%60);
-        return out;
-    }
     switch(loading.view.stage){
-    case X4_LOADING_REQUEST:return tr("Solicitando sesión…","Requesting session…");
-    case X4_LOADING_RESOURCES:return tr("Xbox está preparando tu partida…","Xbox is preparing your session…");
-    case X4_LOADING_AUTHORIZE:return tr("Autorizando la conexión…","Authorizing the connection…");
-    case X4_LOADING_CONNECT:return tr("Conectando…","Connecting…");
-    case X4_LOADING_CONNECTED:return tr("Conexión establecida…","Connection established…");
-    case X4_LOADING_COMPLETE:return tr("Todo listo","Ready to play");
+    case X4_LOADING_REQUEST:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_REQUEST);
+    case X4_LOADING_RESOURCES:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_WAIT_RESOURCES);
+    case X4_LOADING_AUTHORIZE:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_AUTHORIZE);
+    case X4_LOADING_CONNECT:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_CONNECT);
+    case X4_LOADING_CONNECTED:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_CONNECTED);
+    case X4_LOADING_COMPLETE:return x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_READY);
     default:
-        snprintf(out,160,tr("Xbox está preparando el juego… %u s","Xbox is preparing the game… %u s"),loading.view.waiting_seconds);
+        snprintf(out,160,x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_SESSION_PREPARING_FMT),loading.view.waiting_seconds);
         return out;
     }
 }
-static int rocket_edge(int ax,int ay,int bx,int by,int px,int py)
-{return (px-ax)*(by-ay)-(py-ay)*(bx-ax);}
-static int rocket_round(float value)
-{return (int)(value+(value>=0.0f?0.5f:-0.5f));}
-static void rocket_triangle(int ax,int ay,int bx,int by,int cx,int cy,uint32_t color)
+/* The ring stencil is independent of the backdrop. Rasterize its annular
+ * sectors once, then animate with sparse stores inside the existing zone. */
+enum { RING_SEGMENTS=32, RING_OUTER=72, RING_INNER=64,
+    RING_SECTOR_CAP=160, RING_CX=WIDTH/2, RING_CY=390 };
+_Static_assert(RING_CX-RING_OUTER>=AX&&RING_CX+RING_OUTER<AX+AW&&
+    RING_CY-RING_OUTER>=AY&&RING_CY+RING_OUTER<AY+AH,
+    "Animated ring stays within the published damage region");
+static uint32_t ring_offsets[RING_SEGMENTS][RING_SECTOR_CAP];
+static uint16_t ring_counts[RING_SEGMENTS];
+static bool ring_ready;
+
+static void prepare_ring(void)
 {
-    int left=ax<bx?ax:bx;if(cx<left)left=cx;
-    int right=ax>bx?ax:bx;if(cx>right)right=cx;
-    int top=ay<by?ay:by;if(cy<top)top=cy;
-    int bottom=ay>by?ay:by;if(cy>bottom)bottom=cy;
-    /* The motif lives entirely in the known dirty region. Clip these own
-     * geometric primitives too, rather than allowing a later stale edge. */
-    if(left<AX)left=AX;
-    if(right>=AX+AW)right=AX+AW-1;
-    if(top<AY)top=AY;
-    if(bottom>=AY+AH)bottom=AY+AH-1;
-    for(int y=top;y<=bottom;++y)for(int x=left;x<=right;++x){
-        int e0=rocket_edge(ax,ay,bx,by,x,y),e1=rocket_edge(bx,by,cx,cy,x,y),e2=rocket_edge(cx,cy,ax,ay,x,y);
-        if((e0>=0&&e1>=0&&e2>=0)||(e0<=0&&e1<=0&&e2<=0))loading.frame[(size_t)y*WIDTH+x]=color;
+    if(ring_ready)return;
+    for(int y=-RING_OUTER;y<=RING_OUTER;++y)for(int x=-RING_OUTER;x<=RING_OUTER;++x){
+        int r2=x*x+y*y;
+        if(r2<RING_INNER*RING_INNER||r2>RING_OUTER*RING_OUTER)continue;
+        float angle=atan2f((float)x,(float)-y);
+        unsigned sector=(unsigned)((angle+6.28318530718f)*RING_SEGMENTS/6.28318530718f)%RING_SEGMENTS;
+        unsigned n=ring_counts[sector];
+        if(n<RING_SECTOR_CAP){
+            ring_offsets[sector][n]=(uint32_t)((RING_CY+y)*WIDTH+RING_CX+x);
+            ring_counts[sector]=(uint16_t)(n+1);
+        }
+    }
+    ring_ready=true;
+}
+
+static void paint_ring(uint32_t *p,unsigned phase,unsigned count,uint32_t color)
+{
+    for(unsigned i=0;i<count;++i){
+        unsigned sector=(phase+i)%RING_SEGMENTS;
+        for(unsigned j=0;j<ring_counts[sector];++j)p[ring_offsets[sector][j]]=color;
     }
 }
+
 static void animation(unsigned phase)
 {
-    /* Original XCloud4 artwork: a small launch vehicle leaving its own
-     * white cloud. All shapes, motion and flame are procedural; there is
-     * no image, video, Microsoft or Xbox animation asset in this motif. */
-    const int x=WIDTH/2;
-    unsigned cycle=phase%54u; /* 54 frames at 30 Hz = 1.8 seconds. */
-    float a=(float)cycle*6.28318530718f/54.0f;
-    int bob=rocket_round(sinf(a)*10.0f);
-    int cloud_x=x+rocket_round(sinf(a+0.55f)*5.0f);
-    const uint32_t body=X4_RGB(232,237,245),fin=X4_RGB(154,168,190);
-    const uint32_t green=X4_RGB(61,220,151),white=X4_RGB(255,255,255);
-
-    /* Thin falling streaks stay behind the vehicle and inside 320x180. */
-    static const int streak_x[6]={814,842,870,1050,1078,1104};
-    for(unsigned i=0;i<6;++i){
-        int y=AY+6+(int)((cycle*156u/54u+i*26u)%156u);
-        int length=6+(int)(i%3u)*3;
-        if(y+length>AY+AH-2)length=AY+AH-2-y;
-        if(length>0)x4_apple_fill_round_rect(loading.frame,streak_x[i],y,2,length,1,
-            (i==1||i==4)?X4_RGBA(61,220,151,150):X4_RGBA(179,194,216,105));
-    }
-
-    /* Cloud circles overlap a rounded base; its only motion is a small
-     * horizontal drift, leaving ample space for the rocket's 10px bob. */
-    x4_apple_fill_round_rect(loading.frame,cloud_x-106,447,212,27,13,X4_RGB(232,240,249));
-    x4_apple_fill_round_rect(loading.frame,cloud_x-92,432,54,40,20,white);
-    x4_apple_fill_round_rect(loading.frame,cloud_x-54,419,65,54,27,white);
-    x4_apple_fill_round_rect(loading.frame,cloud_x-4,426,63,48,24,white);
-    x4_apple_fill_round_rect(loading.frame,cloud_x+44,438,53,35,17,white);
-    x4_apple_fill_round_rect(loading.frame,cloud_x-76,446,151,28,14,white);
-
-    int exhaust=409+bob;
-    int flicker=(int)(cycle%3u);
-    rocket_triangle(x-12,exhaust,x+12,exhaust,x+(flicker-1)*2,exhaust+26+flicker*4,X4_RGB(255,143,51));
-    rocket_triangle(x-7,exhaust,x+7,exhaust,x,exhaust+17+(int)(cycle%2u)*4,X4_RGB(255,221,96));
-    rocket_triangle(x-15,377+bob,x-41,420+bob,x-12,410+bob,fin);
-    rocket_triangle(x+15,377+bob,x+41,420+bob,x+12,410+bob,fin);
-    x4_apple_fill_round_rect(loading.frame,x-18,330+bob,36,80,17,body);
-    rocket_triangle(x,310+bob,x-18,345+bob,x+18,345+bob,body);
-    x4_apple_fill_round_rect(loading.frame,x-12,340+bob,5,49,2,X4_RGBA(255,255,255,185));
-    x4_apple_fill_round_rect(loading.frame,x-13,351+bob,26,26,13,green);
-    x4_apple_fill_round_rect(loading.frame,x-9,355+bob,18,18,9,X4_RGB(13,27,45));
-    x4_apple_fill_round_rect(loading.frame,x-6,357+bob,5,5,2,X4_RGBA(255,255,255,215));
-    x4_apple_fill_round_rect(loading.frame,x-4,391+bob,8,14,3,X4_RGB(199,211,228));
+    paint_ring(loading.frame,phase%RING_SEGMENTS,
+        loading.view.first_picture?RING_SEGMENTS:11,X4_UI2_ACCENT);
 }
+
 static void prepare_fixed(void)
 {
-    centered_text(loading.backdrop,510,42,X4_FONT_BOLD,"XCloud4/",X4_RGB(242,247,255));
-    centered_text(loading.backdrop,590,36,X4_FONT_SEMIBOLD,loading.title,X4_RGB(243,247,255));
-    x4_apple_fill_round_rect(loading.backdrop,620,710,680,18,9,X4_RGB(29,40,57));
-    const char *cancel=tr("Cancelar","Cancel");
-    int hint_width=40+x4_text_width_px(23,X4_FONT_REGULAR,cancel);
-    x4_apple_draw_footer_hint(loading.backdrop,(WIDTH-hint_width)/2,808,X4_PAD_CIRCLE,cancel);
+    const int cloud_height=48;
+    centered_text(loading.backdrop,242,64,X4_FONT_BOLD,loading.title,X4_UI2_TEXT);
+    x4_apple_outer_glow(loading.backdrop,RING_CX-74,RING_CY-74,148,148,74,10,
+        X4_RGBA(54,246,135,36));
+    x4_apple_fill_round_rect(loading.backdrop,RING_CX-60,RING_CY-60,120,120,60,
+        X4_RGBA(6,18,26,222));
+    paint_ring(loading.backdrop,0,RING_SEGMENTS,X4_UI2_BORDER);
+    x4_ui2_cloud(loading.backdrop,RING_CX-x4_ui2_cloud_width(cloud_height)/2,
+        RING_CY-cloud_height/2,cloud_height,X4_UI2_TEXT);
+    centered_text(loading.backdrop,510,44,X4_FONT_BOLD,
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_CONNECT_CLOUD),X4_UI2_TEXT);
+    centered_text(loading.backdrop,565,26,X4_FONT_REGULAR,
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_PREPARE),X4_UI2_TEXT);
+    x4_apple_fill_round_rect(loading.backdrop,620,840,680,6,3,X4_UI2_BORDER);
+    const char *cancel=x4_tr_for_lang(loading.language, X4_TR_AUTH_REMEMBER_WARNING_CANCEL);
+    int hint_width=38+x4_text_width_px(22,X4_FONT_REGULAR,cancel);
+    x4_apple_draw_footer_hint(loading.backdrop,(WIDTH-hint_width)/2,X4_UI_FOOTER_Y,X4_PAD_CIRCLE,cancel);
 }
-static void restore_dynamic(int y,int height)
+
+static void restore_dynamic(enum LoadingRegion region)
 {
-    for(int row=y;row<y+height;++row)
+    int y=regions[region].y, end=y+regions[region].height;
+    for(int row=y;row<end;++row)
         memcpy(loading.backdrop+(size_t)row*WIDTH+DX,
             loading.base_zone+(size_t)(row-DY)*DW,(size_t)DW*4);
 }
-static void copy_dynamic_regions(uint32_t *dst,const uint32_t *src)
+
+static void draw_stage(void)
 {
-    copy_region(dst,src,DX,640,DW,66);copy_region(dst,src,DX,700,DW,40);
-    copy_region(dst,src,DX,740,DW,48);copy_region(dst,src,DX,852,DW,50);
+    char label[192];
+    if(!loading.view.waiting_for_resources){
+        centered_text(loading.backdrop,648,26,X4_FONT_REGULAR,
+            stage_text(label),X4_UI2_MUTED);
+        return;
+    }
+    centered_text(loading.backdrop,627,28,X4_FONT_SEMIBOLD,
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_QUEUE),X4_UI2_TEXT);
+    if(loading.view.queue_eta_available)
+        snprintf(label,sizeof(label),x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_QUEUE_ETA_FMT),
+            loading.view.queue_elapsed_seconds/60,loading.view.queue_elapsed_seconds%60,
+            loading.view.queue_eta_seconds/60,loading.view.queue_eta_seconds%60);
+    else snprintf(label,sizeof(label),x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_QUEUE_TIME_FMT),
+        loading.view.queue_elapsed_seconds/60,loading.view.queue_elapsed_seconds%60);
+    centered_text(loading.backdrop,665,22,X4_FONT_REGULAR,label,X4_UI2_MUTED);
 }
+
+static void draw_check(uint32_t *p,int x,int y)
+{
+    for(int i=0;i<7;++i)x4_apple_fill_round_rect(p,x-9+i,y-1+i,4,4,2,X4_UI2_INK);
+    for(int i=0;i<13;++i)x4_apple_fill_round_rect(p,x-3+i,y+5-i,4,4,2,X4_UI2_INK);
+}
+
+static void draw_steps(enum X4LoadingStep current)
+{
+    const char *labels[X4_LOADING_STEPS]={
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_STEP_SESSION),
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_STEP_SERVER),
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_STEP_OPTIMIZE),
+        x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_STEP_READY)
+    };
+    enum { FIRST_X=622, STEP_X=225, Y=746, DIAMETER=38 };
+    uint32_t *p=loading.backdrop;
+    x4_apple_fill_round_rect(p,FIRST_X,Y-1,3*STEP_X,3,1,X4_UI2_BORDER);
+    if(current>X4_LOADING_STEP_SESSION){
+        int reached=current<X4_LOADING_STEPS?(int)current:X4_LOADING_STEPS-1;
+        x4_apple_fill_round_rect(p,FIRST_X,Y-1,reached*STEP_X,3,1,X4_UI2_ACCENT);
+    }
+    for(unsigned i=0;i<X4_LOADING_STEPS;++i){
+        int x=FIRST_X+(int)i*STEP_X;
+        bool done=i<(unsigned)current, active=i==(unsigned)current;
+        int left=x-DIAMETER/2,top=Y-DIAMETER/2;
+        x4_apple_fill_round_rect(p,left,top,DIAMETER,DIAMETER,DIAMETER/2,
+            done?X4_UI2_ACCENT:X4_UI2_BACKGROUND);
+        if(done)draw_check(p,x,Y);
+        else{
+            x4_apple_stroke_round_rect(p,left,top,DIAMETER,DIAMETER,DIAMETER/2,
+                active?3.0f:2.0f,active?X4_UI2_ACCENT:X4_UI2_BORDER);
+            char index[]={(char)('1'+i),'\0'};
+            centered_text_at(p,x,Y-12,20,X4_FONT_SEMIBOLD,index,DIAMETER,
+                active?X4_UI2_ACCENT:X4_UI2_MUTED);
+        }
+        centered_text_at(p,x,780,active?20:18,active?X4_FONT_SEMIBOLD:X4_FONT_REGULAR,
+            labels[i],246,active||done?X4_UI2_TEXT:X4_UI2_MUTED);
+    }
+}
+
+static void draw_progress(void)
+{
+    int filled=(int)(680u*loading.view.percent/100u);
+    if(filled>0)x4_apple_fill_round_rect(loading.backdrop,620,840,filled,6,
+        filled<6?filled/2:3,X4_UI2_ACCENT);
+    char percent[16];
+    snprintf(percent,sizeof(percent),"%u %%",loading.view.percent);
+    centered_text(loading.backdrop,852,20,X4_FONT_SEMIBOLD,percent,X4_UI2_TEXT);
+}
+
+static void draw_notice(void)
+{
+    if(loading.view.waiting_for_resources)
+        centered_text(loading.backdrop,885,18,X4_FONT_REGULAR,
+            x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_SESSION_QUEUE_CANCEL),
+            X4_UI2_MUTED);
+    else if(loading.view.delayed_notice)
+        centered_text(loading.backdrop,885,18,X4_FONT_REGULAR,
+            x4_tr_for_lang(loading.language, X4_TR_50_SCREEN_LOAD_CANCEL_ANYTIME),X4_UI2_MUTED);
+}
+
 static void prepare_static(void)
 {
     if(!loading.view.active||loading.view.stage==X4_LOADING_ERROR)return;
-    if(loading.static_ready&&loading.visual_percent==loading.view.percent&&loading.visual_seconds==loading.view.waiting_seconds&&loading.visual_stage==loading.view.stage&&loading.visual_queue==loading.view.waiting_for_resources&&loading.visual_queue_seconds==loading.view.queue_elapsed_seconds&&loading.visual_eta==loading.view.queue_eta_available&&loading.visual_eta_seconds==loading.view.queue_eta_seconds)return;
+    enum X4LoadingStep step=x4_loading_screen_step(loading.view.stage);
+    bool first=!loading.static_ready;
+    const bool update[REGION_COUNT]={
+        [REGION_STAGE]=first||loading.visual_stage!=loading.view.stage||
+            loading.visual_seconds!=loading.view.waiting_seconds||
+            loading.visual_queue!=loading.view.waiting_for_resources||
+            loading.visual_queue_seconds!=loading.view.queue_elapsed_seconds||
+            loading.visual_eta!=loading.view.queue_eta_available||
+            loading.visual_eta_seconds!=loading.view.queue_eta_seconds,
+        [REGION_STEPS]=first||step!=x4_loading_screen_step(loading.visual_stage),
+        [REGION_PROGRESS]=first||loading.visual_percent!=loading.view.percent,
+        [REGION_NOTICE]=first||loading.visual_queue!=loading.view.waiting_for_resources||
+            loading.visual_delayed!=loading.view.delayed_notice
+    };
+    if(!update[REGION_STAGE]&&!update[REGION_STEPS]&&!update[REGION_PROGRESS]&&!update[REGION_NOTICE])return;
     uint64_t before=clock_us();
-    /* The logo, title and Cancel footer are baked once. Only changing text
-     * and progress rectangles are restored; all blending stays in RAM. */
-    restore_dynamic(640,66);restore_dynamic(700,40);
-    restore_dynamic(740,48);restore_dynamic(852,50);
-    char label[192];
-    if(loading.view.waiting_for_resources){
-        centered_text(loading.backdrop,641,25,X4_FONT_REGULAR,
-            tr("Los servidores de Xbox están llenos. Estás en la fila…","Xbox servers are busy. You're in line…"),X4_RGB(205,215,231));
-        if(loading.view.queue_eta_available)
-            snprintf(label,sizeof(label),tr("Tiempo en fila: %u:%02u · Estimación: %u:%02u (orientativa)",
-                "Time in line: %u:%02u · Estimate: %u:%02u (approximate)"),
-                loading.view.queue_elapsed_seconds/60,loading.view.queue_elapsed_seconds%60,
-                loading.view.queue_eta_seconds/60,loading.view.queue_eta_seconds%60);
-        else snprintf(label,sizeof(label),tr("Tiempo en fila: %u:%02u","Time in line: %u:%02u"),
-            loading.view.queue_elapsed_seconds/60,loading.view.queue_elapsed_seconds%60);
-        centered_text(loading.backdrop,674,21,X4_FONT_REGULAR,label,X4_RGB(161,177,198));
-    }else centered_text(loading.backdrop,651,25,X4_FONT_REGULAR,stage_text(label),X4_RGB(205,215,231));
-    int filled=(int)(680u*loading.view.percent/100u);
-    if(filled>0)x4_apple_fill_round_rect(loading.backdrop,620,710,filled,18,filled<18?filled/2:9,X4_RGB(37,214,139));
-    char pct[16];snprintf(pct,sizeof(pct),"%u %%",loading.view.percent);
-    centered_text(loading.backdrop,746,24,X4_FONT_SEMIBOLD,pct,X4_RGB(228,236,247));
-    if(loading.view.waiting_for_resources)centered_text(loading.backdrop,866,19,X4_FONT_REGULAR,
-        tr("Puedes esperar o cancelar con (círculo).","You can wait or cancel with (circle)."),X4_RGB(161,177,198));
-    else if(loading.view.delayed_notice)centered_text(loading.backdrop,866,19,X4_FONT_REGULAR,
-        tr("Xbox está preparando el juego. Puedes cancelar cuando quieras.","Xbox is preparing the game. You can cancel at any time."),X4_RGB(161,177,198));
-    copy_dynamic_regions(loading.frame,loading.backdrop);++loading.static_generation;
+    for(unsigned i=0;i<REGION_COUNT;++i)if(update[i]){
+        restore_dynamic((enum LoadingRegion)i);
+        switch(i){
+        case REGION_STAGE:draw_stage();break;
+        case REGION_STEPS:draw_steps(step);break;
+        case REGION_PROGRESS:draw_progress();break;
+        case REGION_NOTICE:draw_notice();break;
+        }
+        copy_region(loading.frame,loading.backdrop,DX,regions[i].y,DW,regions[i].height);
+        ++loading.region_generation[i];
+    }
     loading.visual_percent=loading.view.percent;loading.visual_seconds=loading.view.waiting_seconds;
     loading.visual_stage=loading.view.stage;loading.visual_queue=loading.view.waiting_for_resources;
     loading.visual_queue_seconds=loading.view.queue_elapsed_seconds;
     loading.visual_eta=loading.view.queue_eta_available;loading.visual_eta_seconds=loading.view.queue_eta_seconds;
-    loading.static_ready=true;loading.dirty=true;
+    loading.visual_delayed=loading.view.delayed_notice;loading.static_ready=true;
     uint64_t elapsed=clock_us()-before;++loading.view.static_preparations;
     loading.pending_static_us+=elapsed;
     if(elapsed>loading.view.static_max_us)loading.view.static_max_us=elapsed;
 }
+
 static void render_frame(uint64_t now)
 {
     unsigned phase=(unsigned)((now>=loading.begin_us?now-loading.begin_us:0)/FRAME_US);
@@ -347,8 +430,8 @@ bool x4_loading_screen_begin(const char *title,const X4CoverRaster *game,uint64_
     if(!loading.backdrop||!loading.frame||!loading.base_zone){free(loading.backdrop);free(loading.frame);free(loading.base_zone);loading.backdrop=loading.frame=loading.base_zone=NULL;return false;}
     loading.language=x4_lang_current();loading.begin_us=now;
     loading.view.active=true;loading.view.stage=X4_LOADING_REQUEST;loading.view.percent=5;
-    snprintf(loading.title,sizeof(loading.title),"%s",title&&title[0]?title:tr("Tu próxima partida","Your next game"));
-    uint64_t before=clock_us();prepare_fade_map();prepare_backdrop(game);prepare_fixed();memcpy(loading.frame,loading.backdrop,PIXELS*4);
+    snprintf(loading.title,sizeof(loading.title),"%s",title&&title[0]?title:x4_tr_for_lang(loading.language, X4_TR_U49_HOME_NEXT_GAME));
+    uint64_t before=clock_us();prepare_fade_map();prepare_ring();prepare_backdrop(game);prepare_fixed();memcpy(loading.frame,loading.backdrop,PIXELS*4);
     for(int y=0;y<DH;++y)memcpy(loading.base_zone+(size_t)y*DW,loading.backdrop+(size_t)(DY+y)*WIDTH+DX,(size_t)DW*4);
     loading.view.background_us=clock_us()-before;prepare_static();loading.dirty=true;
     return true;
@@ -436,8 +519,7 @@ bool x4_loading_screen_draw(uint32_t *pixels,uint64_t now)
 {
     if(!pixels||!loading.view.active||loading.view.stage==X4_LOADING_ERROR)return false;
     uint64_t before=clock_us();
-    bool changed=loading.dirty||now/FRAME_US!=loading.animation_tick||loading.visual_percent!=loading.view.percent||
-        loading.visual_seconds!=loading.view.waiting_seconds||loading.visual_stage!=loading.view.stage;
+    bool changed=loading.dirty||now/FRAME_US!=loading.animation_tick;
     if(loading.view.first_picture){if(loading.dirty)render_frame(loading.first_us);}
     else if(changed)render_frame(now);
     unsigned slot=0;while(slot<4&&loading.destinations[slot]&&loading.destinations[slot]!=pixels)++slot;
@@ -461,17 +543,21 @@ bool x4_loading_screen_draw(uint32_t *pixels,uint64_t now)
         loading.destination_fade_rank[slot]=rank;
     }else{
         bool animate=fresh||loading.destination_generation[slot]!=loading.generation;
-        bool text=fresh||loading.destination_static_generation[slot]!=loading.static_generation;
+        bool text=false;
+        for(unsigned i=0;i<REGION_COUNT;++i)
+            text|=loading.destination_region_generation[slot][i]!=loading.region_generation[i];
         if(!animate&&!text)return false;
         if(fresh){loading.destinations[slot]=pixels;++loading.view.full_buffer_initializations;memcpy(pixels,loading.frame,PIXELS*4);}
         else{
-            if(text)copy_dynamic_regions(pixels,loading.frame);
+            for(unsigned i=0;i<REGION_COUNT;++i)
+                if(loading.destination_region_generation[slot][i]!=loading.region_generation[i])
+                    copy_region(pixels,loading.frame,DX,regions[i].y,DW,regions[i].height);
             if(animate)copy_region(pixels,loading.frame,AX,AY,AW,AH);
             ++loading.view.region_copies;
         }
     }
     loading.destination_generation[slot]=loading.generation;
-    loading.destination_static_generation[slot]=loading.static_generation;
+    memcpy(loading.destination_region_generation[slot],loading.region_generation,sizeof(loading.region_generation));
     record_render(clock_us()-before,loading.view.first_picture);return true;
 }
 void x4_loading_screen_snapshot(X4LoadingView *out){if(out)*out=loading.view;}

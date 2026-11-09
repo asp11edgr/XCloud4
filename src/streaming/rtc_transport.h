@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -28,6 +29,14 @@ typedef struct {
     /* Native send calls that succeeded, and superseded/error drops. These
      * do not acknowledge Xbox consumption of controller reports. */
     uint64_t input_packets, input_dropped;
+    /* Lifetime notices are data-channel notifications, not RTC failures.
+     * The first terminal notice is immutable; idle sequence changes once per
+     * accepted warning so the worker can log/display it exactly once. */
+    bool server_closed, server_hr_valid;
+    uint32_t server_hr;
+    char server_reason[41];
+    uint64_t server_idle_sequence;
+    unsigned server_idle_seconds;
 } X4RtcSnapshot;
 /* Called on a transport thread, with an authenticated/decrypted RTP packet.
  * The pointer is borrowed for this call only. Copy into a bounded queue;
@@ -36,6 +45,9 @@ typedef void (*X4RtcMediaCallback)(void *user, int kind, const uint8_t *rtp, siz
 X4Rtc *x4_rtc_open(int *error);
 /* Captures public request values by copy before any RTC callbacks run. */
 X4Rtc *x4_rtc_open_request(int *error, const X4StreamRequestConfig *);
+/* Same Xbox session, fresh peer. Call only after the prior close succeeds;
+ * preserves cumulative receive/reconnection diagnostics. */
+X4Rtc *x4_rtc_open_reconnect_request(int *error, const X4StreamRequestConfig *);
 void x4_rtc_set_media_callback(X4Rtc *, X4RtcMediaCallback, void *user);
 /* Session owner only, before dispatch starts. Trace outlives joined RTC. */
 void x4_rtc_set_diagnostic_trace(X4Rtc *, X4Trace *);
@@ -76,6 +88,10 @@ int x4_rtc_request_keyframe(X4Rtc *);
 /* A join error retains the complete RTC/provider context. The owner must
  * keep it alive and retry; no callback/channel/context is freed on error. */
 int x4_rtc_close(X4Rtc *);
+/* Same close, with a final snapshot only after all callbacks have joined.
+ * On nonzero return, context is retained and output is not final. This keeps
+ * a late server terminal notice from being lost when replacing a peer. */
+int x4_rtc_close_snapshot(X4Rtc *, X4RtcSnapshot *final);
 #ifdef __cplusplus
 }
 #endif

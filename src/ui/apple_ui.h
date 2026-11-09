@@ -6,12 +6,22 @@
 #include "lang.h"
 #include "product_metadata.h"
 #include "tabler_icons_atlas.h"
+#include "ui_surface.h"
 
 #define X4_RGBA(r, g, b, a) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
 #define X4_RGB(r, g, b) X4_RGBA((r), (g), (b), 0xffu)
 
 #define X4_ICON_NONE ((enum X4TablerIconId)-1)
+
+enum { X4_UI_SAFE_LEFT = 84, X4_UI_SAFE_RIGHT = 1836,
+       X4_UI_FOOTER_Y = 954, X4_UI_SAFE_BOTTOM = 1026 };
+
+#ifdef X4_UI46_CAPTURE
+void x4_ui46_capture_contrast(const uint32_t *pixels, const char *role,
+    int x, int y, int w, int h, uint32_t foreground);
+void x4_ui46_capture_footer(const uint32_t *pixels, int x, int y, int w, int h, bool after);
+#endif
 
 enum X4PadGlyph {
     X4_GLYPH_CROSS = 0,
@@ -44,6 +54,13 @@ enum X4ImageGradientMode {
 
 /* Precomputed midnight-blue original background + pre-blurred glass backing. */
 void x4_apple_bg_draw(uint32_t *pixels);
+void x4_apple_bg_restore(uint32_t *pixels, int x, int y, int w, int h);
+/* Main menu composition, owned by the UI thread. Preparation uses scratch
+ * pixels before the first presentation. SIZE_MAX damage means a full draw. */
+void x4_screen_home_prepare(uint32_t *pixels);
+void x4_screen_home_invalidate(void);
+void x4_screen_home_asset_revision(uint64_t revision);
+size_t x4_screen_home_damage(X4UiRect rects[2]);
 /* UI-owner-only animation clock; no renderer I/O, sleeps or threads. */
 void x4_apple_set_animation_phase(unsigned phase);
 unsigned x4_apple_get_animation_phase(void);
@@ -62,6 +79,13 @@ void x4_apple_outer_glow(uint32_t *pixels, int x, int y, int w, int h,
 void x4_apple_vertical_gradient_round_rect(uint32_t *pixels, int x, int y, int w, int h,
                                            int radius, uint32_t top_rgba, uint32_t bot_rgba);
 
+/* Dark text backing with configurable top, right and bottom transitions.
+ * The bounds must fit within the caller's restored damage region. */
+void x4_apple_shade_text_zone(uint32_t *pixels, int x, int y, int opaque_w,
+    int opaque_h, int fade_top, int fade_right, int fade_bottom, unsigned alpha);
+bool x4_apple_draw_public_qr(uint32_t *pixels, int center_x, int center_y,
+    int max_edge, const char *validated_url);
+
 /* High-level Apple dark glass panels, focus ring, and pill buttons. */
 void x4_apple_glass_panel(uint32_t *pixels, int x, int y, int w, int h,
                           int radius, unsigned fill_alpha, unsigned border_alpha);
@@ -77,6 +101,9 @@ void x4_apple_blit_image_rounded(uint32_t *pixels, int dst_x, int dst_y, int dst
 /* Home cards only: up to 10% crop; covers/detail retain the 5% entry point. */
 void x4_apple_blit_card_rounded(uint32_t *pixels, int x, int y, int w, int h,
     int radius, const X4CoverRaster *raster, enum X4ImageGradientMode gradient);
+/* Draw a pre-sized image. Only the right edge can be clipped by the caller. */
+bool x4_apple_blit_image_exact(uint32_t *pixels,int x,int y,int w,int h,
+    int radius,int right,const X4CoverRaster *raster);
 void x4_apple_draw_hero_banner(uint32_t *pixels, int x, int y, int w, int h, int radius,
                                const X4CoverRaster *raster);
 
@@ -109,16 +136,20 @@ void x4_apple_draw_region_qr_block(uint32_t *pixels, int x, int y, int w, int h,
 #include "access_country.h"
 void x4_apple_draw_access_controls(uint32_t *pixels, int x, int y, int w, int h,
     const X4AccessCountryUi *ui, X4AccessCountryCardPhase phase, bool settings);
+/* UI-thread routing: the catalog may defer this legacy in-panel draw to
+ * the owner of the centered UI 2.0 modal. */
+void x4_apple_access_card_use_overlay(bool enabled);
 void x4_apple_draw_access_card(uint32_t *pixels, int x, int y, int w, int h);
 void x4_apple_draw_access_success(uint32_t *pixels, int x, int y, int w);
 
 typedef struct {
-    bool open, shown;
-    char version[64], url[256];
+    bool open, shown, can_install, install_focused, local;
+    char version[64], url[256], tag[64];
 } X4UpdateNotice;
 /* Called by the Home UI owner only after an AVAILABLE result. Eligibility
  * excludes other pages/modals; offers made while ineligible are not consumed.
  * Test notices do not consume the once-per-startup real notice. */
+bool x4_apple_update_is_current(const char *version);
 bool x4_apple_update_notice_offer(X4UpdateNotice *notice,const char *version,
     const char *validated_tag,bool eligible,bool is_test);
 /* Returns true while the modal owns input. Only Circle closes it. */

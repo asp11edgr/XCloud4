@@ -26,7 +26,7 @@ if [[ -n "${X4_PIPELINE_PRE_GUARD_MEDIA_SOURCE:-}" ]]; then
         "-DX4_PIPELINE_MEDIA_SOURCE=\"$X4_PIPELINE_PRE_GUARD_MEDIA_SOURCE\"")
 fi
 cpp_flags=(-std=c++17 -O1 -g -Wall -Wextra -Werror -pthread -ffunction-sections -fdata-sections
-    -DX4_OPENORBIS -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0
+    -DX4_OPENORBIS -DX4_RECOVERY43=0 -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0
     -I"$build_dir" -I"$repo_dir/tests" -I"$repo_dir/src/media" -I"$repo_dir/src/streaming"
     -I"$vendor/include" -I"$vendor/include/rtc" -I"$vendor/src" -I"$plog")
 cpp_sources=("$repo_dir/tests/receiver_nack_pipeline_test.cpp" "$repo_dir/src/streaming/rtc_receiver_nack.cpp"

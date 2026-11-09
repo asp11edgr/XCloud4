@@ -74,14 +74,18 @@ void x4_recent_refresh_catalog(X4RecentGames *h,const X4CatalogSnapshot *c)
 {
     if (!h||h->state!=X4_RECENT_READY||h->count>X4_RECENT_MAX) return;
     for (unsigned i=0;i<h->count;++i) {
-        X4RecentGame *game=&h->entries[i]; game->product_id[0]=game->name[0]=0;
+        X4RecentGame *game=&h->entries[i];
+        /* Previously resolved public art is useful even if the current
+         * catalog no longer allows launching the same title. */
         unsigned index;
         if (!x4_recent_catalog_index(game,c,&index)) continue;
         const X4CatalogTitle *title=&c->titles[index];
-        size_t n=length(title->product_id,sizeof(game->product_id)); bool valid=n<sizeof(game->product_id);
+        size_t n=length(title->product_id,sizeof(game->product_id));
+        bool valid=n && n<sizeof(game->product_id);
         for(size_t k=0;k<n&&valid;++k) valid=alnum((unsigned char)title->product_id[k]);
         if(valid)memcpy(game->product_id,title->product_id,n+1);
-        if(x4_recent_display_name_valid(title->name)) memcpy(game->name,title->name,length(title->name,sizeof(game->name))+1);
+        if(title->name[0]&&x4_recent_display_name_valid(title->name))
+            memcpy(game->name,title->name,length(title->name,sizeof(game->name))+1);
     }
 }
 bool x4_recent_publish(X4RecentGames *h,uint64_t account,uint64_t generation,
@@ -93,12 +97,25 @@ bool x4_recent_publish(X4RecentGames *h,uint64_t account,uint64_t generation,
     }
     if (count>X4_RECENT_MAX||(!ids&&count)) error=error?error:-1;
     if (!error) for(unsigned i=0;i<count;++i) if(!x4_recent_title_id_valid(ids[i],96)) { error=-1;break; }
-    memset(h->entries,0,sizeof(h->entries));h->count=0;h->error=error;h->http_status=status;
-    if(error){h->state=X4_RECENT_ERROR;return false;}
+    h->error=error;h->http_status=status;
+    if(error){
+        memset(h->entries,0,sizeof(h->entries));h->count=0;
+        h->state=X4_RECENT_ERROR;return false;
+    }
+    X4RecentGame next[X4_RECENT_MAX]={0};
+    unsigned used=0;
     for(unsigned i=0;i<count;++i) {
         bool duplicate=false;
-        for(unsigned j=0;j<h->count;++j) if(same_id(ids[i],h->entries[j].id)){duplicate=true;break;}
-        if(!duplicate) memcpy(h->entries[h->count++].id,ids[i],length(ids[i],96)+1);
+        for(unsigned j=0;j<used;++j) if(same_id(ids[i],next[j].id)){duplicate=true;break;}
+        if(duplicate) continue;
+        if(h->count<=X4_RECENT_MAX) for(unsigned j=0;j<h->count;++j) {
+            if(same_id(ids[i],h->entries[j].id)){
+                next[used]=h->entries[j];
+                break;
+            }
+        }
+        memcpy(next[used++].id,ids[i],length(ids[i],96)+1);
     }
+    memcpy(h->entries,next,sizeof(next));h->count=used;
     h->state=X4_RECENT_READY;x4_recent_refresh_catalog(h,c);return true;
 }

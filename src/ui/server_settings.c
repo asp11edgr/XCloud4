@@ -40,8 +40,7 @@ static X4ServerStorageRecord s_disk_record;
 
 typedef struct {
     const char *raw;
-    const char *es;
-    const char *en;
+    enum X4TextId text;
 } RegionTrans;
 
 static bool str_equals_case_insensitive(const char *s1, const char *s2)
@@ -60,43 +59,43 @@ static bool str_equals_case_insensitive(const char *s1, const char *s2)
 }
 
 static const RegionTrans known_regions[] = {
-    {"AustraliaEast", "Este de Australia", "Australia East"},
-    {"AustraliaSouthEast", "Sureste de Australia", "Australia Southeast"},
-    {"BrazilSouth", "Sur de Brasil", "Brazil South"},
-    {"CanadaCentral", "Centro de Canadá", "Canada Central"},
-    {"CanadaEast", "Este de Canadá", "Canada East"},
-    {"CentralIndia", "Centro de India", "Central India"},
-    {"CentralUS", "Centro de EE. UU.", "Central US"},
-    {"ChileCentral", "Centro de Chile", "Chile Central"},
-    {"EastAsia", "Este de Asia", "East Asia"},
-    {"EastUS", "Este de EE. UU.", "East US"},
-    {"EastUS2", "Este de EE. UU. 2", "East US 2"},
-    {"FranceCentral", "Centro de Francia", "France Central"},
-    {"GermanyWestCentral", "Centro-oeste de Alemania", "Germany West Central"},
-    {"ItalyNorth", "Norte de Italia", "Italy North"},
-    {"JapanEast", "Este de Japón", "Japan East"},
-    {"JapanWest", "Oeste de Japón", "Japan West"},
-    {"KoreaCentral", "Centro de Corea", "Korea Central"},
-    {"KoreaSouth", "Sur de Corea", "Korea South"},
-    {"MexicoCentral", "Centro de México", "Mexico Central"},
-    {"NorthCentralUS", "Centro-norte de EE. UU.", "North Central US"},
-    {"NorthEurope", "Norte de Europa", "North Europe"},
-    {"NorwayEast", "Este de Noruega", "Norway East"},
-    {"PolandCentral", "Centro de Polonia", "Poland Central"},
-    {"SouthAfricaNorth", "Norte de Sudáfrica", "South Africa North"},
-    {"SouthCentralUS", "Centro-sur de EE. UU.", "South Central US"},
-    {"SoutheastAsia", "Sureste de Asia", "Southeast Asia"},
-    {"SouthIndia", "Sur de India", "South India"},
-    {"SpainCentral", "Centro de España", "Spain Central"},
-    {"SwedenCentral", "Centro de Suecia", "Sweden Central"},
-    {"UAENorth", "Norte de EAU", "UAE North"},
-    {"UKSouth", "Sur de Reino Unido", "UK South"},
-    {"UKWest", "Oeste de Reino Unido", "UK West"},
-    {"WestCentralUS", "Centro-oeste de EE. UU.", "West Central US"},
-    {"WestEurope", "Oeste de Europa", "West Europe"},
-    {"WestUS", "Oeste de EE. UU.", "West US"},
-    {"WestUS2", "Oeste de EE. UU. 2", "West US 2"},
-    {"WestUS3", "Oeste de EE. UU. 3", "West US 3"},
+    {"AustraliaEast", X4_TR_50_REGION_AUSTRALIAEAST},
+    {"AustraliaSouthEast", X4_TR_50_REGION_AUSTRALIASOUTHEAST},
+    {"BrazilSouth", X4_TR_50_REGION_BRAZILSOUTH},
+    {"CanadaCentral", X4_TR_50_REGION_CANADACENTRAL},
+    {"CanadaEast", X4_TR_50_REGION_CANADAEAST},
+    {"CentralIndia", X4_TR_50_REGION_CENTRALINDIA},
+    {"CentralUS", X4_TR_50_REGION_CENTRALUS},
+    {"ChileCentral", X4_TR_50_REGION_CHILECENTRAL},
+    {"EastAsia", X4_TR_50_REGION_EASTASIA},
+    {"EastUS", X4_TR_50_REGION_EASTUS},
+    {"EastUS2", X4_TR_50_REGION_EASTUS2},
+    {"FranceCentral", X4_TR_50_REGION_FRANCECENTRAL},
+    {"GermanyWestCentral", X4_TR_50_REGION_GERMANYWESTCENTRAL},
+    {"ItalyNorth", X4_TR_50_REGION_ITALYNORTH},
+    {"JapanEast", X4_TR_50_REGION_JAPANEAST},
+    {"JapanWest", X4_TR_50_REGION_JAPANWEST},
+    {"KoreaCentral", X4_TR_50_REGION_KOREACENTRAL},
+    {"KoreaSouth", X4_TR_50_REGION_KOREASOUTH},
+    {"MexicoCentral", X4_TR_50_REGION_MEXICOCENTRAL},
+    {"NorthCentralUS", X4_TR_50_REGION_NORTHCENTRALUS},
+    {"NorthEurope", X4_TR_50_REGION_NORTHEUROPE},
+    {"NorwayEast", X4_TR_50_REGION_NORWAYEAST},
+    {"PolandCentral", X4_TR_50_REGION_POLANDCENTRAL},
+    {"SouthAfricaNorth", X4_TR_50_REGION_SOUTHAFRICANORTH},
+    {"SouthCentralUS", X4_TR_50_REGION_SOUTHCENTRALUS},
+    {"SoutheastAsia", X4_TR_50_REGION_SOUTHEASTASIA},
+    {"SouthIndia", X4_TR_50_REGION_SOUTHINDIA},
+    {"SpainCentral", X4_TR_50_REGION_SPAINCENTRAL},
+    {"SwedenCentral", X4_TR_50_REGION_SWEDENCENTRAL},
+    {"UAENorth", X4_TR_50_REGION_UAENORTH},
+    {"UKSouth", X4_TR_50_REGION_UKSOUTH},
+    {"UKWest", X4_TR_50_REGION_UKWEST},
+    {"WestCentralUS", X4_TR_50_REGION_WESTCENTRALUS},
+    {"WestEurope", X4_TR_50_REGION_WESTEUROPE},
+    {"WestUS", X4_TR_50_REGION_WESTUS},
+    {"WestUS2", X4_TR_50_REGION_WESTUS2},
+    {"WestUS3", X4_TR_50_REGION_WESTUS3},
 };
 
 enum X4Continent {
@@ -250,16 +249,20 @@ bool x4_server_settings_validate_host(const char *host)
     return true;
 }
 
-const char *x4_server_region_display_name(const char *raw_name)
+static const char *region_display_name(const char *raw_name, enum X4Lang language)
 {
     if (!raw_name || !raw_name[0]) return "";
-    bool is_es = (x4_lang_current() == X4_LANG_ES);
     for (size_t i = 0; i < sizeof(known_regions) / sizeof(known_regions[0]); ++i) {
         if (str_equals_case_insensitive(raw_name, known_regions[i].raw)) {
-            return is_es ? known_regions[i].es : known_regions[i].en;
+            return x4_tr_for_lang(language, known_regions[i].text);
         }
     }
     return raw_name;
+}
+
+const char *x4_server_region_display_name(const char *raw_name)
+{
+    return region_display_name(raw_name, x4_lang_current());
 }
 
 static void ensure_parent_dirs(const char *path)
@@ -758,6 +761,7 @@ void x4_server_settings_write_json(FILE *f)
         if (current_regions[i].is_default) { def_name = current_regions[i].name; break; }
     }
     bool is_auto = (!stored_selected_name[0]);
+    const enum X4Lang export_lang = x4_lang_system_ui() == X4_LANG_ES ? X4_LANG_ES : X4_LANG_EN;
     fprintf(f, "\"server\":{\"selected\":\"%s\",\"is_automatic\":%s,\"default\":\"%s\",\"has_saved_choice\":%s,\"regions\":[",
         stored_selected_name,
         is_auto ? "true" : "false",
@@ -772,7 +776,7 @@ void x4_server_settings_write_json(FILE *f)
             current_regions[i].host,
             current_regions[i].is_default ? "true" : "false",
             current_regions[i].last_game_ms,
-            x4_server_region_display_name(current_regions[i].name));
+            region_display_name(current_regions[i].name, export_lang));
     }
     fprintf(f, "]},");
     unlock_server();

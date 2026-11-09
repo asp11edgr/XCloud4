@@ -30,6 +30,7 @@ typedef struct X4KeyframeLimiter X4KeyframeLimiter;
 
 typedef struct {
     uint64_t video_packets, audio_packets; /* valid RTP copied into the queues */
+    uint64_t video_bytes, audio_bytes;     /* full accepted RTP, including header */
     uint64_t video_frames;                 /* decoded, validated, converted pictures */
     uint64_t audio_frames;                 /* Opus packets decoded into PCM */
     uint64_t dropped;                      /* sum of every drop/loss counter below */
@@ -75,6 +76,10 @@ typedef struct {
     uint32_t video_matrix_received, video_matrix_selected;
     uint64_t video_color_generation;
     bool video_full_range, video_color_ready;
+#elif X4_VIDEO_PROBE && X4_PROBE_T26
+    /* Compile-only compatibility for the unused legacy screen TU when this
+     * offline probe links SP1. No live-media/RTC path is enabled by T26. */
+    uint32_t video_rejected_width, video_rejected_height;
 #endif
 } X4LiveMediaSnapshot;
 
@@ -113,6 +118,8 @@ int x4_live_media_stream_present(X4LiveMedia *media,
 /* Same-main-owner observation, no new lock: choose 1 ms while conversion or
  * flip is in flight, otherwise 5 ms. Not a cross-thread snapshot. */
 unsigned x4_live_media_stream_main_state(const X4LiveMedia *media);
+/* Main-only:0 applied,1 retry when conversion/flip is busy,<0 error. */
+int x4_live_media_stream_redraw_notice(X4LiveMedia *,void (*)(uint32_t *,void *),void *);
 void x4_live_media_stream_note_menu_open(X4LiveMedia *media,bool open);
 void x4_live_media_stream_note_controller_read(X4LiveMedia *media,uint64_t sampled_us);
 /* Native blocking wake hint. */
@@ -147,6 +154,14 @@ int x4_live_media_set_payload_type(X4LiveMedia *media, int kind, int payload_typ
 int x4_live_media_start(X4LiveMedia *media);
 /* Signature matches X4RtcMediaCallback: kind 0 video, 1 audio. */
 void x4_live_media_receive(void *context, int kind, const uint8_t *rtp, size_t size);
+/* Session worker: after RTC close joins callbacks, before opening the new peer.
+ * Owner acknowledgement is bounded (500ms); failure keeps reception closed.
+ * Native decoder/converter/display leases are never released by this API. */
+int x4_live_media_begin_epoch(X4LiveMedia *);
+/* Transport bridge captures this token per peer, immutable until RTC close
+ * joins callbacks. Old tokens are rejected even if SSRC/PT are reused. */
+uint64_t x4_live_media_current_epoch(const X4LiveMedia *);
+void x4_live_media_receive_for_epoch(void *,int,const uint8_t *,size_t,uint64_t);
 /* Nonblocking main-thread maintenance/reporting; does not Decode or copy.
  * The worker yields between packets after 16 ms or four Decode calls (four
  * AU submissions with the dedicated decoder in new profiles) and
@@ -239,6 +254,7 @@ int x4_live_track_accept(X4LiveTrack *track, const X4LiveRtp *rtp);
 typedef struct {
     uint16_t sequence, size;
     bool used;
+    uint8_t video_grace_ms; /* Video only; occupies existing padding. */
     uint64_t arrival;
 } X4LiveReorderSlot;
 typedef struct {
@@ -265,20 +281,21 @@ enum { X4_REORDER_INSERT_NONE, X4_REORDER_INSERT_CAPACITY,
     X4_REORDER_INSERT_DISTANCE, X4_REORDER_INSERT_HALFSPAN,
     X4_REORDER_INSERT_INVALID, X4_REORDER_INSERT_DUPLICATE,
     X4_REORDER_INSERT_LATE, X4_REORDER_INSERT_DIRECT };
-enum { X4_LIVE_VIDEO_REORDER_CAPACITY = 128,
+enum { X4_LIVE_VIDEO_REORDER_LEGACY_CAPACITY = 128,
+    X4_LIVE_VIDEO_REORDER_CAPACITY = 512,
     X4_LIVE_VIDEO_REORDER_FORWARD_LIMIT = 4096,
     X4_LIVE_VIDEO_REORDER_REBASE_LIMIT = 8,
-    X4_LIVE_VIDEO_REORDER_BYTE_LIMIT = 128 * X4_LIVE_RTP_MAX };
+    X4_LIVE_VIDEO_REORDER_BYTE_LIMIT = X4_LIVE_VIDEO_REORDER_CAPACITY * X4_LIVE_RTP_MAX };
 /* window is a power of two <= 1024; depth is how many packets past a hole
  * are tolerated; max_wait is in microseconds of sceKernelGetProcessTime. */
 int x4_live_reorder_init(X4LiveReorder *reorder, uint16_t window, uint16_t depth, uint64_t max_wait);
-/* Video keeps exactly128 physical payload slots, independently of sequence
- * distance. Forward offsets0..4095 are allowed;4096..32767 are explicit
- * distance discontinuities, with at most8 reset/reanchors per fresh init.
- * At halfspan32768 the ordering is ambiguous and no packet/state is changed;
- * offsets32769..65535 are late. reset() does NOT replenish the rebase budget.
- * tickets must point to128 worker-owned entries lasting until free(). No
- * allocation occurs during insert/next, and at most128*2048 bytes reside. */
+/* Physical capacity is 128 in T43 and 512 in T43b, independently of sequence
+ * distance. Forward offsets 0..4095 are allowed; 4096..32767 are explicit
+ * distance discontinuities, with at most eight reanchors per fresh init.
+ * At halfspan 32768 the ordering is ambiguous and no packet/state is changed;
+ * offsets 32769..65535 are late. reset() does not replenish the rebase budget.
+ * tickets must point to window worker-owned entries lasting until free(). No
+ * allocation occurs during insert/next; at most window*2048 bytes reside. */
 int x4_live_reorder_init_video(X4LiveReorder *reorder, uint16_t window,
     uint16_t depth, uint64_t max_wait, X4IngressTicket *tickets);
 void x4_live_reorder_free(X4LiveReorder *reorder);
@@ -292,7 +309,7 @@ int x4_live_reorder_insert(X4LiveReorder *reorder, const uint8_t *packet, size_t
  * do not replace resident bytes/tickets or advance expected. JUMP alone
  * discards previous storage and reanchors, with last_insert_reason=DISTANCE.
  * DIRECT occurs only at actual capacity with a valid, missing expected
- * packet: no129th slot or synthetic storage occurs, expected advances once
+ * packet: no additional slot is used, expected advances once
  * and the owner MUST immediately consume the caller's borrowed packet and
  * ticket, or account their discard/recovery when stop/work budget rejects
  * consumption, before another reorder operation. No pending packet storage
@@ -301,6 +318,22 @@ int x4_live_reorder_insert(X4LiveReorder *reorder, const uint8_t *packet, size_t
  * completes; DIRECT is a separate acceptance/emission and is counted alone. */
 int x4_live_reorder_insert_ticket(X4LiveReorder *reorder, const uint8_t *packet,
     size_t size, uint16_t sequence, uint64_t now, const X4IngressTicket *ticket);
+/* Capture the current grace along with the evidence of any earlier hole. */
+int x4_live_reorder_insert_video_ticket(X4LiveReorder *reorder, const uint8_t *packet,
+    size_t size, uint16_t sequence, uint64_t now, const X4IngressTicket *ticket,
+    unsigned grace_ms);
+/* T43b head gap length and deadline. A zero result means no pending gap. */
+uint32_t x4_live_reorder_video_gap(const X4LiveReorder *reorder, uint64_t *deadline_us);
+/* Nonzero current_ms updates ordinary held holes; a 250-ms startup
+ * admission keeps its startup deadline across the window boundary. */
+uint32_t x4_live_reorder_video_gap_policy(const X4LiveReorder *reorder,
+    unsigned current_ms, uint64_t *deadline_us, bool *startup);
+/* T43b only. Complete buffered packets remain ready regardless of grace.
+ * With a gap, bypass ordinary depth/age and wait for the absolute deadline,
+ * unless force_gap is set or the gap exceeds the recoverable range. */
+const uint8_t *x4_live_reorder_next_video_ticket_limited(X4LiveReorder *reorder,
+    uint64_t now, size_t *size, uint32_t *lost, unsigned *reason, bool force_gap,
+    uint32_t advance_limit, X4IngressTicket *ticket);
 /* Bounded full-sequence lookup. Returned index owns BOTH payload and ticket.
  * These are worker-only queries; no synchronization is supplied. */
 int x4_live_reorder_find(const X4LiveReorder *reorder, uint16_t sequence);

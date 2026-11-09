@@ -24,8 +24,13 @@ struct X4LiveAudio {
     int32_t (*output)(int32_t, const void *);
     int32_t (*close)(int32_t);
     atomic_bool stop, muted, playing;
+    /* Reception epoch only. The audio owner resets its RTP queue/track;
+     * AudioOut, PCM policy, PLC and decoder allocation are unchanged. */
+    atomic_bool epoch_hold;
+    atomic_uint epoch_callbacks;
+    atomic_uint_fast64_t epoch_requested,epoch_applied,retired_source;
     atomic_int error;
-    atomic_uint_fast64_t packets, frames, dropped, lost, bad_frames, underflows;
+    atomic_uint_fast64_t packets, bytes, frames, dropped, lost, bad_frames, underflows;
     int16_t pcm[PCM_CAPACITY * 2];
     /* Native AudioOut may retain this buffer until wait/close succeeds.
      * Keep it in the context, not on the worker's disappearing stack. */
@@ -55,7 +60,41 @@ struct X4LiveAudio {
     unsigned last_packet_samples, plc_run_samples, concealed_ahead;
     bool timestamp_valid, valley_valid, trimming, have_started, in_underflow;
     int16_t last_left, last_right;
+    atomic_uint_fast64_t fec_packets, fec_recovered_samples, fec_attempts, lbrr_packets;
+    bool last_packet_celt_only;
 };
+static void audio_epoch_service(X4LiveAudio *a)
+{
+    uint64_t requested=atomic_load_explicit(&a->epoch_requested,memory_order_acquire);
+    if(requested==atomic_load_explicit(&a->epoch_applied,memory_order_relaxed))return;
+    /* Publisher already gated/drained receives. Sole audio consumer owns all
+     * queue/reorder/track writes. Leave PCM/render/PLC state untouched here. */
+    if(a->track.locked)atomic_store_explicit(&a->retired_source,
+        (UINT64_C(1)<<63)|a->track.ssrc,memory_order_release);
+    uint8_t discarded[X4_LIVE_RTP_MAX];
+    while(x4_live_ring_pop(&a->ring,discarded)){}
+    x4_live_track_init(&a->track,-1);x4_live_reorder_reset(&a->reorder);
+    atomic_store_explicit(&a->epoch_applied,requested,memory_order_release);
+}
+int x4_live_audio_begin_epoch(X4LiveAudio *a)
+{
+    if(!a)return 0; /* Audio unavailable remains unavailable; no reopen. */
+    if(atomic_load(&a->stop)||atomic_load(&a->error))return X4_LIVE_ERR_STATE;
+    if(atomic_exchange_explicit(&a->epoch_hold,true,memory_order_seq_cst))return X4_LIVE_ERR_STATE;
+    uint64_t began=sceKernelGetProcessTime();
+    while(atomic_load_explicit(&a->epoch_callbacks,memory_order_seq_cst)){
+        if(atomic_load(&a->stop)||sceKernelGetProcessTime()-began>=500000)return X4_LIVE_ERR_STATE;
+        sceKernelUsleep(500);
+    }
+    uint64_t requested=atomic_fetch_add_explicit(&a->epoch_requested,1,memory_order_acq_rel)+1;
+    while(atomic_load_explicit(&a->epoch_applied,memory_order_acquire)!=requested){
+        if(atomic_load(&a->stop)||sceKernelGetProcessTime()-began>=500000)return X4_LIVE_ERR_STATE;
+        sceKernelUsleep(500);
+    }
+    atomic_store_explicit(&a->epoch_hold,false,memory_order_seq_cst);
+    return 0;
+}
+
 static void append_pcm(X4LiveAudio *a, const int16_t *samples, unsigned count)
 {
     if (a->pcm_count + count > PCM_CAPACITY) {
@@ -78,6 +117,7 @@ static void *play(void *opaque)
     int16_t *block = a->output_block;
     bool first = true;
     while (!atomic_load(&a->stop)) {
+        audio_epoch_service(a);
         for (unsigned n = 0; n < 64; ++n) {
             size_t size = x4_live_ring_pop(&a->ring, packet);
             if (!size) break;
@@ -223,13 +263,15 @@ static void new_append(X4LiveAudio *a, const int16_t *samples, unsigned count)
 }
 /* PLC is bounded per uninterrupted concealment run, not per output block.
  * A delayed real packet is still decoded for Opus state, but its already
- * concealed prefix is not queued twice. FEC is deliberately not implemented. */
-static void new_conceal(X4LiveAudio *a, int16_t *decoded, unsigned wanted)
+ * concealed prefix is not queued twice. Clip only when reserving an exact
+ * boundary for FEC. Ordinary PLC retains its existing packet-sized output. */
+static void new_conceal(X4LiveAudio *a, int16_t *decoded, unsigned wanted, bool exact)
 {
     while (wanted && a->plc_run_samples < AUDIO_PLC_MAX) {
         unsigned duration = a->last_packet_samples ? a->last_packet_samples : 960u;
         unsigned remaining = AUDIO_PLC_MAX - a->plc_run_samples;
         if (duration > remaining) duration = remaining;
+        if (exact && duration > wanted) duration = wanted;
         duration -= duration % 120u; /* Opus PLC accepts 2.5 ms multiples. */
         if (!duration) break;
         int frames = opus_decode(a->decoder, NULL, 0, decoded, (int)duration, 0);
@@ -244,6 +286,51 @@ static void new_conceal(X4LiveAudio *a, int16_t *decoded, unsigned wanted)
         wanted -= (unsigned)frames;
     }
 }
+static void new_gap_silence(X4LiveAudio *a, int16_t *decoded, unsigned silence)
+{
+    /* A declared gap longer than the PLC budget gets a short fade and
+     * silence. Do not manufacture an unbounded queue for a discontinuity. */
+    if (silence > PCM_CAPACITY) silence = PCM_CAPACITY;
+    int16_t left = a->last_left, right = a->last_right;
+    if (a->pcm_count) {
+        unsigned last = (a->pcm_head + a->pcm_count - 1) % PCM_CAPACITY;
+        left = a->pcm[last * 2]; right = a->pcm[last * 2 + 1];
+    }
+    while (silence) {
+        unsigned count = silence > 5760u ? 5760u : silence;
+        memset(decoded, 0, count * 2 * sizeof(*decoded));
+        unsigned fade = count < AUDIO_FADE ? count : AUDIO_FADE;
+        for (unsigned i = 0; i < fade; ++i) {
+            decoded[i * 2] = (int16_t)((int32_t)left * (int32_t)(fade - i - 1) / (int32_t)fade);
+            decoded[i * 2 + 1] = (int16_t)((int32_t)right * (int32_t)(fade - i - 1) / (int32_t)fade);
+        }
+        new_append(a, decoded, count); a->concealed_ahead += count;
+        silence -= count; left = right = 0;
+    }
+}
+static bool new_recover_fec(X4LiveAudio *a, const X4LiveRtp *r, int16_t *decoded, unsigned duration)
+{
+    atomic_fetch_add(&a->fec_attempts, 1);
+    int frames = opus_decode(a->decoder, r->payload, (opus_int32)r->size, decoded, (int)duration, 1);
+    if (frames != (int)duration) return false;
+
+    /* Even a packet with LBRR can yield PLC after CELT. In libopus the
+     * no-data path leaves a zero final range, unlike decoding the LBRR. */
+    opus_uint32 range = 0;
+    if (opus_decoder_ctl(a->decoder, OPUS_GET_FINAL_RANGE(&range)) == OPUS_OK && range) {
+        atomic_fetch_add(&a->fec_packets, 1);
+        atomic_fetch_add(&a->fec_recovered_samples, duration);
+        a->plc_run_samples = 0;
+    } else {
+        unsigned remaining = AUDIO_PLC_MAX - a->plc_run_samples;
+        if (duration > remaining) duration = remaining;
+        a->plc_run_samples += duration;
+        atomic_fetch_add(&a->plc_samples, duration);
+    }
+    new_append(a, decoded, duration);
+    a->concealed_ahead += duration;
+    return true;
+}
 static void new_decode_packet(X4LiveAudio *a, const X4LiveRtp *r, int16_t *decoded)
 {
     if (a->have_started && !atomic_load(&a->playing)) {
@@ -253,36 +340,35 @@ static void new_decode_packet(X4LiveAudio *a, const X4LiveRtp *r, int16_t *decod
         a->timestamp_valid = false; a->concealed_ahead = 0; a->plc_run_samples = 0;
     }
     int duration = opus_packet_get_nb_samples(r->payload, (opus_int32)r->size, 48000);
+    unsigned fec_duration = 0;
     if (duration > 0 && duration <= 5760) {
         unsigned bin = (unsigned)duration / 120u;
         if (bin >= DURATION_BINS) bin = DURATION_BINS - 1;
         atomic_fetch_add(&a->duration_hist[bin], 1);
         audio_max(&a->duration_max_samples, (unsigned)duration);
+        if (opus_packet_has_lbrr(r->payload, (opus_int32)r->size) > 0) {
+            atomic_fetch_add(&a->lbrr_packets, 1);
+            fec_duration = (unsigned)opus_packet_get_samples_per_frame(r->payload, 48000);
+        }
     }
     int32_t gap = a->timestamp_valid ? (int32_t)(r->timestamp - a->expected_timestamp) : 0;
     if (gap > 0 && (uint32_t)gap > a->concealed_ahead) {
-        new_conceal(a, decoded, (uint32_t)gap - a->concealed_ahead);
-        /* A declared gap longer than the PLC budget gets a short fade and
-         * silence. Do not manufacture an unbounded queue for a discontinuity. */
+        unsigned missing = (uint32_t)gap - a->concealed_ahead;
+        /* FEC reconstructs one complete frame immediately before this
+         * packet. Never decode a partial frame over already played audio. */
+        if (!a->last_packet_celt_only && fec_duration && fec_duration <= missing &&
+            missing <= PCM_CAPACITY && fec_duration % 120u == 0) {
+            unsigned before_fec = (uint32_t)gap - fec_duration;
+            new_conceal(a, decoded, missing - fec_duration, true);
+            if (before_fec > a->concealed_ahead)
+                new_gap_silence(a, decoded, before_fec - a->concealed_ahead);
+            if (!new_recover_fec(a, r, decoded, fec_duration))
+                new_conceal(a, decoded, fec_duration, true);
+        } else {
+            new_conceal(a, decoded, missing, false);
+        }
         if ((uint32_t)gap > a->concealed_ahead) {
-            unsigned silence = (uint32_t)gap - a->concealed_ahead;
-            if (silence > PCM_CAPACITY) silence = PCM_CAPACITY;
-            int16_t left = a->last_left, right = a->last_right;
-            if (a->pcm_count) {
-                unsigned last = (a->pcm_head + a->pcm_count - 1) % PCM_CAPACITY;
-                left = a->pcm[last * 2]; right = a->pcm[last * 2 + 1];
-            }
-            while (silence) {
-                unsigned count = silence > 5760u ? 5760u : silence;
-                memset(decoded, 0, count * 2 * sizeof(*decoded));
-                unsigned fade = count < AUDIO_FADE ? count : AUDIO_FADE;
-                for (unsigned i = 0; i < fade; ++i) {
-                    decoded[i * 2] = (int16_t)((int32_t)left * (int32_t)(fade - i - 1) / (int32_t)fade);
-                    decoded[i * 2 + 1] = (int16_t)((int32_t)right * (int32_t)(fade - i - 1) / (int32_t)fade);
-                }
-                new_append(a, decoded, count); a->concealed_ahead += count;
-                silence -= count; left = right = 0;
-            }
+            new_gap_silence(a, decoded, (uint32_t)gap - a->concealed_ahead);
         }
     }
     int frames = opus_decode(a->decoder, r->payload, (opus_int32)r->size, decoded, 5760, 0);
@@ -302,6 +388,9 @@ static void new_decode_packet(X4LiveAudio *a, const X4LiveRtp *r, int16_t *decod
     a->expected_timestamp = r->timestamp + (uint32_t)frames;
     a->timestamp_valid = true;
     a->last_packet_samples = (unsigned)frames;
+    /* The high TOC bit identifies CELT-only configurations. Opus would
+     * silently run PLC instead of LBRR when coming from that mode. */
+    a->last_packet_celt_only = (r->payload[0] & 0x80u) != 0;
     atomic_fetch_add(&a->frames, 1);
 }
 static void new_underflow(X4LiveAudio *a, uint64_t now)
@@ -330,7 +419,7 @@ static void new_render(X4LiveAudio *a, int16_t *decoded, uint64_t now)
     unsigned block_samples = a->block_samples;
     if (a->pcm_count < block_samples) {
         new_underflow(a, now);
-        new_conceal(a, decoded, block_samples - a->pcm_count);
+        new_conceal(a, decoded, block_samples - a->pcm_count, false);
     }
     unsigned real = a->pcm_count < block_samples ? a->pcm_count : block_samples;
     bool mute = atomic_load(&a->muted);
@@ -365,6 +454,7 @@ static void *play_new(void *opaque)
     int16_t decoded[5760 * 2];
     bool first = true;
     while (!atomic_load(&a->stop)) {
+        audio_epoch_service(a);
         for (unsigned n = 0; n < 64; ++n) {
             size_t size = x4_live_ring_pop(&a->ring, packet);
             if (!size) break;
@@ -393,7 +483,7 @@ static void *play_new(void *opaque)
             if (x4_live_rtp_parse(p, size, &r) < 0) { atomic_fetch_add(&a->dropped, 1); continue; }
             new_decode_packet(a, &r, decoded);
             if (first && atomic_load(&a->frames)) {
-                printf("XCloud4: primer paquete Opus decodificado, audio nuevo objetivo=%ums bloque=%u PLC_max=60ms FEC=0\n",
+                printf("XCloud4: primer paquete Opus decodificado, audio nuevo objetivo=%ums bloque=%u PLC_max=60ms FEC=1\n",
                        atomic_load(&a->target_samples) / 48u, a->block_samples); first = false;
             }
         }
@@ -431,9 +521,13 @@ X4LiveAudio *x4_live_audio_start_mode(int *error, int payload_type, bool previou
     a->last_trim_us = 0;
     new_valley_reset(a);
     atomic_init(&a->stop, false); atomic_init(&a->muted, false); atomic_init(&a->playing, false);
-    atomic_init(&a->error, 0); atomic_init(&a->packets, 0); atomic_init(&a->frames, 0);
+    atomic_init(&a->epoch_hold,false);atomic_init(&a->epoch_callbacks,0);
+    atomic_init(&a->epoch_requested,0);atomic_init(&a->epoch_applied,0);atomic_init(&a->retired_source,0);
+    atomic_init(&a->error, 0); atomic_init(&a->packets, 0); atomic_init(&a->bytes, 0); atomic_init(&a->frames, 0);
     atomic_init(&a->dropped, 0); atomic_init(&a->lost, 0); atomic_init(&a->bad_frames, 0); atomic_init(&a->underflows, 0);
     atomic_init(&a->plc_samples, 0); atomic_init(&a->pcm_overflows, 0); atomic_init(&a->decode_errors, 0);
+    atomic_init(&a->fec_packets, 0); atomic_init(&a->fec_recovered_samples, 0);
+    atomic_init(&a->fec_attempts, 0); atomic_init(&a->lbrr_packets, 0);
     atomic_init(&a->trimmed_samples, 0); atomic_init(&a->restarts, 0);
     atomic_init(&a->underflow_episodes, 0); atomic_init(&a->underflow_interval_count, 0);
     atomic_init(&a->underflow_interval_sum_us, 0); atomic_init(&a->underflow_interval_min_us, UINT64_MAX);
@@ -482,13 +576,23 @@ X4LiveAudio *x4_live_audio_start(int *error, int payload_type)
 {
     return x4_live_audio_start_mode(error, payload_type, true);
 }
-void x4_live_audio_receive(X4LiveAudio *a, const uint8_t *packet, size_t size)
+static void audio_receive_epoch(X4LiveAudio *a,const uint8_t *packet,size_t size,bool proven,uint64_t epoch)
 {
     if (!a || atomic_load(&a->stop) || atomic_load(&a->error)) return;
+    atomic_fetch_add_explicit(&a->epoch_callbacks,1,memory_order_seq_cst);
     X4LiveRtp r;
-    if (x4_live_rtp_parse(packet, size, &r) < 0 || !x4_live_ring_push(&a->ring, packet, size)) atomic_fetch_add(&a->dropped, 1);
-    else atomic_fetch_add(&a->packets, 1);
+    uint64_t retired=atomic_load_explicit(&a->retired_source,memory_order_acquire);
+    if(atomic_load_explicit(&a->epoch_hold,memory_order_seq_cst)||
+        (proven&&epoch!=atomic_load_explicit(&a->epoch_applied,memory_order_acquire))||
+        x4_live_rtp_parse(packet,size,&r)<0||(!proven&&retired&&(uint32_t)retired==r.ssrc)||
+        !x4_live_ring_push(&a->ring,packet,size))atomic_fetch_add(&a->dropped,1);
+    else { atomic_fetch_add(&a->packets,1); atomic_fetch_add(&a->bytes,size); }
+    atomic_fetch_sub_explicit(&a->epoch_callbacks,1,memory_order_seq_cst);
 }
+void x4_live_audio_receive(X4LiveAudio *a,const uint8_t *packet,size_t size)
+{audio_receive_epoch(a,packet,size,false,0);}
+void x4_live_audio_receive_for_epoch(X4LiveAudio *a,const uint8_t *packet,size_t size,uint64_t epoch)
+{audio_receive_epoch(a,packet,size,true,epoch);}
 static uint64_t audio_percentile(const atomic_uint_fast64_t *hist, unsigned bins, unsigned percentile, uint64_t step_us, uint64_t *count)
 {
     uint64_t total = 0;
@@ -505,11 +609,12 @@ static uint64_t audio_percentile(const atomic_uint_fast64_t *hist, unsigned bins
 void x4_live_audio_snapshot(const X4LiveAudio *a, X4LiveAudioSnapshot *s)
 {
     memset(s, 0, sizeof(*s)); if (!a) return;
-    s->packets = atomic_load(&a->packets); s->frames = atomic_load(&a->frames);
+    s->packets = atomic_load(&a->packets); s->bytes = atomic_load(&a->bytes); s->frames = atomic_load(&a->frames);
     s->dropped = atomic_load(&a->dropped); s->lost = atomic_load(&a->lost);
     s->bad_frames = atomic_load(&a->bad_frames); s->underflows = atomic_load(&a->underflows);
     s->playing = atomic_load(&a->playing); s->error = atomic_load(&a->error);
     s->previous = a->previous; s->detailed_metrics_available = !a->previous;
+    s->fec_implemented = !a->previous; s->fec_packets = atomic_load(&a->fec_packets);
     s->plc_samples = atomic_load(&a->plc_samples); s->pcm_overflows = atomic_load(&a->pcm_overflows);
     s->decode_errors = atomic_load(&a->decode_errors); s->trimmed_samples = atomic_load(&a->trimmed_samples);
     s->restarts = atomic_load(&a->restarts); s->underflow_episodes = atomic_load(&a->underflow_episodes);
@@ -538,11 +643,13 @@ void x4_live_audio_metrics_write(FILE *f, const X4LiveAudioSnapshot *s)
     if (!f || !s) return;
     fprintf(f, "{\"mode\":\"%s\",\"detailed_metrics_available\":%s,\"worker_joined\":%s,\"snapshot_scope\":\"%s\",\"underflows\":%" PRIu64
             ",\"underflow_unit\":\"output_blocks_short_before_concealment\",\"underflow_episodes\":%" PRIu64
-            ",\"plc_ms\":%.3f,\"plc_scope\":\"Opus_samples_generated_including_any_later_trimmed\",\"fec_packets\":0,\"fec_implemented\":false,\"pcm_overflows\":%" PRIu64
+            ",\"plc_ms\":%.3f,\"plc_scope\":\"Opus_samples_generated_including_any_later_trimmed\",\"fec_packets\":%" PRIu64
+            ",\"fec_implemented\":%s,\"pcm_overflows\":%" PRIu64
             ",\"decode_errors\":%" PRIu64 ",\"trimmed_ms\":%.3f,\"trim_events\":%" PRIu64 ",\"restarts\":%" PRIu64,
             s->previous ? "previous" : "new", s->detailed_metrics_available ? "true" : "false",
             s->worker_joined ? "true" : "false", s->worker_joined ? "joined_final" : "live_atomic_approximation", s->underflows,
-            s->underflow_episodes, (double)s->plc_samples / 48.0, s->pcm_overflows, s->decode_errors,
+            s->underflow_episodes, (double)s->plc_samples / 48.0, s->fec_packets,
+            s->fec_implemented ? "true" : "false", s->pcm_overflows, s->decode_errors,
             (double)s->trimmed_samples / 48.0, s->trim_events, s->restarts);
     if (!s->detailed_metrics_available) {
         fputs(",\"detail_status\":\"unavailable_in_unchanged_previous_worker\",\"buffer_ms\":null,\"underflow_intervals_ms\":null,\"packet_duration_ms\":null}", f); return;
@@ -574,6 +681,14 @@ int x4_live_audio_stop_report(X4LiveAudio *a, X4LiveAudioSnapshot *report)
     }
     if (report) { x4_live_audio_snapshot(a, report); report->worker_joined = true; }
     if (a->handle >= 0 && a->close) { int rc = a->close(a->handle); if (rc < 0) return rc; a->handle = -1; }
+#if !X4_PUBLIC
+    if (!a->previous)
+        printf("XCloud4: audio FEC lost=%" PRIu64 " plc_samples=%" PRIu64 " fec_attempts=%" PRIu64
+               " fec_packets=%" PRIu64 " fec_recovered_samples=%" PRIu64 " lbrr_packets=%" PRIu64 "\n",
+               (uint64_t)atomic_load(&a->lost), (uint64_t)atomic_load(&a->plc_samples),
+               (uint64_t)atomic_load(&a->fec_attempts), (uint64_t)atomic_load(&a->fec_packets),
+               (uint64_t)atomic_load(&a->fec_recovered_samples), (uint64_t)atomic_load(&a->lbrr_packets));
+#endif
     if (a->decoder) opus_decoder_destroy(a->decoder);
     x4_live_ring_free(&a->ring); x4_live_reorder_free(&a->reorder); free(a);
     return 0;

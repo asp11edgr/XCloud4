@@ -1,66 +1,36 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Production login constructors and full production HTTP/TLS ownership run
- * against the existing native ABI fixture. No live request is made. */
+/* Production constructors and wire policy, with a shared TLS link double. */
 #define main access_base_main
-#define x4_module_symbol access_base_symbol
 #include "stream_os_profile_http_test.c"
-#undef x4_module_symbol
 #undef main
-
 static X4AccessCountry expected_country;
-static unsigned forwarded[128], forwarded_total, login_total, login_main, login_f2p;
-static bool is_f2p[128], refuse_main;
+static unsigned forwarded[128],forwarded_total,login_total,login_main,login_f2p;
+static bool is_f2p[128],refuse_main;
+static void access_transport_request(const X4TfRequest *request,X4TfResponse *response)
+{
+ X4TfRequest filtered=*request;filtered.header_count=0;
+ unsigned count=0;
+ for(size_t i=0;i<request->header_count;++i){
+  if(!strcmp(request->headers[i].name,"X-Forwarded-For")){
+   ++count;CHECK(x4_access_country_ip(expected_country));
+   CHECK(!strcmp(request->headers[i].value,x4_access_country_ip(expected_country)));
+  }else filtered.headers[filtered.header_count++]=request->headers[i];
+ }
+ bool login=!strcmp(request->url,offerings[0].url)||!strcmp(request->url,offerings[1].url);
+ CHECK(count==(login&&expected_country!=X4_ACCESS_AUTO?1u:0u));
+ if(count)CHECK(request->method==1&&login);
+ transport_request(&filtered,response);
+ CHECK(next_resource<128);forwarded[next_resource]=count;forwarded_total+=count;
+ if(login){
+  ++login_total;bool f2p=!strcmp(request->url,offerings[1].url);is_f2p[next_resource]=f2p;
+  if(f2p)++login_f2p;else ++login_main;
+  if(refuse_main&&!f2p){response->status=403;response->body="{}";}
+ }
+}
 
-static int32_t access_request(int32_t connection,int32_t method,const char *url,uint64_t bytes)
-{
-    if (strcmp(url,offerings[1].url)) return native_request(connection,method,url,bytes);
-    CHECK(resource[connection].kind==TEST_CONNECTION&&method==1);
-    int32_t id=test_new_resource(TEST_REQUEST,connection);
-    resource[id].method=method;resource[id].borrowed_url=url;
-    resource[id].payload_size=bytes;resource[id].route=TEST_LOGIN;is_f2p[id]=true;
-    return id;
-}
-static int32_t access_header(int32_t id,const char *name,const char *value,uint32_t mode)
-{
-    if (strcmp(name,"X-Forwarded-For")) return native_header(id,name,value,mode);
-    CHECK(resource[id].kind==TEST_REQUEST&&resource[id].route==TEST_LOGIN&&resource[id].method==1&&!mode);
-    CHECK(x4_access_country_ip(expected_country)&&!strcmp(value,x4_access_country_ip(expected_country)));
-    CHECK(++forwarded[id]==1);++forwarded_total;return 0;
-}
-static int32_t access_send(int32_t id,const void *body,size_t bytes)
-{
-    CHECK(resource[id].route==TEST_LOGIN ? forwarded[id]==(expected_country!=X4_ACCESS_AUTO) : !forwarded[id]);
-    int32_t rc=native_send(id,body,bytes);
-    if(resource[id].route==TEST_LOGIN){
-        ++login_total;
-        if(is_f2p[id])++login_f2p;else ++login_main;
-        if(refuse_main&&!is_f2p[id]) resource[id].response="{}";
-    }
-    return rc;
-}
-static int32_t access_status(int32_t id,int32_t *status)
-{
-    if(resource[id].route==TEST_LOGIN&&refuse_main&&!is_f2p[id]){*status=403;return 0;}
-    return native_status(id,status);
-}
-static int32_t access_delete_template(int32_t id)
-{
-    int32_t rc=native_delete_template(id);
-    for(unsigned i=1;i<=next_resource;++i)CHECK(resource[i].kind==TEST_NONE);
-    memset(resource,0,sizeof(resource));memset(forwarded,0,sizeof(forwarded));memset(is_f2p,0,sizeof(is_f2p));
-    next_resource=0;return rc;
-}
-int x4_module_symbol(int handle,const char *name,void **address)
-{
-    if(!strcmp(name,"sceHttpCreateRequestWithURL")){*address=(void *)access_request;return 0;}
-    if(!strcmp(name,"sceHttpAddRequestHeader")){*address=(void *)access_header;return 0;}
-    if(!strcmp(name,"sceHttpSendRequest")){*address=(void *)access_send;return 0;}
-    if(!strcmp(name,"sceHttpGetStatusCode")){*address=(void *)access_status;return 0;}
-    if(!strcmp(name,"sceHttpDeleteTemplate")){*address=(void *)access_delete_template;return 0;}
-    return access_base_symbol(handle,name,address);
-}
 static void begin_country(X4AccessCountry country,bool fallback)
 {
+    x4tf_reset();x4tf.on_request=access_transport_request;x4tf.on_connection_close=transport_connection_closed;x4tf.on_context_close=transport_http_closed;
     expected_country=country;refuse_main=fallback;
     forwarded_total=login_total=login_main=login_f2p=0;
     memset(route_calls,0,sizeof(route_calls));memset(resource,0,sizeof(resource));

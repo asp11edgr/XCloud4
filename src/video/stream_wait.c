@@ -3,7 +3,8 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #include "stream_wait.h"
-#if (X4_STREAM_PROFILE && !X4_VIDEO_PROBE) || X4_STREAM_WAIT_HOST
+/* T26's realistic cell runs the unchanged streaming scheduler in the probe. */
+#if (X4_STREAM_PROFILE && (!X4_VIDEO_PROBE || X4_PROBE_T26)) || X4_STREAM_WAIT_HOST
 #include <string.h>
 #include <errno.h>
 #if X4_STREAM_WAIT_HOST

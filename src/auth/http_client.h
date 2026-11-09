@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #pragma once
 #include <stddef.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdbool.h>
 
-/* Local errors; native Net/Ssl/Http errors are returned unchanged. */
+/* Local errors occupy -1001..-1099; socket/resolver errors retain SceNet's
+ * native convention. There is no native TLS or HTTP fallback. */
 enum {
     X4_HTTP_CANCELLED = -1001,
     X4_HTTP_BOUND = -1002,
@@ -15,6 +18,9 @@ enum {
     X4_HTTP_UNUSABLE = -1007,
     X4_HTTP_PROTOCOL = -1008,
     X4_HTTP_BUSY = -1009,
+    X4_HTTP_TLS_ALERT = -1010,
+    X4_HTTP_TLS_CERTIFICATE = -1011,
+    X4_HTTP_TLS_CERTIFICATE_TIME = -1012,
 };
 
 typedef struct X4Http X4Http;
@@ -32,8 +38,8 @@ void x4_http_close(X4Http *http);
  * form is NULL, otherwise POST application/x-www-form-urlencoded. Returns 0
  * once any HTTP status and its whole body were read (body NUL terminated,
  * at most capacity - 1 bytes). On error body is wiped, length and status 0.
- * cancel may be NULL; it is polled between stages and reads, so cancelling
- * waits for the current native operation under its configured timeouts. */
+ * cancel may be NULL; nonblocking socket waits check it at most every 100 ms.
+ * Certificate trust, dates and the destination hostname are mandatory. */
 int x4_http_request(X4Http *http, const char *url, const char *form, char *body,
     size_t capacity, size_t *length, int *status, const _Atomic int *cancel);
 
@@ -75,6 +81,15 @@ int x4_http_json_request(X4Http *http, const char *url, const X4HttpHeader *head
     size_t header_count, const char *json, char *body, size_t capacity, size_t *length,
     int *status, const _Atomic int *cancel);
 
+/* Private GET for the exact content access host and two fixed parameters.
+ * A binary body may contain NUL bytes. Only XBL3.0 authorization and MS-CV
+ * are accepted, and neither header is shared with another destination. */
+#define X4_HTTP_CLOUD_TIME_PREFIX "https://contentaccess.exp.xboxservices.com/all/v1?market="
+#define X4_HTTP_CLOUD_TIME_SUFFIX "&offering=xgpuweb"
+int x4_http_cloud_time_request(X4Http *http, const char *url, const X4HttpHeader *headers,
+    size_t header_count, char *body, size_t capacity, size_t *length,
+    int *status, const _Atomic int *cancel);
+
 /* Public cover GET only. No caller headers, cookies, redirects or Xbox tokens.
  * Exactly the inspected Microsoft Store image host, /image/apps.<safe asset>,
  * and the fixed bounded-thumbnail query are accepted. Binary body has an
@@ -97,8 +112,8 @@ int x4_http_public_metadata_request(X4Http *http, const char *url, char *body,
  * Worker-only: call immediately after its public request, before another. */
 uint64_t x4_http_public_retry_after_ms(const X4Http *http);
 
-/* Worker-only suspension boundary. Deletes public connections and their
- * templates before returning 0; caller may declare idle only afterwards.
+/* Worker-only suspension boundary. Closes both public TLS connections
+ * before returning 0; caller may declare idle only afterwards.
  * Does not terminate Net or touch auth exchanges. Concurrent calls return
  * BUSY. Native deletion failures quarantine the context, as elsewhere. */
 int x4_http_public_reset(X4Http *http);
@@ -119,6 +134,11 @@ int x4_http_releases_request(X4Http *http, const char *url, char *body, size_t c
     size_t *length, int *status, const _Atomic int *cancel);
 
 enum X4HttpSessionMethod { X4_SESSION_HTTP_GET, X4_SESSION_HTTP_POST, X4_SESSION_HTTP_DELETE };
+
+/* Owned by the session worker. Enable after /play, disable and close at
+ * reconnect, cancellation or cleanup. Diagnostic/reconnect APIs remain
+ * one-shot regardless of this switch. */
+int x4_http_session_persistence(X4Http *http, bool enabled);
 
 /* Xbox cloud session exchanges on the validated default region host
  * (https://<labels>.gssv-play-prod.xboxlive.com, same label rules as
@@ -144,7 +164,45 @@ int x4_http_session_request(X4Http *http, enum X4HttpSessionMethod method, const
     const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
     size_t *length, int *status, const _Atomic int *cancel);
 
+/* One best-effort diagnostic GET /state after an established RTC connection
+ * is lost. No retry; only the already validated session /state route. Its
+ * 2 s transfer deadline clamps every phase to the remaining time. Ordinary
+ * requests retain their existing 30 s deadline and 5 s phase timeouts. */
+int x4_http_session_state_request(X4Http *http, const char *url,
+    const X4HttpHeader *headers, size_t header_count, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel);
+
+/* Reconnection only: immutable per-request monotonic absolute deadline.
+ * Accepts solely the existing /state,/connect,/sdp,/ice,/keepalive routes;
+ * /state additionally retains its 2 s maximum. No /play or DELETE. */
+int x4_http_session_reconnect_request(X4Http *http, enum X4HttpSessionMethod method, const char *url,
+    const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel, uint64_t absolute_deadline_us);
+/* The two fixed Microsoft authorization endpoints, only during a reconnect
+ * ReadyToConnect step. false=refresh, true=console-transfer Passport. */
+int x4_http_auth_reconnect_request(X4Http *http, bool passport, const char *form, char *body,
+    size_t capacity, size_t *length, int *status, const _Atomic int *cancel,
+    uint64_t absolute_deadline_us);
+
 /* Constant literal naming the last stage reached; safe to show in the UI. */
 const char *x4_http_stage(const X4Http *http);
 
 void x4_secure_clear(void *data, size_t size);
+
+enum {
+    X4_HTTP_UPDATE_REDIRECT = -1013,
+    X4_HTTP_UPDATE_STATUS = -1014,
+};
+#define X4_HTTP_UPDATE_BODY_MAX (64u * 1024u * 1024u)
+/* Dedicated context for release assets. Its extra CA is confined to
+ * the fixed GitHub hosts, before DNS or a TLS handshake. */
+X4Http *x4_http_update_open(int *error);
+
+typedef int (*X4HttpUpdateSink)(void *context, const void *bytes, size_t size);
+/* Worker-owned HTTPS GET of a fixed XCloud4 GitHub release asset. Neither
+ * arguments nor redirects can supply credentials, a caller header, or an
+ * arbitrary origin. The sink may receive part of the body on failure and
+ * must return zero or a negative error. `received` is zero on failure. */
+int x4_http_update_asset(X4Http *http, const char *tag, const char *asset_name,
+    size_t maximum, X4HttpUpdateSink sink, void *context, size_t *received,
+    const _Atomic int *cancel);

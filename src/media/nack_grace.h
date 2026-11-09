@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
+/* T43 compatibility policy. T43b uses deadlines stored by the adaptive
+ * video reorder instead; no request ordinal can limit adaptive grace. */
 #include <stdbool.h>
 #include <stdint.h>
 

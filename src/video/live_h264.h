@@ -19,6 +19,9 @@
 #include "probe_stack.h"
 #include "probe_reference.h"
 #endif
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#include "probe_t26_hooks.h"
+#endif
 enum { X4_LIVE_WIDTH = 1280, X4_LIVE_HEIGHT = 720, X4_LIVE_AU_MAX = 2 * 1024 * 1024,
     X4_LIVE_COPY_READERS = 4 };
 /* RGB storage only; decoder limits and live admission remain 1280x720. */
@@ -147,6 +150,12 @@ typedef struct {
     unsigned input_slot; uint64_t native_call;
 #endif
     uint64_t output_id, decode_us, decode_end_us;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    uint32_t t26_native_valid,t26_native_error,t26_picture_count;
+    bool t26_native_called;
+    const void *t26_native_pointer;
+    size_t t26_native_bytes;
+#endif
 } X4ProbeNativeOutput;
 #endif
 #if X4_VIDEO_PROBE
@@ -179,4 +188,12 @@ unsigned x4_live_video_stream_output_held_mask(const X4LiveVideo *);
 int x4_live_video_stream_raw_decode(X4LiveVideo *, unsigned offered_slot,
     const uint8_t *, size_t, uint64_t pts, bool flush, X4ProbeNativeOutput *);
 void x4_live_video_stream_info(const X4LiveVideo *, X4StreamVideoInfo *);
+#endif
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+/* Exact one-attempt local benchmark. No SPS/geometry/depth fallback. The
+ * caller closes even a failed start and retains the context on close error. */
+int x4_live_video_t26_raw_start(X4LiveVideo *, const uint8_t *sps, size_t,
+    const atomic_bool *, const X4T26NativeOptions *);
+unsigned x4_live_video_t26_allocations(const X4LiveVideo *,
+    X4T26Allocation out[X4_T26_ALLOCATION_MAX]);
 #endif

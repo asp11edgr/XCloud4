@@ -2,7 +2,8 @@
 #include "release_check.h"
 #include "http_client.h"
 #include "json.h"
-#include "../core/build_identity.h"
+#include "../core/app_identity.h"
+#include <limits.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,7 @@ int x4_version_parse(const char *str, int *major, int *minor, int *patch)
     if (*p < '0' || *p > '9') return -1;
     *major = 0;
     while (*p >= '0' && *p <= '9') {
+        if (*major > (INT_MAX - (*p - '0')) / 10) return -1;
         *major = *major * 10 + (*p - '0');
         ++p;
     }
@@ -34,6 +36,7 @@ int x4_version_parse(const char *str, int *major, int *minor, int *patch)
     if (*p < '0' || *p > '9') return -1;
     *minor = 0;
     while (*p >= '0' && *p <= '9') {
+        if (*minor > (INT_MAX - (*p - '0')) / 10) return -1;
         *minor = *minor * 10 + (*p - '0');
         ++p;
     }
@@ -43,6 +46,7 @@ int x4_version_parse(const char *str, int *major, int *minor, int *patch)
     if (*p < '0' || *p > '9') return -1;
     *patch = 0;
     while (*p >= '0' && *p <= '9') {
+        if (*patch > (INT_MAX - (*p - '0')) / 10) return -1;
         *patch = *patch * 10 + (*p - '0');
         ++p;
     }
@@ -62,50 +66,87 @@ int x4_version_compare(const char *v1, const char *v2)
     return 0;
 }
 
-int x4_release_parse_tag(const char *json_body, size_t length, bool is_public,
-    char *tag_out, size_t tag_cap, char *ver_out, size_t ver_cap)
+static int release_entry(const char *json_body, size_t length, bool is_public,
+    char tag[64], X4JsonSpan *entry)
 {
     if (!json_body || length == 0) return -1;
     X4JsonSpan root;
     if (x4_json_parse(json_body, length, &root) != 0) return -1;
 
+    X4JsonSpan tag_span;
     if (is_public) {
-        if (x4_json_type(root) != X4_JSON_T_OBJECT) return -1;
-        X4JsonSpan tag_span;
-        if (x4_json_member(root, "tag_name", &tag_span) != 1) return -1;
-        char tag[64] = {0};
-        if (x4_json_token(tag_span, tag, sizeof(tag)) != 0 || !tag[0]) return -1;
-        if (tag_out && tag_cap) snprintf(tag_out, tag_cap, "%s", tag);
-        const char *ver = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
-        if (ver_out && ver_cap) snprintf(ver_out, ver_cap, "%s", ver);
+        if (x4_json_member(root, "tag_name", &tag_span) != 1 ||
+                x4_json_token(tag_span, tag, 64) != 0 || !tag[0]) return -1;
+        *entry = root;
         return 0;
-    } else {
-        if (x4_json_type(root) != X4_JSON_T_ARRAY) return -1;
-        size_t cursor = 0;
-        X4JsonSpan item, tag_span;
-        while (x4_json_item(root, &cursor, &item) == 1) {
-            if (x4_json_type(item) == X4_JSON_T_OBJECT &&
-                x4_json_member(item, "tag_name", &tag_span) == 1) {
-                char tag[64] = {0};
-                if (x4_json_token(tag_span, tag, sizeof(tag)) == 0) {
-                    if (!strncmp(tag, "lab-", 4) || !strncmp(tag, "LAB-", 4)) {
-                        if (tag_out && tag_cap) snprintf(tag_out, tag_cap, "%s", tag);
-                        const char *ver = tag + 4;
-                        if (ver_out && ver_cap) snprintf(ver_out, ver_cap, "%s", ver);
-                        return 0;
-                    }
-                }
-            }
-        }
-        return -1;
     }
+    size_t cursor = 0;
+    X4JsonSpan item;
+    while (x4_json_item(root, &cursor, &item) == 1) {
+        if (x4_json_member(item, "tag_name", &tag_span) == 1 &&
+                x4_json_token(tag_span, tag, 64) == 0 &&
+                (!strncmp(tag, "lab-", 4) || !strncmp(tag, "LAB-", 4))) {
+            *entry = item;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static const char *release_version(const char *tag, bool is_public)
+{
+    if (!is_public) return tag + 4;
+    return tag + (tag[0] == 'v' || tag[0] == 'V');
+}
+
+int x4_release_parse_tag(const char *json_body, size_t length, bool is_public,
+    char *tag_out, size_t tag_cap, char *ver_out, size_t ver_cap)
+{
+    char tag[64];
+    X4JsonSpan entry;
+    if (release_entry(json_body, length, is_public, tag, &entry)) return -1;
+    if (tag_out && tag_cap) snprintf(tag_out, tag_cap, "%s", tag);
+    if (ver_out && ver_cap) snprintf(ver_out, ver_cap, "%s", release_version(tag, is_public));
+    return 0;
+}
+
+enum { RELEASE_MANIFEST = 1u, RELEASE_SIGNATURE = 2u };
+static unsigned release_asset_bit(const char *name)
+{
+    if (!name) return 0;
+#if X4_PUBLIC
+    if (!strcmp(name, X4_UPDATE_PUBLIC_MANIFEST)) return RELEASE_MANIFEST;
+    if (!strcmp(name, X4_UPDATE_PUBLIC_SIGNATURE)) return RELEASE_SIGNATURE;
+#else
+    if (!strcmp(name, X4_UPDATE_LAB_MANIFEST)) return RELEASE_MANIFEST;
+    if (!strcmp(name, X4_UPDATE_LAB_SIGNATURE)) return RELEASE_SIGNATURE;
+#endif
+    return 0;
+}
+
+static unsigned release_assets(X4JsonSpan entry)
+{
+    X4JsonSpan array, item, field;
+    if (x4_json_member(entry, "assets", &array) != 1) return 0;
+    unsigned seen = 0, duplicates = 0;
+    size_t cursor = 0;
+    while (x4_json_item(array, &cursor, &item) == 1) {
+        char name[64];
+        if (x4_json_member(item, "name", &field) != 1 || x4_json_token(field, name, sizeof(name))) continue;
+        const unsigned bit = release_asset_bit(name);
+        duplicates |= seen & bit;
+        seen |= bit;
+    }
+    return seen & ~duplicates;
 }
 
 static struct {
     _Atomic int status;
     char latest_version[32];
     char latest_tag[64]; /* validated before publication through status */
+    unsigned latest_assets;
     _Atomic int cancel;
+    atomic_bool done;
     bool started;
     bool mock_active;
 #ifdef X4_OPENORBIS
@@ -118,13 +159,27 @@ static struct {
     .latest_version = {0},
     .latest_tag = {0},
     .cancel = 0,
+    .done = true,
     .started = false,
     .mock_active = false
 };
 
+/* The main thread can read a result or change the mock while the worker
+ * publishes. No lock is held during TLS, allocation or a join. */
+static atomic_flag release_guard = ATOMIC_FLAG_INIT;
+static void release_lock(void)
+{
+    while (atomic_flag_test_and_set_explicit(&release_guard, memory_order_acquire)) {}
+}
+
+static void release_unlock(void)
+{
+    atomic_flag_clear_explicit(&release_guard, memory_order_release);
+}
+
 static bool release_tag_valid(const char *tag)
 {
-    if (!tag || !tag[0]) return false;
+    if (!tag || !tag[0] || !strcmp(tag, ".") || !strcmp(tag, "..")) return false;
     for (size_t i = 0; i < 64; ++i) {
         unsigned char c = (unsigned char)tag[i];
         if (!c) return i > 0;
@@ -144,72 +199,93 @@ static void release_store_tag(const char *tag)
 static void *release_check_worker(void *arg)
 {
     (void)arg;
+    enum X4UpdateStatus result = X4_UPDATE_FAILED;
+    char tag[64] = {0};
+    char ver[32] = {0};
+    unsigned assets = 0;
     int err = 0;
     X4Http *http = x4_http_open(&err);
-    if (!http) {
-        if (!check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_FAILED);
-        return NULL;
-    }
-    char *body = malloc(X4_HTTP_RELEASES_BODY_MAX + 1);
-    if (!body) {
-        x4_http_close(http);
-        if (!check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_FAILED);
-        return NULL;
-    }
-    size_t length = 0;
-    int status_code = 0;
+    char *body = http ? malloc(X4_HTTP_RELEASES_BODY_MAX + 1) : NULL;
+    if (body) {
+        size_t length = 0;
+        int status_code = 0;
 #if X4_PUBLIC
-    const char *url = X4_HTTP_RELEASES_URL_PUBLIC;
+        const char *url = X4_HTTP_RELEASES_URL_PUBLIC;
 #else
-    const char *url = X4_HTTP_RELEASES_URL_LAB;
+        const char *url = X4_HTTP_RELEASES_URL_LAB;
 #endif
-    int rc = x4_http_releases_request(http, url, body, X4_HTTP_RELEASES_BODY_MAX + 1,
-        &length, &status_code, &check_state.cancel);
-    if (!check_state.mock_active) {
-        if (rc == 0 && status_code == 200 && length > 0) {
-            char tag[64] = {0};
-            char ver[32] = {0};
-            if (x4_release_parse_tag(body, length, X4_PUBLIC != 0, tag, sizeof(tag), ver, sizeof(ver)) == 0) {
-                if (x4_version_compare(ver, X4_PRODUCT_VERSION) > 0) {
-                    snprintf(check_state.latest_version, sizeof(check_state.latest_version), "%s", ver);
-                    release_store_tag(tag);
-                    atomic_store(&check_state.status, X4_UPDATE_AVAILABLE);
-                } else {
-                    atomic_store(&check_state.status, X4_UPDATE_LATEST);
-                }
+        const int rc = x4_http_releases_request(http, url, body, X4_HTTP_RELEASES_BODY_MAX + 1,
+            &length, &status_code, &check_state.cancel);
+        X4JsonSpan entry;
+        if (rc == 0 && status_code == 200 && !release_entry(body, length, X4_PUBLIC != 0, tag, &entry)) {
+            const char *version = release_version(tag, X4_PUBLIC != 0);
+            if (x4_version_compare(version, X4_PRODUCT_VERSION) > 0) {
+                snprintf(ver, sizeof(ver), "%s", version);
+                result = X4_UPDATE_AVAILABLE;
+                if (release_tag_valid(tag)) assets = release_assets(entry);
             } else {
-                atomic_store(&check_state.status, X4_UPDATE_FAILED);
+                result = X4_UPDATE_LATEST;
             }
-        } else {
-            atomic_store(&check_state.status, X4_UPDATE_FAILED);
         }
+        free(body);
     }
-    free(body);
-    x4_http_close(http);
+    if (http) x4_http_close(http);
+    release_lock();
+    if (!check_state.mock_active) {
+        memcpy(check_state.latest_version, ver, sizeof(ver));
+        release_store_tag(result == X4_UPDATE_AVAILABLE ? tag : NULL);
+        check_state.latest_assets = assets;
+        atomic_store(&check_state.status, result);
+    }
+    release_unlock();
+    atomic_store_explicit(&check_state.done, true, memory_order_release);
     return NULL;
+}
+
+static bool release_start(void)
+{
+    atomic_store(&check_state.cancel, 0);
+    atomic_store(&check_state.done, false);
+    release_lock();
+    if (!check_state.mock_active) {
+        check_state.latest_version[0] = 0;
+        check_state.latest_tag[0] = 0;
+        check_state.latest_assets = 0;
+        atomic_store(&check_state.status, X4_UPDATE_CHECKING);
+    }
+    release_unlock();
+
+#ifdef X4_OPENORBIS
+    OrbisPthreadAttr attr;
+    int rc = scePthreadAttrInit(&attr);
+    if (!rc) {
+        rc = scePthreadAttrSetstacksize(&attr, 256u * 1024);
+        if (!rc) rc = scePthreadCreate(&check_state.thread, &attr, release_check_worker, NULL, "x4-update");
+        scePthreadAttrDestroy(&attr);
+    }
+#else
+    pthread_attr_t attr;
+    int rc = pthread_attr_init(&attr);
+    if (!rc) {
+        rc = pthread_attr_setstacksize(&attr, 256u * 1024);
+        if (!rc) rc = pthread_create(&check_state.thread, &attr, release_check_worker, NULL);
+        pthread_attr_destroy(&attr);
+    }
+#endif
+    if (rc) {
+        atomic_store(&check_state.done, true);
+        release_lock();
+        if (!check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_FAILED);
+        release_unlock();
+        return false;
+    }
+    check_state.started = true;
+    return true;
 }
 
 void x4_release_check_start(void)
 {
-    if (check_state.started) return;
-    check_state.started = true;
-    if (!check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_CHECKING);
-
-#ifdef X4_OPENORBIS
-    OrbisPthreadAttr attr;
-    scePthreadAttrInit(&attr);
-    scePthreadAttrSetstacksize(&attr, 256 * 1024);
-    int rc = scePthreadCreate(&check_state.thread, &attr, release_check_worker, NULL, "x4-update");
-    scePthreadAttrDestroy(&attr);
-    if (rc != 0 && !check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_FAILED);
-#else
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 256 * 1024);
-    int rc = pthread_create(&check_state.thread, &attr, release_check_worker, NULL);
-    pthread_attr_destroy(&attr);
-    if (rc != 0 && !check_state.mock_active) atomic_store(&check_state.status, X4_UPDATE_FAILED);
-#endif
+    if (!check_state.started) (void)release_start();
 }
 
 void x4_release_check_stop(void)
@@ -224,24 +300,44 @@ void x4_release_check_stop(void)
     check_state.started = false;
 }
 
+bool x4_release_check_restart(void)
+{
+    if (check_state.started && !atomic_load_explicit(&check_state.done, memory_order_acquire)) return false;
+    x4_release_check_stop();
+    return release_start();
+}
+
 enum X4UpdateStatus x4_release_check_status(char *version_out, size_t cap)
 {
+    if (!version_out || !cap) return (enum X4UpdateStatus)atomic_load(&check_state.status);
+    release_lock();
     enum X4UpdateStatus s = (enum X4UpdateStatus)atomic_load(&check_state.status);
-    if (version_out && cap) {
-        snprintf(version_out, cap, "%s", check_state.latest_version);
-    }
+    snprintf(version_out, cap, "%s", check_state.latest_version);
+    release_unlock();
     return s;
 }
 
 bool x4_release_check_tag(char *out, size_t capacity)
 {
-    if (out && capacity) out[0] = 0;
-    if (!out || !capacity || atomic_load_explicit(&check_state.status, memory_order_acquire) != X4_UPDATE_AVAILABLE ||
-        !release_tag_valid(check_state.latest_tag)) return false;
-    size_t length = strlen(check_state.latest_tag);
-    if (length >= capacity) return false;
-    memcpy(out, check_state.latest_tag, length + 1u);
-    return true;
+    if (!out || !capacity) return false;
+    out[0] = 0;
+    release_lock();
+    const size_t length = strlen(check_state.latest_tag);
+    const bool valid = atomic_load(&check_state.status) == X4_UPDATE_AVAILABLE && length && length < capacity;
+    if (valid) memcpy(out, check_state.latest_tag, length + 1u);
+    release_unlock();
+    return valid;
+}
+
+bool x4_release_check_asset(const char *asset_name)
+{
+    const unsigned bit = release_asset_bit(asset_name);
+    if (!bit) return false;
+    release_lock();
+    const bool found = atomic_load(&check_state.status) == X4_UPDATE_AVAILABLE &&
+        (check_state.latest_assets & bit) != 0;
+    release_unlock();
+    return found;
 }
 
 void x4_release_check_set_mock(enum X4UpdateStatus status, const char *version)
@@ -251,9 +347,12 @@ void x4_release_check_set_mock(enum X4UpdateStatus status, const char *version)
 
 void x4_release_check_set_mock_tag(enum X4UpdateStatus status, const char *version, const char *tag)
 {
+    release_lock();
     check_state.mock_active = true;
     if (version) snprintf(check_state.latest_version, sizeof(check_state.latest_version), "%s", version);
     else check_state.latest_version[0] = 0;
     release_store_tag(tag);
+    check_state.latest_assets = 0;
     atomic_store(&check_state.status, (int)status);
+    release_unlock();
 }

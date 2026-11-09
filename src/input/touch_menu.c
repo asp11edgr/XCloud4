@@ -1,3 +1,4 @@
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "touch_menu.h"
 #include <string.h>
@@ -6,7 +7,7 @@ void x4_touch_menu_init(X4TouchMenu *menu, bool is_public)
 {
     memset(menu, 0, sizeof(*menu));
     menu->is_public = is_public;
-    menu->item_count = is_public ? 4 : 6;
+    menu->item_count = is_public ? 6 : 8;
 }
 
 bool x4_touch_menu_feed_touch(X4TouchMenu *menu, bool game_input, uint8_t fingers, uint64_t now_us)
@@ -75,16 +76,28 @@ X4TouchMenuAction x4_touch_menu_update(X4TouchMenu *menu, uint32_t pressed, uint
         return X4_TOUCH_MENU_ACTION_CANCEL;
     }
 
+    if (menu->mic_enabled && (pressed & ORBIS_PAD_BUTTON_SQUARE)) {
+        menu->last_activity_us = now_us;
+        menu->suppress_mask = held;
+        return X4_TOUCH_MENU_ACTION_TOGGLE_MIC;
+    }
+
     if (pressed & ORBIS_PAD_BUTTON_CROSS) {
+        int idx = menu->selected_index;
+        if (idx == 4) {
+            menu->last_activity_us = now_us;
+            menu->suppress_mask = held;
+            return X4_TOUCH_MENU_ACTION_NET_HUD;
+        }
         menu->is_open = false;
         menu->suppress_mask = held;
-        int idx = menu->selected_index;
         if (menu->is_public) {
             switch (idx) {
             case 0: return X4_TOUCH_MENU_ACTION_BACK_TO_CATALOG;
             case 1: return X4_TOUCH_MENU_ACTION_TOGGLE_MUTE;
             case 2: return X4_TOUCH_MENU_ACTION_XBOX_BUTTON;
-            case 3: return X4_TOUCH_MENU_ACTION_CANCEL;
+            case 3: return X4_TOUCH_MENU_ACTION_RELOAD_STREAM;
+            case 5: return X4_TOUCH_MENU_ACTION_CANCEL;
             default: return X4_TOUCH_MENU_ACTION_NONE;
             }
         } else {
@@ -92,9 +105,10 @@ X4TouchMenuAction x4_touch_menu_update(X4TouchMenu *menu, uint32_t pressed, uint
             case 0: return X4_TOUCH_MENU_ACTION_BACK_TO_CATALOG;
             case 1: return X4_TOUCH_MENU_ACTION_TOGGLE_MUTE;
             case 2: return X4_TOUCH_MENU_ACTION_XBOX_BUTTON;
-            case 3: return X4_TOUCH_MENU_ACTION_MARK_TEST;
-            case 4: return X4_TOUCH_MENU_ACTION_EXIT_APP;
-            case 5: return X4_TOUCH_MENU_ACTION_CANCEL;
+            case 3: return X4_TOUCH_MENU_ACTION_RELOAD_STREAM;
+            case 5: return X4_TOUCH_MENU_ACTION_MARK_TEST;
+            case 6: return X4_TOUCH_MENU_ACTION_EXIT_APP;
+            case 7: return X4_TOUCH_MENU_ACTION_CANCEL;
             default: return X4_TOUCH_MENU_ACTION_NONE;
             }
         }

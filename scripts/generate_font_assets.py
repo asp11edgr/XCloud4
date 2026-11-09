@@ -18,7 +18,7 @@ SIZES = (18, 26, 28, 32, 38, 46, 56)
 CODEPOINTS = sorted(set(range(32, 127)) | set(range(160, 384)) |
                     set(range(0x300, 0x370)) |
                     {0x2010, 0x2013, 0x2014, 0x2018, 0x2019, 0x201c,
-                     0x201d, 0x2022, 0x2026, 0x2122, 0xfffd})
+                     0x201d, 0x201e, 0x2022, 0x2026, 0x2122, 0xfffd})
 INTER_CODEPOINTS = sorted(set(CODEPOINTS) | {0x2039, 0x203a})
 INTER_FACE_SPECS = (
     (0, "Inter-Regular.ttf", (18, 22, 26, 28, 32)),

@@ -6,8 +6,10 @@ cc=${CC:-clang}
 build_dir=$(mktemp -d "${TMPDIR:-/tmp}/xcloud4-ui-presentation.XXXXXX")
 trap 'rm -f -- "$build_dir"/*; rmdir -- "$build_dir"' EXIT
 common=(-std=c11 -D_POSIX_C_SOURCE=200809L -O1 -g -Wall -Wextra -Werror
+    -ffunction-sections -fdata-sections -Wl,--gc-sections
     "$repo_dir/tests/catalog_presentation_test.c" "$repo_dir/src/ui/catalog_presentation.c"
-    "$repo_dir/src/ui/catalog_browser.c" "$repo_dir/src/ui/recent_games.c")
+    "$repo_dir/src/ui/catalog_browser.c" "$repo_dir/src/ui/recent_games.c"
+    "$repo_dir/src/ui/favorites.c" "$repo_dir/src/ui/play_history.c" "$repo_dir/src/ui/product_metadata.c")
 "$cc" --version
 "$cc" "${common[@]}" -o "$build_dir/plain"; "$build_dir/plain"
 printf 'int main(void){return 0;}\n' >"$build_dir/probe.c"

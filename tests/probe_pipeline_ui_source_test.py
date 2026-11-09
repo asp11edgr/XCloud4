@@ -2,18 +2,71 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Probe controller wiring; C test covers deterministic selection and gates."""
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "src/core/probe_controller.c").read_text(encoding="utf-8")
 
 
+def controller_branches(source):
+    """Read the complete outer dispatch, not an arbitrary matching substring.
+
+    This intentionally accepts only the reviewed two-flag T26 selector,
+    legacy-probe elif, and final disabled stub. A weakened guard must fail.
+    """
+    match = re.search(
+        r"(?ms)^#if X4_VIDEO_PROBE && X4_PROBE_T26\n(?P<t26>.*?)"
+        r"^#elif X4_VIDEO_PROBE\n(?P<legacy>.*?)"
+        r"^#else\n(?P<off>.*?)^#endif\s*\Z", source)
+    if not match:
+        raise ValueError("Missing exact T26/legacy/OFF controller guard chain")
+    branches = {name: match[name].strip() for name in ("t26", "legacy", "off")}
+    if not re.fullmatch(
+        r'#include "../video/probe_t26_controller.h"\s+'
+        r'int x4_probe_controller_run\(void\)\s*\{\s*return x4_t26_controller_run\(\);\s*\}',
+        branches["t26"]):
+        raise ValueError("T26 branch must contain only its include and delegated entry point")
+    if branches["off"] != "int x4_probe_controller_run(void) { return -1; }":
+        raise ValueError("Disabled controller entry point changed")
+    if not branches["legacy"].startswith('#include "lifecycle.h"\n') or \
+            "X4ProbePipelineChoice pipeline_choice = {0}" not in branches["legacy"] or \
+            "x4_t26_controller_run" in branches["legacy"]:
+        raise ValueError("Legacy probe body escaped or was replaced by T26")
+    return branches
+
+
+def selected_controller(source, probe, t26):
+    branches = controller_branches(source)
+    return branches["t26" if probe and t26 else "legacy" if probe else "off"]
+
+
 class ProbePipelineUiTests(unittest.TestCase):
     def test_probe_off_entrypoint_unchanged(self):
-        self.assertTrue(SOURCE.rstrip().endswith(
-            "#else\nint x4_probe_controller_run(void) { return -1; }\n#endif"))
-        self.assertIn('#if X4_VIDEO_PROBE\n#include "lifecycle.h"', SOURCE)
-        self.assertIn("X4ProbePipelineChoice pipeline_choice = {0}", SOURCE)
+        branches = controller_branches(SOURCE)
+        self.assertEqual(branches["off"], "int x4_probe_controller_run(void) { return -1; }")
+        for t26 in (0, 1):
+            self.assertEqual(selected_controller(SOURCE, 0, t26), branches["off"])
+        self.assertTrue(branches["legacy"].startswith('#include "lifecycle.h"\n'))
+        self.assertIn("X4ProbePipelineChoice pipeline_choice = {0}", branches["legacy"])
+
+    def test_t26_requires_both_flags_and_legacy_retains_its_body(self):
+        branches = controller_branches(SOURCE)
+        self.assertEqual(selected_controller(SOURCE, 1, 0), branches["legacy"])
+        self.assertEqual(selected_controller(SOURCE, 1, 1), branches["t26"])
+        self.assertNotIn("return x4_t26_controller_run();", branches["legacy"])
+        self.assertNotIn("X4ProbePipelineChoice", branches["t26"])
+
+    def test_dispatch_guard_or_off_stub_mutations_are_rejected(self):
+        for old, new in (
+            ("#if X4_VIDEO_PROBE && X4_PROBE_T26", "#if X4_VIDEO_PROBE || X4_PROBE_T26"),
+            ("#if X4_VIDEO_PROBE && X4_PROBE_T26", "#if X4_PROBE_T26"),
+            ("#elif X4_VIDEO_PROBE", "#elif X4_PROBE_T26"),
+            ("int x4_probe_controller_run(void) { return -1; }",
+             "int x4_probe_controller_run(void) { return x4_t26_controller_run(); }"),
+        ):
+            with self.subTest(mutation=new), self.assertRaises(ValueError):
+                controller_branches(SOURCE.replace(old, new, 1))
 
     def test_choice_change_cannot_launch_same_frame(self):
         start = SOURCE.index("if (!files_view && !memory_view && !retained && !exit_requested && (pad.pressed & ORBIS_PAD_BUTTON_L2))")

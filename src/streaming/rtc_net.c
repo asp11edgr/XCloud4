@@ -234,3 +234,137 @@ void x4_native_freeifaddrs(struct ifaddrs *interface)
 {
     while (interface) { struct ifaddrs *next = interface->ifa_next; free(interface); interface = next; }
 }
+
+/* HTTPS-only bounded resolver. The RTC adapter above intentionally retains
+ * its established behavior. This mutex serializes only these new calls;
+ * every invocation creates its own resolver id in the prepared native pool. */
+#include <pthread.h>
+
+static pthread_once_t http_dns_once = PTHREAD_ONCE_INIT;
+static OrbisPthreadMutex http_dns_mutex;
+static int http_dns_mutex_error;
+
+static void http_dns_mutex_prepare(void)
+{
+    http_dns_mutex_error = scePthreadMutexInit(&http_dns_mutex, NULL, "x4-http-dns");
+}
+
+static int http_dns_net_error(int error)
+{
+    return (int32_t)(0x80410100u | (uint32_t)error);
+}
+
+static int http_dns_wait_state(uint64_t deadline, const _Atomic int *cancel, int cancel_error)
+{
+    if (cancel && atomic_load_explicit(cancel, memory_order_acquire)) return cancel_error;
+    return sceKernelGetProcessTime() >= deadline ? http_dns_net_error(ETIMEDOUT) : 0;
+}
+
+static unsigned http_dns_slice(uint64_t deadline)
+{
+    uint64_t now = sceKernelGetProcessTime();
+    uint64_t remaining = deadline > now ? deadline - now : 0;
+    return remaining > 100000u ? 100000u : (unsigned)remaining;
+}
+
+int x4_native_resolve_ipv4_deadline(const char *host, struct in_addr *out,
+                                  uint64_t absolute_deadline_us,
+                                  const _Atomic int *cancel, int cancel_error)
+{
+    enum { DNS_TIMEOUT_USEC = 2000000, DNS_RETRIES = 1 };
+    uint64_t started = sceKernelGetProcessTime();
+    const char *step = "argumentos";
+    int rc = http_dns_net_error(EINVAL);
+    if (!host || !out || !absolute_deadline_us || cancel_error >= 0)
+        goto failure;
+    out->s_addr = 0;
+    size_t length = strnlen(host, 256);
+    if (!length || length >= 256) goto failure;
+    step = "control";
+    rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+    if (rc) goto failure;
+    struct in_addr address = {0};
+    if (inet_pton(AF_INET, host, &address) == 1) {
+        rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+        if (rc) goto failure;
+        *out = address;
+        return 0;
+    }
+    /* NetInit/net_prepare belongs to serialized process initialization,
+     * before this API is used; never enter the RTC prepare spin from here. */
+    if (dns_pool < 0 || !resolver_create || !resolver_ntoa || !resolver_destroy) {
+        step = "preparar";
+        rc = http_dns_net_error(ENETDOWN);
+        goto failure;
+    }
+    /* pthread_once uses rtc_pthread.c's existing SDK-to-native ABI bridge.
+     * Calling scePthreadOnce with SDK pthread_once_t storage is not safe. */
+    step = "once";
+    rc = pthread_once(&http_dns_once, http_dns_mutex_prepare);
+    if (rc) {
+        if (rc > 0) rc = http_dns_net_error(rc);
+        goto failure;
+    }
+    step = "mutex";
+    if (http_dns_mutex_error) {
+        rc = http_dns_mutex_error < 0 ? http_dns_mutex_error : http_dns_net_error(http_dns_mutex_error);
+        goto failure;
+    }
+    for (;;) {
+        rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+        if (rc) goto failure;
+        unsigned slice = http_dns_slice(absolute_deadline_us);
+        if (!slice) { rc = http_dns_net_error(ETIMEDOUT); goto failure; }
+        rc = scePthreadMutexTimedlock(&http_dns_mutex, slice);
+        if (!rc) break;
+        /* Native pthread returns encoded errno; SDK ETIMEDOUT is 60. */
+        if (rc != ETIMEDOUT && ((uint32_t)rc & 0xffffu) != ETIMEDOUT) {
+            if (rc > 0) rc = http_dns_net_error(rc);
+            goto failure;
+        }
+    }
+    int resolver = -1;
+    step = "control";
+    rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+    if (!rc) {
+        step = "crear";
+        resolver = resolver_create("x4-https-dns", dns_pool, 0);
+        if (resolver < 0) rc = resolver;
+    }
+    if (!rc) {
+        step = "ntoa";
+        for (;;) {
+            rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+            if (rc) break;
+            /* Match the native RTC resolver's timeout and retry count. */
+            rc = resolver_ntoa(resolver, host, &address, DNS_TIMEOUT_USEC, DNS_RETRIES, 0);
+            /* The native resolver timeout differs from BSD ETIMEDOUT. */
+            if ((uint32_t)rc != 0x804101e2u) break;
+        }
+    }
+    if (resolver >= 0) {
+        int destroy_rc = resolver_destroy(resolver);
+        if (!rc && destroy_rc) { step = "destruir"; rc = destroy_rc; }
+    }
+    int unlock_rc = scePthreadMutexUnlock(&http_dns_mutex);
+    if (!rc && unlock_rc) {
+        step = "desbloquear";
+        rc = unlock_rc < 0 ? unlock_rc : http_dns_net_error(unlock_rc);
+    }
+    if (!rc) {
+        rc = http_dns_wait_state(absolute_deadline_us, cancel, cancel_error);
+        if (rc) step = "control";
+    }
+    if (!rc) {
+        *out = address;
+        return 0;
+    }
+
+failure:
+    if (out) out->s_addr = 0;
+    uint64_t finished = sceKernelGetProcessTime();
+    printf("XCloud4: DNS https paso=%s codigo=0x%08x timeout_us=%u reintentos=%d transcurrido_us=%llu host=%.96s\n",
+           step, (unsigned)rc, (unsigned)DNS_TIMEOUT_USEC, DNS_RETRIES,
+           (unsigned long long)(finished >= started ? finished - started : 0), host ? host : "");
+    return rc;
+}

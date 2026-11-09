@@ -11,6 +11,12 @@ enum X4LoadingStage {
     X4_LOADING_CONNECT, X4_LOADING_CONNECTED, X4_LOADING_FIRST_PICTURE,
     X4_LOADING_COMPLETE, X4_LOADING_ERROR
 };
+enum X4LoadingStep {
+    X4_LOADING_STEP_SESSION, X4_LOADING_STEP_SERVER, X4_LOADING_STEP_OPTIMIZE,
+    X4_LOADING_STEP_READY, X4_LOADING_STEPS, X4_LOADING_STEP_INVALID
+};
+/* An in-progress step, all steps done, or invalid (the error card owns UI). */
+enum X4LoadingStep x4_loading_screen_step(enum X4LoadingStage stage);
 typedef struct {
     enum X4LoadingStage stage;
     unsigned percent, waiting_seconds;

@@ -6,6 +6,11 @@ import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROBE_ENTRY = re.compile(
+    r'\bint\s+main\s*\(\s*void\s*\)\s*\{\s*'
+    r'#if X4_VIDEO_PROBE\s+/\*.*?\*/\s*'
+    r'#if X4_PROBE_T27\s+return x4_t27_controller_run\(\);\s*'
+    r'#else\s+return x4_probe_controller_run\(\);\s*#endif\s*#else', re.S)
 
 class IsolationTests(unittest.TestCase):
     def test_reports_are_build_specific_and_bounded(self):
@@ -99,11 +104,41 @@ class IsolationTests(unittest.TestCase):
 
     def test_explicit_probe_entry_and_no_connection_module(self):
         source=(ROOT/'src/core/main.c').read_text(encoding='utf-8')
-        self.assertRegex(source,r'#if X4_VIDEO_PROBE\s+/\*.*?\*/\s*return x4_probe_controller_run\(\);\s*#else')
+        # Both banks return before any normal auth/catalog/network allocation.
+        # T27 must remain nested inside the same OFF guard as the older probe.
+        entry=PROBE_ENTRY.search(source)
+        self.assertIsNotNone(entry,'Both probe entries must be inside X4_VIDEO_PROBE at the start of main')
+        self.assertRegex(source,r'#if X4_VIDEO_PROBE && X4_PROBE_T27\s+'
+                         r'#include "\.\./video/probe_t27_controller\.h"\s*#endif')
+        self.assertEqual(source.count('return x4_t27_controller_run();'),1)
+        self.assertEqual(source.count('return x4_probe_controller_run();'),1)
+        self.assertNotRegex(source[entry.end():],
+                            r'\bx4_(?:t27_controller_run|probe_controller_run)\s*\(')
         make=(ROOT/'Makefile').read_text(encoding='utf-8')
         self.assertIn('X4_VIDEO_PROBE ?= 0',make)
+        self.assertIn('X4_PROBE_T27 ?= 0',make)
+        self.assertRegex(make,r'ifeq \(\$\(X4_PROBE_T27\),1\)\s+'
+                         r'ifneq \(\$\(X4_VIDEO_PROBE\)_\$\(X4_PROBE_T26\),1_1\)\s+'
+                         r'\$\(error T27 requires X4_VIDEO_PROBE=1 and X4_PROBE_T26=1\)')
         self.assertIn('X4_VIDEO_CAPACITY_1080 ?= 0',make)
         self.assertFalse((ROOT/'src/network/connection_test.c').exists())
         self.assertNotIn('connection_test',source)
+
+    def test_probe_entry_rejects_missing_off_guard_or_early_allocation(self):
+        source=(ROOT/'src/core/main.c').read_text(encoding='utf-8')
+        entry=PROBE_ENTRY.search(source)
+        self.assertIsNotNone(entry)
+        block=entry.group(0)
+        # These controls ensure the updated expectation cannot accept either
+        # a T27 call in an OFF build or work before the probe-only return.
+        for name,mutated in (
+            ('missing_outer_off_guard',block.replace('#if X4_VIDEO_PROBE','#if X4_PROBE_T27',1)),
+            ('allocation_before_entry',block.replace('#if X4_VIDEO_PROBE',
+                'x4_auth_create();\n#if X4_VIDEO_PROBE',1)),
+            ('t27_falls_through',block.replace('return x4_t27_controller_run();',
+                'x4_t27_controller_run();',1)),
+        ):
+            with self.subTest(name=name):
+                self.assertIsNone(PROBE_ENTRY.search(mutated))
 
 if __name__=='__main__': unittest.main(verbosity=2)

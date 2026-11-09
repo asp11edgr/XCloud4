@@ -163,6 +163,92 @@ static void final_page_and_product_dedup(void)
     strcpy(catalog.titles[14].product_id,"not/a/product");CHECK(x4_catalog_presentation_demand(&presentation,&browser,&catalog,&recent,demand)==7);
     browser.criteria_dirty=true;CHECK(x4_catalog_presentation_demand(&presentation,&browser,&catalog,&recent,demand)==0);
 }
+static void assert_row_only(const uint32_t *masks, size_t count)
+{
+    for (size_t i = 0; i < count; ++i) CHECK(masks[i] == (1u << X4_COVER_ROW));
+}
+
+static void tab_surface_masks_and_background(void)
+{
+    setup(24);
+    browser.apple_mode = true;
+    browser.active_tab = X4_CAT_TAB_CATALOG;
+    browser.selected = 11;
+    uint32_t masks[X4_PRESENTATION_DEMAND_MAX];
+    size_t count = x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks);
+    CHECK(count == 16);
+    CHECK(!strcmp(demand[0], "PRODUCT11"));
+    CHECK(!strcmp(demand[1], "PRODUCT8"));
+    CHECK(!strcmp(demand[8], "PRODUCT16"));
+    assert_row_only(masks, count);
+    browser.criteria_dirty = true;
+    CHECK(x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks) == 0);
+    browser.criteria_dirty = false;
+
+    char titles[][96] = {"TITLE_9", "TITLE_7", "HISTORICAL"};
+    x4_recent_begin(&recent, 1, 1);
+    CHECK(x4_recent_publish(&recent, 1, 1, titles, 3, 0, 200, &catalog));
+    strcpy(recent.entries[2].product_id, "HISTPRODUCT");
+    x4_catalog_browser_sync_recents(&browser, &recent);
+    browser.active_tab = X4_CAT_TAB_RECENTS;
+    browser.section = X4_CATALOG_SECTION_RECENT;
+    count = x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks);
+    CHECK(count == 3);
+    CHECK(!strcmp(demand[0], "PRODUCT9"));
+    CHECK(!strcmp(demand[1], "PRODUCT7"));
+    CHECK(!strcmp(demand[2], "HISTPRODUCT"));
+    assert_row_only(masks, count);
+    CHECK(!x4_catalog_browser_tab_background(&browser, &catalog, &recent, 1000));
+    CHECK(!x4_catalog_browser_tab_background(&browser, &catalog, &recent, 300999));
+    const char *background = x4_catalog_browser_tab_background(&browser, &catalog, &recent, 301000);
+    CHECK(background && !strcmp(background, demand[0]));
+    CHECK(x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks) == 3);
+    assert_row_only(masks, 3);
+
+    catalog.state = X4_CATALOG_ERROR;
+    CHECK(x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks) == 3);
+    assert_row_only(masks, 3);
+    ++browser.recent_account_generation;
+    CHECK(x4_catalog_presentation_demand_surfaces(&presentation, &browser,
+        &catalog, &recent, demand, masks) == 0);
+    CHECK(!x4_catalog_browser_tab_background(&browser, &catalog, &recent, 301001));
+    CHECK(x4_catalog_presentation_demand_surfaces(&presentation, NULL,
+        &catalog, &recent, demand, masks) == 0);
+    for (size_t i = 0; i < X4_PRESENTATION_DEMAND_MAX; ++i)
+        CHECK(!demand[i][0] && !masks[i]);
+}
+static void discover_five_visible_surfaces(void)
+{
+    setup(14);
+    browser.apple_mode=true;
+    browser.active_tab=X4_CAT_TAB_DISCOVER;
+    X4HomeRows rows={.count=2,.rows={
+        {.kind=X4_HOME_CONTINUE,.count=7,.indices={0,1,2,3,4,5,6}},
+        {.kind=X4_HOME_MINE,.count=7,.indices={7,8,9,10,11,12,13}},
+    }};
+    x4_catalog_browser_home_apply(&browser,&catalog,&rows);
+    uint32_t masks[X4_PRESENTATION_DEMAND_MAX];
+    size_t count=x4_catalog_presentation_demand_surfaces(&presentation,&browser,
+        &catalog,&recent,demand,masks);
+    CHECK(count==12&&X4_CATALOG_DISCOVER_ROW_VISIBLE==5);
+    CHECK(!strcmp(demand[4],"PRODUCT4")&&masks[4]==(1u<<X4_COVER_ROW));
+    CHECK(!strcmp(demand[9],"PRODUCT11")&&masks[9]==(1u<<X4_COVER_ROW));
+    CHECK(!strcmp(demand[10],"PRODUCT5")&&!strcmp(demand[11],"PRODUCT12"));
+    CHECK(x4_catalog_browser_apple_nav(&browser,&catalog,&recent,0,1,0));
+    for(unsigned i=0;i<5;++i)
+        CHECK(x4_catalog_browser_apple_nav(&browser,&catalog,&recent,1,0,0));
+    CHECK(x4_catalog_browser_home_row_start(&browser,0)==1);
+    count=x4_catalog_presentation_demand_surfaces(&presentation,&browser,
+        &catalog,&recent,demand,masks);
+    CHECK(count==13&&!strcmp(demand[0],"PRODUCT5")&&!strcmp(demand[1],"PRODUCT1"));
+    CHECK(!strcmp(demand[10],"PRODUCT0")&&!strcmp(demand[11],"PRODUCT6"));
+}
+
 static void bounded_overlay_and_refresh_eviction(void)
 {
     setup(4096);uint64_t revision=1;
@@ -186,6 +272,7 @@ int main(void)
     RUN(demand_priority_and_capacity);RUN(selected_priority_and_unfocused_visible_recent_page);
     RUN(rapid_navigation_replaces_priorities_without_mutating_selection);RUN(invalid_selection_never_overrides_visible_priority);
     RUN(empty_recent_and_invalid_page_bounds);
-    RUN(final_page_and_product_dedup);RUN(bounded_overlay_and_refresh_eviction);
+    RUN(final_page_and_product_dedup);RUN(tab_surface_masks_and_background);
+    RUN(discover_five_visible_surfaces);RUN(bounded_overlay_and_refresh_eviction);
     printf("PASS catalog presentation: %u cases, %u checks; overlay=%zu bytes\n",cases,checks,sizeof(presentation));return 0;
 }

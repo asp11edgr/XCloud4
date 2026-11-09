@@ -6,7 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../src/ui/stream_settings.h"
+#include "../src/input/script_engine.h"
 #include "../src/ui/font.h"
+#include "../src/ui/lang.h"
 #include "../src/video/stream_color_policy.h"
 
 /* Interaction modes occupy existing UI padding; eight draft rows remain local. */
@@ -21,6 +23,12 @@ _Static_assert((X4_INTERACTION_VSYNC_OFF<<8)==(1u<<11)&&
     "vertical synchronization exclusively occupies settings bit 11");
 
 static unsigned checks;
+void x4_script_settings_fixture_available(unsigned);
+unsigned x4_script_settings_fixture_scans(void);
+unsigned x4_script_settings_fixture_loads(void);
+void x4_script_settings_fixture_load_result(bool);
+unsigned x4_script_settings_fixture_unloads(void);
+bool x4_script_settings_fixture_error_notice(void);
 #define CHECK(x) do {++checks;if(!(x)){fprintf(stderr,"settings check line %d: %s\n",__LINE__,#x);abort();}}while(0)
 static void policy(void)
 {
@@ -43,7 +51,7 @@ static void model(void)
     X4StreamSettingsUi ui={0};
     X4StreamRequestConfig initial=x4_stream_settings_get();
     CHECK(initial.profile==X4_REQUEST_1080P_G&&initial.color_preference==X4_COLOR_AUTO_709);
-    CHECK(initial.cpu_variant==X4_CPU_0&&initial.decoder_depth==X4_DEPTH_AUTO&&initial.interaction_modes==X4_INTERACTION_VSYNC_OFF);
+    CHECK(initial.cpu_variant==X4_CPU_0&&initial.decoder_depth==X4_DEPTH_AUTO&&initial.interaction_modes==0);
     CHECK(initial.convert_mode==1&&initial.sharpness==2&&initial.resolution_request_mode==0);
     /* Keep the existing navigation fixture explicit; only process default changed. */
     CHECK(x4_stream_settings_set(X4_REQUEST_720P60,X4_COLOR_AUTO_709));
@@ -145,7 +153,7 @@ static void interaction_options(void)
             captured.color_preference==X4_COLOR_FORCE_601&&captured.cpu_variant==X4_CPU_2&&
             captured.decoder_depth==X4_DEPTH_2); /* launch snapshot is by value */
         CHECK(!x4_stream_settings_set_extended(X4_REQUEST_720P60,X4_COLOR_AUTO_709,
-            X4_CPU_0,X4_DEPTH_AUTO,X4_INTERACTION_MASK+1u));
+            X4_CPU_0,X4_DEPTH_AUTO,(X4_INTERACTION_VSYNC_T27<<1)));
         CHECK(!x4_stream_settings_set_extended((X4StreamRequestProfile)-1,X4_COLOR_AUTO_709,
             X4_CPU_0,X4_DEPTH_AUTO,0));
         CHECK(!x4_stream_settings_set_extended(X4_REQUEST_720P60,(X4StreamColorPreference)-1,
@@ -172,7 +180,7 @@ static void interaction_options(void)
     X4StreamSettingsUi ui={0};
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN|X4_SETTINGS_CONFIRM,true));
     CHECK(ui.open&&ui.interaction_modes==0);
-    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_UP,true)&&ui.row==10);
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_UP,true)&&ui.row==19u);
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_DOWN,true)&&ui.row==0);
     for(unsigned row=1;row<=10;++row)CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_DOWN,true)&&ui.row==row);
     for(unsigned row=4;row<=7;++row) {
@@ -180,7 +188,7 @@ static void interaction_options(void)
         CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_RIGHT|X4_SETTINGS_CONFIRM,true));
         CHECK(ui.open&&!ui.applied&&x4_stream_settings_get().interaction_modes==0);
     }
-    CHECK(ui.interaction_modes==X4_INTERACTION_MASK);
+    CHECK(ui.interaction_modes==(7u|X4_INTERACTION_VSYNC_ALWAYS));
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CANCEL|X4_SETTINGS_CONFIRM,true));
     CHECK(!ui.open&&x4_stream_settings_get().interaction_modes==0);
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true)&&ui.interaction_modes==0);
@@ -192,6 +200,7 @@ static void interaction_options(void)
     ui.interaction_modes=0;
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,false));
     CHECK(!ui.open&&x4_stream_settings_get().interaction_modes==X4_INTERACTION_MASK&&next.interaction_modes==X4_INTERACTION_MASK);
+    CHECK(x4_stream_settings_set_extended(X4_REQUEST_720P_HQ,X4_COLOR_AUTO_709,X4_CPU_0,X4_DEPTH_AUTO,15u));
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
     ui.row=4;CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
     CHECK(ui.interaction_modes==(X4_INTERACTION_RUMBLE_OFF|X4_INTERACTION_AUDIO_PREVIOUS|X4_INTERACTION_VSYNC_OFF));
@@ -200,6 +209,8 @@ static void interaction_options(void)
     ui.row=6;CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
     CHECK(ui.interaction_modes==X4_INTERACTION_VSYNC_OFF);
     ui.row=7;CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
+    CHECK(ui.interaction_modes==X4_INTERACTION_VSYNC_ALWAYS);
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
     CHECK(ui.interaction_modes==0);
     CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
     CHECK(x4_stream_settings_get().interaction_modes==0&&next.interaction_modes==X4_INTERACTION_MASK);
@@ -266,7 +277,7 @@ static void render(const char *dir)
         memset(p,0,count*sizeof(*p));x4_stream_settings_ui_draw(&ui,p);
         char name[32];snprintf(name,sizeof(name),"settings-depth-%u",depth);write_ppm(dir,name,p);
     }
-    for(unsigned modes=0;modes<=X4_INTERACTION_MASK;++modes) {
+    for(unsigned modes=0;modes<16u;++modes) {
         X4StreamSettingsUi ui={.open=true,.row=modes==4u?0u:4u+modes%4u,.profile=X4_REQUEST_1080P_G8,
             .color=X4_COLOR_AUTO_709,.interaction_modes=(unsigned char)modes};
         memset(p,0,count*sizeof(*p));x4_stream_settings_ui_draw(&ui,p);
@@ -287,9 +298,130 @@ static void render(const char *dir)
     for(unsigned i=0;i<16;++i)CHECK(guarded[i]==0x5a5a5a5a&&guarded[count+16+i]==0x5a5a5a5a);
     free(guarded);
 }
+static void vsync_options(void)
+{
+    const unsigned untouched=X4_INTERACTION_INPUT_60HZ|X4_INTERACTION_RUMBLE_OFF|
+        X4_INTERACTION_AUDIO_PREVIOUS|X4_INTERACTION_MAILBOX|
+        X4_INTERACTION_DITHER_OFF|X4_INTERACTION_GPU_FORCE_CPU;
+    CHECK(x4_stream_settings_set_lab(X4_REQUEST_1080P_G8,X4_COLOR_AUTO_709,
+        X4_CPU_0,X4_DEPTH_AUTO,untouched,1u,2u,2u));
+    X4StreamSettingsUi ui={0};
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    ui.row=7;
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
+    CHECK(ui.interaction_modes==untouched);
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CANCEL,true));
+    CHECK(x4_stream_request_vsync_policy(NULL)==X4_VSYNC_AUTO);
+
+    const X4StreamVsyncPolicy order[]={X4_VSYNC_ALWAYS,X4_VSYNC_NEVER,
+        X4_VSYNC_SYNCED,X4_VSYNC_AUTO_T27,X4_VSYNC_AUTO};
+    X4StreamRequestConfig legacy={0};
+    for(unsigned i=0;i<sizeof(order)/sizeof(order[0]);++i){
+        CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+        ui.row=7;
+        CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_RIGHT,true));
+        CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+        CHECK(!ui.open&&ui.applied);
+        X4StreamRequestConfig snapshot=x4_stream_request_capture(NULL);
+        CHECK(x4_stream_request_vsync_policy(&snapshot)==order[i]);
+        CHECK((snapshot.interaction_modes&~X4_INTERACTION_VSYNC_MASK)==untouched);
+        CHECK((snapshot.resolution_request_mode&X4_RESOLUTION_REQUEST_MODE_MASK)==2u);
+        if(order[i]==X4_VSYNC_AUTO_T27)legacy=x4_stream_request_capture(&snapshot);
+    }
+    CHECK(x4_stream_request_vsync_policy(NULL)==X4_VSYNC_AUTO);
+    CHECK(x4_stream_request_vsync_policy(&legacy)==X4_VSYNC_AUTO_T27);
+    CHECK((legacy.resolution_request_mode&X4_RESOLUTION_REQUEST_MODE_MASK)==2u);
+
+    /* The exact legacy call used by Fortnite to apply a quality also keeps T27. */
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    ui.row=7;
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_LEFT,true));
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    X4StreamRequestConfig saved=x4_stream_settings_get();
+    CHECK(x4_stream_request_vsync_policy(&saved)==X4_VSYNC_AUTO_T27);
+    CHECK(x4_stream_settings_set_lab(X4_REQUEST_1080P_G,X4_COLOR_AUTO_709,X4_CPU_0,X4_DEPTH_AUTO,
+        saved.interaction_modes&(X4_INTERACTION_VSYNC_MASK|X4_INTERACTION_MAILBOX),
+        X4_CONVERT_SMOOTH_DEFAULT,X4_SHARPNESS_PUBLIC_DEFAULT,0));
+    X4StreamRequestConfig fortnite=x4_stream_request_capture(NULL);
+    CHECK(x4_stream_request_vsync_policy(&fortnite)==X4_VSYNC_AUTO_T27);
+    CHECK(fortnite.interaction_modes==X4_INTERACTION_MAILBOX);
+    CHECK((fortnite.resolution_request_mode&X4_RESOLUTION_REQUEST_MODE_MASK)==0u);
+    CHECK(!x4_stream_settings_set_lab(fortnite.profile,X4_COLOR_AUTO_709,X4_CPU_0,X4_DEPTH_AUTO,
+        X4_INTERACTION_VSYNC_T27|X4_INTERACTION_VSYNC_OFF,1u,2u,0));
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    ui.row=7;
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_RIGHT,true));
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    CHECK(x4_stream_request_vsync_policy(NULL)==X4_VSYNC_AUTO);
+    CHECK(x4_stream_request_vsync_policy(&legacy)==X4_VSYNC_AUTO_T27);
+
+    x4_lang_set(X4_LANG_ES,"es-MX","MX");
+    CHECK(!strcmp(x4_lang_lab_vsync_t27(0),"Automática T27 (sin VSync a 60)"));
+    x4_lang_set(X4_LANG_EN,"en-US","US");
+    CHECK(!strcmp(x4_lang_lab_vsync_t27(0),"T27 automatic (no VSync at 60 fps)"));
+    x4_lang_set(X4_LANG_ES,"es-MX","MX");
+    CHECK(x4_stream_settings_set_extended(X4_REQUEST_1080P_G8,X4_COLOR_AUTO_709,
+        X4_CPU_0,X4_DEPTH_AUTO,0));
+    puts("PASS T46c Lab five policies, draft/cancel/capture, Fortnite and resolution mode preserved, ES/EN");
+}
+
+static void controller_script_options(void)
+{
+    const char *warning_es="Los scripts modifican lo que el mando envía a Xbox. Usar macros, disparo rápido o antirretroceso en juegos online puede causar la suspensión de tu cuenta. XCloud4 no se hace responsable del uso de los scripts: cada usuario es responsable de los que activa.";
+    x4_lang_set(X4_LANG_ES,"es-MX","MX");
+    CHECK(!strcmp(x4_tr(X4_TR_LAB_SCRIPT_WARNING_BODY),warning_es));
+    x4_lang_set(X4_LANG_EN,"en-US","US");
+    CHECK(!strcmp(x4_tr(X4_TR_LAB_SCRIPT_WARNING_BODY),"Scripts modify what the controller sends to Xbox. Using macros, rapid fire or anti-recoil in online games may lead to your account being suspended. XCloud4 is not responsible for the use of scripts: each user is responsible for the scripts they enable."));
+    CHECK(!strcmp(x4_tr(X4_TR_LAB_SCRIPT_DISABLED),"Script disabled:"));
+    x4_lang_set(X4_LANG_ES,"es-MX","MX");
+    CHECK(!strcmp(x4_tr(X4_TR_LAB_SCRIPT_DISABLED),"Script desactivado:"));
+    X4StreamSettingsUi ui={0};
+    unsigned before=x4_script_settings_fixture_scans();
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    CHECK(x4_script_settings_fixture_scans()==before+1);
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CANCEL,true));
+    x4_script_settings_fixture_available(1); /* Added after the first panel open. */
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    CHECK(x4_script_settings_fixture_scans()==before+2);
+    ui.row=17;
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_RIGHT,true));
+    CHECK(ui.open); /* Warning consumes Confirm; it cannot apply the panel. */
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    CHECK(ui.open&&!ui.applied);
+    unsigned old_loads=x4_script_settings_fixture_loads();
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    CHECK(!ui.open&&ui.applied&&x4_script_settings_fixture_loads()==old_loads+1);
+    char persisted[256];bool accepted=false;
+    CHECK(x4_script_engine_load_persistence(&accepted,persisted,sizeof(persisted))&&accepted);
+    CHECK(!strcmp(persisted,"/mnt/usb0/xcloud4/scripts/giroscopio.lua"));
+    /* A failed selected script must become None and persist an empty path,
+     * while the engine's failure notification survives panel confirmation. */
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));
+    x4_script_settings_fixture_load_result(false);
+    unsigned unloads_before=x4_script_settings_fixture_unloads();
+    old_loads=x4_script_settings_fixture_loads();
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    CHECK(!ui.open&&ui.applied&&x4_script_settings_fixture_loads()==old_loads+1);
+    CHECK(x4_script_settings_fixture_unloads()==unloads_before&&x4_script_settings_fixture_error_notice());
+    CHECK(x4_script_engine_load_persistence(&accepted,persisted,sizeof(persisted))&&accepted&&!persisted[0]);
+    /* Reopen+one Right must select the valid entry from None. A stale index1
+     * would select None instead, unload, and fail the load-count assertion. */
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_OPEN,true));ui.row=17;
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_RIGHT,true));
+    x4_script_settings_fixture_load_result(true);old_loads=x4_script_settings_fixture_loads();
+    CHECK(x4_stream_settings_ui_handle(&ui,X4_SETTINGS_CONFIRM,true));
+    CHECK(!ui.open&&ui.applied&&x4_script_settings_fixture_loads()==old_loads+1);
+    CHECK(x4_script_engine_load_persistence(&accepted,persisted,sizeof(persisted))&&accepted);
+    CHECK(!strcmp(persisted,"/mnt/usb0/xcloud4/scripts/giroscopio.lua"));
+    CHECK(!x4_script_settings_fixture_error_notice());
+
+}
+
 int main(int argc,char **argv)
 {
+    if(argc==2&&!strcmp(argv[1],"--vsync-only")){vsync_options();return 0;}
     CHECK(argc==2||argc==3);CHECK(!x4_font_init(argv[1]));
-    policy();model();one_confirmation();interaction_options();render(argc==3?argv[2]:NULL);x4_font_close();
+    policy();model();one_confirmation();interaction_options();vsync_options();render(argc==3?argv[2]:NULL);
+    controller_script_options();x4_font_close();
     printf("stream settings/color: %u checks passed\n",checks);return 0;
 }

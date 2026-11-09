@@ -17,7 +17,7 @@ for public in 1 0;do
         mkdir -p "$1/$edition"
         "${CC:-clang}" "${flags[@]}" ${X4_TEST_CFLAGS:-} "${includes[@]}" -DX4_PUBLIC="$public" \
             -DX4_STREAM_PROFILE=1 -DX4_VIDEO_PROBE=0 -ffunction-sections -fdata-sections \
-            tests/capture_access_country_ui.c "${sources[@]}" src/ui/screen.c src/ui/catalog_gui.c \
+            tests/capture_access_country_ui.c tests/catalog_background_stub.c "${sources[@]}" src/ui/screen.c src/ui/catalog_gui.c \
             src/ui/catalog_browser.c src/ui/recent_games.c src/ui/net_hint.c src/ui/stream_settings.c src/input/touch_menu.c \
             -Wl,--gc-sections -pthread -lm -o "$build_dir/capture-$edition"
         "$build_dir/capture-$edition" "$1/$edition"
@@ -28,7 +28,7 @@ for public in 1 0;do
             done
             "${CC:-clang}" "${flags[@]}" ${X4_TEST_CFLAGS:-} "${includes[@]}" -Isrc/ui \
                 -DX4_PUBLIC="$public" -DX4_T22_BASELINE_CAPTURE=1 -ffunction-sections -fdata-sections \
-                tests/capture_access_country_ui.c "${before[@]}" src/ui/catalog_gui.c src/ui/catalog_browser.c \
+                tests/capture_access_country_ui.c tests/catalog_background_stub.c "${before[@]}" src/ui/catalog_gui.c src/ui/catalog_browser.c \
                 src/ui/recent_games.c src/ui/net_hint.c src/ui/stream_settings.c -Wl,--gc-sections -pthread -lm -o "$build_dir/before-$edition"
             "$build_dir/before-$edition" "$1/baseline-$edition"
         fi

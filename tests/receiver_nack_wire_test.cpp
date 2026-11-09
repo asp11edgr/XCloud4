@@ -41,6 +41,20 @@ static void fail(const char *expression, const char *file, int line)
     fail(name, __FILE__, __LINE__);
     std::abort();
 }
+extern "C" int x4_rtc_diag_rtt_p50_ms(void)
+{ fixture_owner_unexpected("fixture-only: RTT must not run in wire encoder tests"); }
+extern "C" void x4_rtc_diag_first_return_publish(uint32_t, unsigned)
+{ fixture_owner_unexpected("fixture-only: return metrics must not run in wire encoder tests"); }
+extern "C" bool x4_rtc_diag_startup_active(uint64_t)
+{ fixture_owner_unexpected("fixture-only: startup must not run in wire encoder tests"); }
+extern "C" uint64_t x4_rtc_diag_startup_release_count(void)
+{ fixture_owner_unexpected("fixture-only: startup metrics must not run in wire encoder tests"); }
+extern "C" void x4_rtc_diag_startup_range(unsigned, uint64_t, uint64_t, uint64_t)
+{ fixture_owner_unexpected("fixture-only: startup range must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_refresh(X4ReceiverNackState *, int, uint64_t, bool)
+{ fixture_owner_unexpected("fixture-only: RTT refresh must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_set_rtt(X4ReceiverNackState *, int)
+{ fixture_owner_unexpected("fixture-only: RTT setting must not run in wire encoder tests"); }
 extern "C" uint64_t x4_rtc_receive_clock(void)
 { fixture_owner_unexpected("fixture-only: receive clock must not run in wire encoder tests"); }
 extern "C" void x4_rtc_nack_event(unsigned, unsigned, uint64_t, uint64_t,
@@ -55,6 +69,11 @@ extern "C" void x4_receiver_nack_discontinuity(X4ReceiverNackState *)
 extern "C" void x4_receiver_nack_observe(X4ReceiverNackState *, uint32_t,
     uint8_t, uint16_t, uint64_t, X4ReceiverNackObservation *)
 { fixture_owner_unexpected("fixture-only: receiver observation must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_observe_return(X4ReceiverNackState *, uint32_t,
+    uint8_t, uint16_t, uint64_t, bool, X4ReceiverNackObservation *)
+{ fixture_owner_unexpected("fixture-only: first return observation must not run in wire encoder tests"); }
+extern "C" void x4_receiver_nack_sent_first(X4ReceiverNackState *, uint64_t, uint64_t)
+{ fixture_owner_unexpected("fixture-only: send handoff must not run in wire encoder tests"); }
 
 static uint16_t read16(const uint8_t *bytes)
 { return uint16_t((uint16_t(bytes[0]) << 8) | bytes[1]); }
@@ -279,8 +298,51 @@ static void authenticated_delivery_metadata_is_preserved_by_message_copy(void)
     CHECK(copied->x4NackAuthenticated == original->x4NackAuthenticated);
 }
 
+static void adaptive_rfc4585_vectors(void)
+{
+    for (unsigned count : {1u, 17u, 64u, 65u, 200u, 512u}) {
+        for (uint64_t start : {UINT64_C(1001), UINT64_C(65530)}) {
+            auto request = gap(start, count);
+            request.request_id = 2000;
+            uint64_t words[X4_RECEIVER_NACK_MASK_WORDS]{};
+            for (unsigned i = 0; i < count; ++i)
+                words[i / 64] |= UINT64_C(1) << (i % 64);
+            unsigned fcis = 0;
+            auto packet = rtc::x4ReceiverNackPacketWide(Sender, Epoch, request, words,
+                300, Cname.data(), Cname.size(), &fcis);
+            CHECK(fcis == (count + 16) / 17 && packet->size() == 68 + 4 * fcis);
+            const auto *nack = reinterpret_cast<const uint8_t *>(packet->data()) + 56;
+            CHECK(nack[0] == 0x81 && nack[1] == 205 && read16(nack + 2) == 2 + fcis);
+            for (unsigned i = 0; i < fcis; ++i) {
+                unsigned offset = i * 17, remaining = count - offset - 1;
+                CHECK(read16(nack + 12 + i * 4) == uint16_t(start + offset));
+                CHECK(read16(nack + 14 + i * 4) ==
+                    (remaining >= 16 ? 65535u : (1u << remaining) - 1u));
+            }
+        }
+    }
+
+    auto request = gap(65530, 512);
+    uint64_t sparse[X4_RECEIVER_NACK_MASK_WORDS]{};
+    for (unsigned offset : {0u, 16u, 17u, 63u, 64u, 79u, 511u})
+        sparse[offset / 64] |= UINT64_C(1) << (offset % 64);
+    unsigned fcis = 0;
+    auto packet = rtc::x4ReceiverNackPacketWide(Sender, Epoch, request, sparse,
+        300, Cname.data(), Cname.size(), &fcis);
+    const auto *nack = reinterpret_cast<const uint8_t *>(packet->data()) + 56;
+    const uint16_t pids[] = {65530, 11, 57, 505};
+    const uint16_t masks[] = {32768, 0, 32769, 0};
+    /* PID 57 covers offsets 63, 64 and 79. There is no separate PID 73. */
+    CHECK(fcis == 4);
+    for (unsigned i = 0; i < fcis; ++i) {
+        CHECK(read16(nack + 12 + i * 4) == pids[i]);
+        CHECK(read16(nack + 14 + i * 4) == masks[i]);
+    }
+}
+
 int main()
 {
+    CASE(adaptive_rfc4585_vectors);
     CASE(single_position_compound);
     CASE(full_seventeen_positions_one_fci);
     CASE(eighteenth_position_starts_second_fci);

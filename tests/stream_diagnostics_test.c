@@ -2,25 +2,68 @@
 #include "../src/video/stream_diagnostics.h"
 #include <assert.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 static void *receive(void *arg)
 { for(unsigned i=0;i<1000;++i)x4_stream_diagnostics_received(arg,100,1000100); return NULL; }
 static void diagnostics_storage_contract(void)
 {
-    /* Preserve the old non-depth allowance. The only growth is exactly three
-     * bounded Stage histograms, each with 2048 bins and four uint64 counters.
-     * This is heap diagnostic storage, not the native-memory or stack limit. */
+    /* Preserve every old numeric ID and its historical prefix allowance.
+     * T27 adds fixed heap diagnostics; native/stack budgets are unaffected. */
+    const X4StreamStage legacy_ids[]={X4_STREAM_DECODE,X4_STREAM_CONVERSION,
+        X4_STREAM_STRIPE0,X4_STREAM_STRIPE1,X4_STREAM_DECODE_TO_FLIP,
+        X4_STREAM_CONVERT_TO_SUBMIT,X4_STREAM_FLIP_CALL,X4_STREAM_SUBMIT_TO_OBSERVATION,
+        X4_STREAM_PRESENT_INTERVAL,X4_STREAM_DECODE_IDR,X4_STREAM_DECODE_NON_IDR,
+        X4_STREAM_FLIP_END_TO_CONVERSION,X4_STREAM_CONTROLLER_READ_INTERVAL,
+        X4_STREAM_DECODE_WITH_OUTPUT,X4_STREAM_DECODE_WITHOUT_OUTPUT,X4_STREAM_NATIVE_OUTPUT_INTERVAL};
+    for(unsigned i=0;i<sizeof(legacy_ids)/sizeof(legacy_ids[0]);++i)assert((unsigned)legacy_ids[i]==i);
+    assert(X4_STREAM_DECODER_SLOT_WAIT==16&&X4_STREAM_DECODER_RING_GATE_WAIT==17&&X4_STREAM_STAGE_COUNT==18);
+    /* Typed mirrors account for ABI padding/atomic storage instead of raising
+     * the old <320 KiB assertion to an unexamined larger number. */
+    typedef struct {uint64_t bins[X4_STREAM_METRIC_BINS],count,sum,maximum,overflow;} StageStorage;
+    typedef struct {StageStorage timing[3];uint64_t frames,first_us,last_us;} ModeStorage;
+    typedef struct {
+        unsigned policy,near30_streak,near60_streak;bool have_bucket;
+        uint64_t bucket,current_count,complete_buckets,zero_buckets,other_buckets,late_events;
+        uint64_t state_since_us,state_us[2],transitions,history_omitted,notification_omitted;
+        X4StreamVsyncTransition history[1024],events[64];
+        atomic_bool effective;atomic_uint_fast64_t written,read;
+    } AutoStorage;
+    typedef struct {uint64_t samples,held_native[6],occupied_ring[6],ring_full_drops;} OwnershipStorage;
+    typedef struct {
+        StageStorage ready,interval;
+        uint64_t ready_ms[32],ready_depth[5],driver_depth[9],gpu_depth[9];
+        uint64_t mode_frames[4];
+        uint64_t frames,first_us,last_us,last_vsync_ptime,over20,interval_invalid;
+        uint64_t native_times,fallback_times,ready_invalid,repeat_estimate,repeat_intervals,repeat_unknown;
+        uint64_t queue_samples,queue_invalid,recovery_drops,mailbox_drops,ring_full_drops,ring_latest_drops;
+        uint64_t next_log_us,log_omitted;
+        unsigned ready_max,driver_max,gpu_max;
+        bool final_logged;
+    } PacingStorage;
     const size_t base_bytes=326104;
     const size_t stage_bytes=(X4_STREAM_METRIC_BINS+4u)*sizeof(uint64_t);
-    const size_t added_bytes=3u*stage_bytes;
+    const size_t old_depth_growth=3u*stage_bytes;
+    const size_t legacy_bytes=base_bytes+old_depth_growth;
+    const size_t new_stage_bytes=2u*stage_bytes;
+    const size_t mode_bytes=3u*sizeof(ModeStorage);
+    const size_t owner_wait_bytes=2u*stage_bytes;
+    const size_t t27_growth=new_stage_bytes+sizeof(AutoStorage)+mode_bytes+owner_wait_bytes+sizeof(OwnershipStorage);
+    const size_t t42_growth=sizeof(ModeStorage)+sizeof(PacingStorage)+sizeof(atomic_uint_fast64_t);
     const size_t actual=x4_stream_diagnostics_storage_bytes();
-    assert(X4_STREAM_STAGE_COUNT==13+3);
-    assert(stage_bytes==16416 && added_bytes==49248);
-    assert(actual==base_bytes+added_bytes);
-    assert(actual-added_bytes<320u*1024u);
-    printf("actual diagnostics storage: %zu bytes; base %zu + three stages %zu; old non-depth allowance 327680\n",
-        actual,base_bytes,added_bytes);
+    assert(sizeof(StageStorage)==stage_bytes&&stage_bytes==16416&&old_depth_growth==49248);
+    assert(legacy_bytes==375352&&legacy_bytes-old_depth_growth<320u*1024u);
+    assert(sizeof(X4StreamVsyncTransition)==40&&sizeof(AutoStorage)==43656);
+    assert(sizeof(ModeStorage)==49272&&mode_bytes==147816&&sizeof(OwnershipStorage)==112);
+    assert(new_stage_bytes==32832&&owner_wait_bytes==32832&&t27_growth==257248);
+    assert(legacy_bytes+t27_growth==632600);
+    assert(sizeof(PacingStorage)==33480&&t42_growth==82760);
+    assert(actual==legacy_bytes+t27_growth+t42_growth&&actual==715360);
+    printf("actual diagnostics storage: %zu bytes; legacy %zu (base %zu + depth stages %zu), T27 %zu (new stages %zu + Auto %zu + modes %zu + ownership waits %zu + counters %zu); old prefix allowance 327680\n",
+        actual,legacy_bytes,base_bytes,old_depth_growth,t27_growth,new_stage_bytes,sizeof(AutoStorage),mode_bytes,owner_wait_bytes,sizeof(OwnershipStorage));
+    printf("T42 fixed diagnostics growth %zu = fourth presentation mode %zu + pacing %zu + atomic AU mirror %zu\n",
+        t42_growth,sizeof(ModeStorage),sizeof(PacingStorage),sizeof(atomic_uint_fast64_t));
 }
 static void new_diagnostics(const char *path)
 {

@@ -33,7 +33,36 @@ typedef struct {
     uint64_t sampled_us;
 } X4GamepadFrame;
 
-/* Copy under the source's short gate. Called outside the RTC gate by its
- * sender; do not access RTC, block, allocate or retain out. False produces
- * a neutral report. Source/context outlive successful RTC close/join. */
-typedef bool (*X4GamepadSource)(void *user, X4GamepadFrame *out);
+#define X4_GAMEPAD_COUNT 4u
+
+typedef struct {
+    X4GamepadFrame pads[X4_GAMEPAD_COUNT];
+    uint64_t changed_us[X4_GAMEPAD_COUNT];
+    uint64_t generation[X4_GAMEPAD_COUNT];
+    uint8_t connected_mask;
+    bool multiplayer; /* Captured for the life of the match. */
+} X4GamepadRoster;
+
+typedef struct {
+    bool active, multiplayer;
+} X4GamepadMatchOption;
+
+static inline bool x4_gamepad_match_option(X4GamepadMatchOption *option,
+    bool enabled, bool in_match)
+{
+    if (!option->active || !in_match) option->multiplayer = enabled;
+    option->active = in_match;
+    return option->multiplayer;
+}
+
+static inline unsigned x4_gamepad_menu_index(uint8_t mask, bool allow_fallback)
+{
+    if (!allow_fallback || (mask & 1u)) return 0;
+    for (unsigned i = 1; i < X4_GAMEPAD_COUNT; ++i)
+        if (mask & (1u << i)) return i;
+    return 0;
+}
+
+/* A busy or expired input mailbox returns false. It is not evidence of a
+ * physical removal. The RTC sender owns any neutral/announcement fallback. */
+typedef bool (*X4GamepadSource)(void *user, X4GamepadRoster *out);

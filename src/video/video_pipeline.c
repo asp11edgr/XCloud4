@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "video_pipeline.h"
 #include <string.h>
+#include <smmintrin.h>
 #if defined(__SSE2__)
 #include <emmintrin.h>
 #endif
@@ -153,150 +154,278 @@ unsigned x4_video_pipeline_cancel_ready(X4VideoPipelineRing *r)
 bool x4_video_pipeline_ring_idle(const X4VideoPipelineRing *r)
 { return r && r->epoch && r->occupied == 0; }
 
-int x4_video_pipeline_display_init(X4VideoPipelineDisplay *d, uint64_t epoch)
+int x4_video_pipeline_display_init_mode(X4VideoPipelineDisplay *d,uint64_t epoch,
+    unsigned count,bool mailbox)
 {
-    if (!d || !epoch) return X4_PIPELINE_INVALID;
-    memset(d, 0, sizeof(*d)); d->epoch = epoch; d->pending = d->screen = -1;
-    return 0;
+    if(!d||!epoch||(count!=3&&count!=4))return X4_PIPELINE_INVALID;
+    memset(d,0,sizeof(*d));d->epoch=epoch;d->pending=d->screen=-1;
+    d->scanout_count=count;d->mailbox_capable=mailbox;return 0;
+}
+int x4_video_pipeline_display_init(X4VideoPipelineDisplay *d,uint64_t epoch)
+{return x4_video_pipeline_display_init_mode(d,epoch,3,false);}
+int x4_video_pipeline_display_init_synced(X4VideoPipelineDisplay *d,uint64_t epoch)
+{
+    int rc=x4_video_pipeline_display_init_mode(d,epoch,4,false);
+    if(!rc)d->synced=true;
+    return rc;
 }
 int x4_video_pipeline_display_occupancy(const X4VideoPipelineDisplay *d,
     X4VideoPipelineDisplayOccupancy *out)
 {
     if(out)memset(out,0,sizeof(*out));
-    if(!d || !d->epoch || !out)return X4_PIPELINE_INVALID;
-    for(unsigned i=0;i<X4_PIPELINE_SCANOUTS;++i) {
-        switch(d->slots[i].state) {
+    if(!d||!d->epoch||!out||(d->scanout_count!=3&&d->scanout_count!=4))return X4_PIPELINE_INVALID;
+    for(unsigned i=0;i<d->scanout_count;++i){
+        switch(d->slots[i].state){
         case X4_SCANOUT_FREE:++out->free;break;
         case X4_SCANOUT_WRITING:++out->writing;break;
         case X4_SCANOUT_READY:++out->ready;break;
         case X4_SCANOUT_PENDING:++out->pending;break;
         case X4_SCANOUT_SCREEN:++out->screen;break;
+        case X4_SCANOUT_QUARANTINED:++out->quarantined;break;
         default:return X4_PIPELINE_STATE;
         }
     }
     out->in_flight=out->writing+out->ready+out->pending;
-    out->occupied=out->in_flight+out->screen;
-    return 0;
+    out->occupied=out->in_flight+out->screen+out->quarantined;return 0;
 }
 static int display_policy(X4VideoPipelineDisplay *d)
 {
     X4VideoPipelineDisplayOccupancy o;
-    if(x4_video_pipeline_display_occupancy(d,&o) || o.in_flight>1 || o.screen>1 ||
-        d->pending < -1 || d->pending >= X4_PIPELINE_SCANOUTS ||
-        d->screen < -1 || d->screen >= X4_PIPELINE_SCANOUTS ||
-        (d->pending>=0 ? d->slots[d->pending].state!=X4_SCANOUT_PENDING : o.pending!=0) ||
-        (d->screen>=0 ? d->slots[d->screen].state!=X4_SCANOUT_SCREEN : o.screen!=0)) {
+    if(x4_video_pipeline_display_occupancy(d,&o)||o.screen>1||o.writing>1||o.pending>1||
+        (d->synced?(d->mailbox_capable||o.ready>2):
+            (o.ready>1||(!d->mailbox_capable&&o.in_flight>1)))||o.in_flight>3||
+        d->pending < -1||d->pending >= (int)d->scanout_count||
+        d->screen < -1||d->screen >= (int)d->scanout_count||
+        (d->pending>=0?d->slots[d->pending].state!=X4_SCANOUT_PENDING:o.pending!=0)||
+        (d->screen>=0?d->slots[d->screen].state!=X4_SCANOUT_SCREEN:o.screen!=0)){
         ++d->rejected;return X4_PIPELINE_STATE;
     }
     if(o.occupied>d->peak_occupied)d->peak_occupied=o.occupied;
-    if(o.in_flight>d->peak_in_flight)d->peak_in_flight=o.in_flight;
-    return 0;
+    if(o.in_flight>d->peak_in_flight)d->peak_in_flight=o.in_flight;return 0;
 }
-static X4VideoPipelineLease scanout_lease(const X4VideoPipelineDisplay *d, unsigned slot)
-{ return (X4VideoPipelineLease){slot, d->epoch, d->slots[slot].lease_generation}; }
-static int scanout_check(X4VideoPipelineDisplay *d, X4VideoPipelineLease lease,
+int x4_video_pipeline_display_mailbox_admission(X4VideoPipelineDisplay *d,bool enabled)
+{
+    if(!d||!d->epoch||(enabled&&!d->mailbox_capable))return X4_PIPELINE_INVALID;
+    int rc=display_policy(d);if(rc)return rc;
+    /* Disabling admission never revokes an already-issued writer or flip. */
+    d->mailbox_admission=enabled;return 0;
+}
+static X4VideoPipelineLease scanout_lease(const X4VideoPipelineDisplay *d,unsigned slot)
+{return (X4VideoPipelineLease){slot,d->epoch,d->slots[slot].lease_generation};}
+static int scanout_check(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease,
     X4VideoPipelineScanoutState state)
 {
-    if (!d || !d->epoch || lease.slot >= X4_PIPELINE_SCANOUTS) return X4_PIPELINE_INVALID;
-    if (lease.epoch != d->epoch || !lease.generation ||
-        lease.generation != d->slots[lease.slot].lease_generation) {
-        ++d->rejected; return X4_PIPELINE_STALE;
-    }
-    if (d->slots[lease.slot].state != state) { ++d->rejected; return X4_PIPELINE_STATE; }
-    return 0;
+    if(!d||!d->epoch||lease.slot>=d->scanout_count)return X4_PIPELINE_INVALID;
+    if(lease.epoch!=d->epoch||!lease.generation||lease.generation!=d->slots[lease.slot].lease_generation){
+        ++d->rejected;return X4_PIPELINE_STALE;}
+    if(d->slots[lease.slot].state!=state){++d->rejected;return X4_PIPELINE_STATE;}return 0;
 }
-int x4_video_pipeline_acquire_scanout(X4VideoPipelineDisplay *d, X4VideoPipelineLease *out)
+int x4_video_pipeline_acquire_scanout(X4VideoPipelineDisplay *d,X4VideoPipelineLease *out)
 {
-    clear_lease(out);
-    if (!d || !d->epoch || !out) return X4_PIPELINE_INVALID;
+    clear_lease(out);if(!d||!d->epoch||!out)return X4_PIPELINE_INVALID;
     int rc=display_policy(d);if(rc)return rc;
-    for(unsigned i=0;i<X4_PIPELINE_SCANOUTS;++i)
-        if(d->slots[i].state==X4_SCANOUT_WRITING || d->slots[i].state==X4_SCANOUT_READY ||
-            d->slots[i].state==X4_SCANOUT_PENDING)return X4_PIPELINE_WAIT;
-    if (d->next_generation == UINT64_MAX) return X4_PIPELINE_EXHAUSTED;
-    for (unsigned i = 0; i < X4_PIPELINE_SCANOUTS; ++i)
-        if (d->slots[i].state == X4_SCANOUT_FREE) {
-            d->slots[i] = (X4VideoPipelineScanout){.state = X4_SCANOUT_WRITING,
-                .lease_generation = ++d->next_generation};
-            *out = scanout_lease(d, i); return display_policy(d);
-        }
+    if(d->synced){
+        X4VideoPipelineDisplayOccupancy o;
+        rc=x4_video_pipeline_display_occupancy(d,&o);if(rc)return rc;
+        if(o.writing||o.ready>=2)return X4_PIPELINE_WAIT;
+    }
+    for(unsigned i=0;i<d->scanout_count;++i)
+        if(d->slots[i].state==X4_SCANOUT_WRITING||(!d->synced&&!d->mailbox_admission&&
+            (d->slots[i].state==X4_SCANOUT_READY||d->slots[i].state==X4_SCANOUT_PENDING)))return X4_PIPELINE_WAIT;
+    if(d->next_generation==UINT64_MAX)return X4_PIPELINE_EXHAUSTED;
+    for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_FREE){
+        d->slots[i]=(X4VideoPipelineScanout){.state=X4_SCANOUT_WRITING,
+            .lease_generation=++d->next_generation};
+        *out=scanout_lease(d,i);return display_policy(d);
+    }
     return X4_PIPELINE_WAIT;
 }
-int x4_video_pipeline_finish_scanout(X4VideoPipelineDisplay *d, X4VideoPipelineLease lease,
-    uint64_t output_id, uint64_t decode_end_us, uint64_t converted_us)
+int x4_video_pipeline_finish_scanout(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease,
+    uint64_t output_id,uint64_t decode_end_us,uint64_t converted_us)
 {
-    int rc = scanout_check(d, lease, X4_SCANOUT_WRITING);
-    if (rc) return rc;
+    int rc=scanout_check(d,lease,X4_SCANOUT_WRITING);if(rc)return rc;
     rc=display_policy(d);if(rc)return rc;
-    if (!output_id || converted_us < decode_end_us) return X4_PIPELINE_INVALID;
-    if (d->next_ready_order == UINT64_MAX) return X4_PIPELINE_EXHAUSTED;
-    X4VideoPipelineScanout *s = &d->slots[lease.slot];
-    s->state = X4_SCANOUT_READY; s->output_id = output_id; s->decode_end_us = decode_end_us;
-    s->converted_us = converted_us; s->ready_order = ++d->next_ready_order;
+    if(!output_id||converted_us<decode_end_us)return X4_PIPELINE_INVALID;
+    if(d->next_ready_order==UINT64_MAX)return X4_PIPELINE_EXHAUSTED;
+    X4VideoPipelineScanout *s=&d->slots[lease.slot];
+    if(d->mailbox_capable){
+        if(output_id<=d->last_submitted_output_id){s->state=X4_SCANOUT_FREE;++d->mailbox_discarded_old;return display_policy(d);}
+        for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_READY){
+            if(output_id<=d->slots[i].output_id){s->state=X4_SCANOUT_FREE;++d->mailbox_discarded_old;return display_policy(d);}
+            d->slots[i].state=X4_SCANOUT_FREE;++d->mailbox_replaced;
+        }
+    }
+    s->state=X4_SCANOUT_READY;s->output_id=output_id;s->decode_end_us=decode_end_us;
+    s->converted_us=converted_us;s->ready_order=++d->next_ready_order;
+    if(!d->ready_since_us)d->ready_since_us=converted_us;
     return display_policy(d);
 }
-int x4_video_pipeline_abort_scanout(X4VideoPipelineDisplay *d, X4VideoPipelineLease lease)
+int x4_video_pipeline_abort_scanout(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease)
 {
-    int rc = scanout_check(d, lease, X4_SCANOUT_WRITING);
-    if (rc) return rc;
-    d->slots[lease.slot].state = X4_SCANOUT_FREE; return display_policy(d);
+    int rc=scanout_check(d,lease,X4_SCANOUT_WRITING);if(rc)return rc;
+    d->slots[lease.slot].state=X4_SCANOUT_FREE;return display_policy(d);
+}
+int x4_video_pipeline_quarantine_scanout(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease)
+{
+    int rc=scanout_check(d,lease,X4_SCANOUT_WRITING);if(rc)return rc;
+    d->slots[lease.slot].state=X4_SCANOUT_QUARANTINED;return display_policy(d);
+}
+int x4_video_pipeline_retire_quarantine(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease)
+{
+    int rc=scanout_check(d,lease,X4_SCANOUT_QUARANTINED);if(rc)return rc;
+    d->slots[lease.slot].state=X4_SCANOUT_FREE;return display_policy(d);
 }
 unsigned x4_video_pipeline_cancel_ready_scanout(X4VideoPipelineDisplay *d)
 {
-    if(!d || !d->epoch)return 0;
-    unsigned count=0;
-    for(unsigned i=0;i<X4_PIPELINE_SCANOUTS;++i)
-        if(d->slots[i].state==X4_SCANOUT_READY){d->slots[i].state=X4_SCANOUT_FREE;++count;}
-    (void)display_policy(d);return count;
+    if(!d||!d->epoch)return 0;unsigned count=0;
+    for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_READY){d->slots[i].state=X4_SCANOUT_FREE;++count;}
+    d->ready_since_us=0;(void)display_policy(d);return count;
+}
+static void synced_ready_since(X4VideoPipelineDisplay *d)
+{
+    if(!d->synced)return;
+    int oldest=-1;
+    for(unsigned i=0;i<d->scanout_count;++i)
+        if(d->slots[i].state==X4_SCANOUT_READY&&(oldest<0||
+            d->slots[i].ready_order<d->slots[oldest].ready_order))oldest=(int)i;
+    d->ready_since_us=oldest<0?0:d->slots[oldest].converted_us;
+}
+int x4_video_pipeline_cancel_ready_lease(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease)
+{
+    int rc=scanout_check(d,lease,X4_SCANOUT_READY);if(rc)return rc;
+    d->slots[lease.slot].state=X4_SCANOUT_FREE;
+    if(d->synced)synced_ready_since(d);else d->ready_since_us=0;
+    return display_policy(d);
 }
 int x4_video_pipeline_display_closed(X4VideoPipelineDisplay *d)
 {
-    if(!d || !d->epoch)return X4_PIPELINE_INVALID;
-    for(unsigned i=0;i<X4_PIPELINE_SCANOUTS;++i)
-        if(d->slots[i].state==X4_SCANOUT_WRITING)return X4_PIPELINE_STATE;
-    for(unsigned i=0;i<X4_PIPELINE_SCANOUTS;++i)d->slots[i].state=X4_SCANOUT_FREE;
-    d->pending=d->screen=-1;return display_policy(d);
+    if(!d||!d->epoch)return X4_PIPELINE_INVALID;
+    for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_WRITING||d->slots[i].state==X4_SCANOUT_QUARANTINED)return X4_PIPELINE_STATE;
+    for(unsigned i=0;i<d->scanout_count;++i)d->slots[i].state=X4_SCANOUT_FREE;
+    d->pending=d->screen=-1;d->ready_since_us=0;return display_policy(d);
 }
-int x4_video_pipeline_ready_scanout(X4VideoPipelineDisplay *d, X4VideoPipelineLease *out)
+int x4_video_pipeline_ready_scanout(X4VideoPipelineDisplay *d,X4VideoPipelineLease *out)
 {
-    clear_lease(out);
-    if (!d || !d->epoch || !out) return X4_PIPELINE_INVALID;
-    int rc=display_policy(d);if(rc)return rc;
-    if (d->pending >= 0) return X4_PIPELINE_WAIT;
-    int slot = -1;
-    for (unsigned i = 0; i < X4_PIPELINE_SCANOUTS; ++i)
-        if (d->slots[i].state == X4_SCANOUT_READY &&
-            (slot < 0 || d->slots[i].ready_order < d->slots[slot].ready_order)) slot = (int)i;
-    if (slot < 0) return X4_PIPELINE_WAIT;
-    *out = scanout_lease(d, (unsigned)slot); return 0;
+    clear_lease(out);if(!d||!d->epoch||!out)return X4_PIPELINE_INVALID;
+    int rc=display_policy(d);if(rc)return rc;if(d->pending>=0)return X4_PIPELINE_WAIT;
+    int slot=-1;
+    for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_READY&&
+        (slot<0||(d->mailbox_capable?d->slots[i].ready_order>d->slots[slot].ready_order:
+            d->slots[i].ready_order<d->slots[slot].ready_order)))slot=(int)i;
+    if(slot<0)return X4_PIPELINE_WAIT;*out=scanout_lease(d,(unsigned)slot);return 0;
 }
-int x4_video_pipeline_mark_submitted(X4VideoPipelineDisplay *d, X4VideoPipelineLease lease,
-    uint64_t flip_arg, uint64_t submitted_us)
+int x4_video_pipeline_mark_submitted(X4VideoPipelineDisplay *d,X4VideoPipelineLease lease,
+    uint64_t flip_arg,uint64_t submitted_us)
 {
-    int rc = scanout_check(d, lease, X4_SCANOUT_READY);
-    if (rc) return rc;
+    int rc=scanout_check(d,lease,X4_SCANOUT_READY);if(rc)return rc;
     rc=display_policy(d);if(rc)return rc;
-    if (d->pending >= 0) return X4_PIPELINE_STATE;
-    if (!flip_arg || flip_arg <= d->last_submitted_arg ||
-        submitted_us < d->slots[lease.slot].converted_us) return X4_PIPELINE_INVALID;
-    X4VideoPipelineScanout *s = &d->slots[lease.slot];
-    s->state = X4_SCANOUT_PENDING; s->flip_arg = flip_arg; s->submitted_us = submitted_us;
-    d->pending = (int)lease.slot; d->last_submitted_arg = flip_arg; ++d->submitted;
+    X4VideoPipelineScanout *s=&d->slots[lease.slot];
+    if(d->pending>=0||!flip_arg||flip_arg<=d->last_submitted_arg||submitted_us<s->converted_us||
+        (d->mailbox_capable&&s->output_id<=d->last_submitted_output_id))return X4_PIPELINE_INVALID;
+    s->state=X4_SCANOUT_PENDING;s->flip_arg=flip_arg;s->submitted_us=submitted_us;
+    d->pending=(int)lease.slot;d->last_submitted_arg=flip_arg;d->last_submitted_output_id=s->output_id;
+    d->ready_since_us=0;
+    if(d->synced)synced_ready_since(d);
+    ++d->submitted;return display_policy(d);
+}
+void x4_video_pipeline_sync_history_init(X4VideoPipelineSyncHistory *h)
+{if(h)memset(h,0,sizeof(*h));}
+int x4_video_pipeline_synced_observed(X4VideoPipelineDisplay *d,X4VideoPipelineSyncHistory *h,uint64_t now)
+{
+    if(!d||!h||!d->synced||!now)return X4_PIPELINE_INVALID;
+    int rc=display_policy(d);if(rc)return rc;
+    /* A long display gap is not a continuous backlog window. A missing READY
+     * sample similarly requires a whole new window before recovering. */
+    if(!h->synced_last_observed_us||now<h->synced_last_observed_us||
+        now-h->synced_last_observed_us>50000u)
+        h->synced_history_count=h->synced_history_next=0;
+    h->synced_last_observed_us=now;
+    unsigned ready=0;int oldest=-1;
+    for(unsigned i=0;i<d->scanout_count;++i)if(d->slots[i].state==X4_SCANOUT_READY){
+        ++ready;
+        if(oldest<0||d->slots[i].ready_order<d->slots[oldest].ready_order)oldest=(int)i;
+    }
+    h->synced_history[h->synced_history_next]=(uint8_t)ready;
+    h->synced_history_next=(h->synced_history_next+1u)%30u;
+    if(h->synced_history_count<30u)++h->synced_history_count;
+    if(h->synced_history_count<30u)return 0;
+    for(unsigned i=0;i<30u;++i)if(!h->synced_history[i])return 0;
+    if(oldest>=0){
+        h->synced_last_dropped_output=d->slots[oldest].output_id;
+        d->slots[oldest].state=X4_SCANOUT_FREE;
+        ++h->synced_recovery_drops;
+        synced_ready_since(d);
+    }
+    h->synced_history_count=h->synced_history_next=0;
     return display_policy(d);
 }
-int x4_video_pipeline_observe_flip(X4VideoPipelineDisplay *d, uint64_t flip_arg,
-    uint64_t observed_us, X4VideoPipelineLease *presented)
+int x4_video_pipeline_observe_flip(X4VideoPipelineDisplay *d,uint64_t flip_arg,
+    uint64_t observed_us,X4VideoPipelineLease *presented)
 {
-    clear_lease(presented);
-    if (!d || !d->epoch || !presented) return X4_PIPELINE_INVALID;
+    clear_lease(presented);if(!d||!d->epoch||!presented)return X4_PIPELINE_INVALID;
     int rc=display_policy(d);if(rc)return rc;
-    if (d->pending < 0 || d->slots[d->pending].flip_arg != flip_arg) return X4_PIPELINE_WAIT;
-    X4VideoPipelineScanout *s = &d->slots[d->pending];
-    if (observed_us < s->submitted_us) return X4_PIPELINE_INVALID;
-    if (d->screen >= 0) d->slots[d->screen].state = X4_SCANOUT_FREE;
-    d->screen = d->pending; d->pending = -1;
-    s->state = X4_SCANOUT_SCREEN; s->observed_us = observed_us; ++d->observed;
-    *presented = scanout_lease(d, (unsigned)d->screen); return display_policy(d);
+    if(d->pending<0||d->slots[d->pending].flip_arg!=flip_arg)return X4_PIPELINE_WAIT;
+    X4VideoPipelineScanout *s=&d->slots[d->pending];
+    if(observed_us<s->submitted_us||(d->mailbox_capable&&d->screen>=0&&
+        s->output_id<=d->slots[d->screen].output_id))return X4_PIPELINE_INVALID;
+    if(d->screen>=0)d->slots[d->screen].state=X4_SCANOUT_FREE;
+    d->screen=d->pending;d->pending=-1;s->state=X4_SCANOUT_SCREEN;s->observed_us=observed_us;
+    ++d->observed;*presented=scanout_lease(d,(unsigned)d->screen);return display_policy(d);
+}
+void x4_video_pipeline_mailbox_clock_init(X4VideoPipelineMailboxClock *c)
+{if(c){memset(c,0,sizeof(*c));c->period_us=16667;c->margin_us=2000;}}
+bool x4_video_pipeline_mailbox_anchor(X4VideoPipelineMailboxClock *c,uint64_t ptime,
+    uint64_t submitted,uint64_t observed,bool vsync)
+{
+    if(!c||!vsync)return false;
+    if(!c->period_us||!ptime||ptime<submitted||ptime>observed||ptime<=c->anchor_us){
+        ++c->invalid_anchors;c->valid=false;return false;}
+    bool valid=false;
+    if(c->anchor_us){
+        uint64_t delta=ptime-c->anchor_us;
+        uint64_t cycles=delta/c->period_us;
+        if(delta%c->period_us>=c->period_us/2)++cycles;
+        if(cycles&&cycles<=UINT64_MAX/c->period_us){
+            uint64_t sample=delta/cycles,expected=cycles*c->period_us;
+            uint64_t error=delta>expected?delta-expected:expected-delta;
+            ++c->residual_samples;c->residual_sum_us+=error;
+            if(error>c->residual_max_us)c->residual_max_us=error;
+            /* Nominal 60 Hz only seeds cycle matching. Measured ptime deltas
+             * must remain plausible; the undocumented Vblank ABI is unused. */
+            if(sample>=15000&&sample<=18000&&error<=1000){
+                c->period_us=(7*c->period_us+sample+4)/8;valid=true;
+            }
+        }
+        if(!valid)++c->invalid_anchors;
+    }
+    c->anchor_us=ptime;c->target_us=0;c->valid=valid;++c->anchors;return valid;
+}
+int x4_video_pipeline_mailbox_due(X4VideoPipelineMailboxClock *c,uint64_t now,
+    uint64_t ready_since,uint64_t *target)
+{
+    if(target)*target=0;
+    if(!c||!target||!c->period_us||!ready_since||now<ready_since)return X4_PIPELINE_INVALID;
+    if(!c->valid||now<c->anchor_us||now-c->anchor_us>1000000){
+        c->valid=false;c->target_us=0;++c->warmup_submissions;return 0;}
+    if(!c->target_us){
+        if(c->period_us>UINT64_MAX-c->anchor_us)return X4_PIPELINE_EXHAUSTED;
+        c->target_us=c->anchor_us+c->period_us;
+    }
+    if(now>=c->target_us){
+        uint64_t missed=(now-c->target_us)/c->period_us+1;
+        if(c->margin_us>UINT64_MAX-ready_since)return X4_PIPELINE_EXHAUSTED;
+        uint64_t first_safe=ready_since+c->margin_us,first=c->target_us;
+        if(first<first_safe){
+            uint64_t gap=first_safe-first,skip=gap/c->period_us+(gap%c->period_us!=0);
+            if(skip>(UINT64_MAX-first)/c->period_us)return X4_PIPELINE_EXHAUSTED;
+            first+=skip*c->period_us;
+        }
+        if(first<=now)c->missed_opportunities+=(now-first)/c->period_us+1;
+        if(missed>(UINT64_MAX-c->target_us)/c->period_us)return X4_PIPELINE_EXHAUSTED;
+        c->target_us+=missed*c->period_us;
+    }
+    *target=c->target_us;
+    return c->target_us-now>c->margin_us?X4_PIPELINE_WAIT:0;
 }
 
 int x4_video_pipeline_stripe(unsigned height, unsigned workers, unsigned index,
@@ -1150,5 +1279,84 @@ int x4_video_pipeline_convert_reference_color(const X4VideoNv12Layout *l,
     ColorCoefficients m = color_coefficients(color);
     color_convert_rows(l,source,dst,l->visible_width,l->visible_height,
         l->visible_width,0,l->visible_height,cx,cy,&m,color,0);
+    return 0;
+}
+#if !X4_PUBLIC
+__attribute__((target("sse4.1")))
+int x4_video_pipeline_gpu_copy_rows(const uint32_t *source,size_t source_bytes,
+    unsigned pitch,uint32_t *destination,size_t destination_bytes,
+    unsigned first,unsigned rows)
+{
+    if(!source||((uintptr_t)source&15u)||pitch<1920||pitch>X4_VIDEO_MAX_PITCH||
+        (pitch&3u)||!rows||rows>16||first>=1080||rows>1080-first||
+        source_bytes<((size_t)(first+rows-1)*pitch+1920)*4||
+        validated_destination((const uint8_t *)source,source_bytes,destination,
+            destination_bytes,1920,rows,1920))return X4_PIPELINE_INVALID;
+    /* MOVNTDQA reads WC_GARLIC in 16-byte units into a cached scratch;
+     * all comparison loads then use the scratch, never scalar WC loads. */
+    _mm_mfence();
+    for(unsigned y=0;y<rows;++y){
+        const __m128i *src=(const __m128i *)(source+(size_t)(first+y)*pitch);
+        uint32_t *dst=destination+(size_t)y*1920;
+        for(unsigned x=0;x<1920;x+=4)
+            _mm_storeu_si128((__m128i *)(dst+x),_mm_stream_load_si128(src+x/4));
+    }
+    _mm_mfence();
+    return 0;
+}
+#endif
+int x4_video_pipeline_gpu_reference_rows(const X4VideoNv12Layout *l,
+    const uint8_t *source,size_t source_bytes,uint32_t *dst,size_t dst_bytes,
+    unsigned first,unsigned rows,const X4VideoPipelineColor *color)
+{
+    unsigned cx=0,cy=0;
+    if(!color||!rows||rows>64||first>1080||rows>1080-first||
+        validated_color_layout(l,source_bytes,&cx,&cy)||cx||cy||
+        l->visible_width!=1920||l->visible_height!=1080||
+        l->coded_width!=1920||l->coded_height!=1088||l->storage_height!=1088||
+        validated_destination(source,source_bytes,dst,dst_bytes,1920,rows,1920))return X4_PIPELINE_INVALID;
+    ColorCoefficients m=color_coefficients(color);
+    for(unsigned y=first;y<first+rows;++y){
+        uint32_t *row=dst+(size_t)(y-first)*1920;
+        if(color->convert_mode==X4_CONVERT_SMOOTH){
+#if X4_PIPELINE_SSE2
+            color_row_smooth_sse2(row,source,l->uv_plane_offset,l->pitch,0,0,1920,1080,y,&m,color->sharpness);
+#else
+            color_row_smooth_scalar(row,source,l->uv_plane_offset,l->pitch,0,0,1920,1080,y,&m,color->sharpness);
+#endif
+        }else{
+            const uint8_t *yp=source+(size_t)y*l->pitch;
+            const uint8_t *uv=source+l->uv_plane_offset+(size_t)(y/2)*l->pitch;
+#if X4_PIPELINE_SSE2
+            color_row_sse2(row,yp,uv,1920,false,&m);
+#else
+            for(unsigned x=0;x<1920;++x)row[x]=color_scalar_pixel(yp[x],uv[x&~1u],uv[(x&~1u)+1],&m);
+#endif
+        }
+    }
+#if defined(__SSE2__)
+    _mm_sfence();
+#endif
+    return 0;
+}
+int x4_video_pipeline_gpu_reference_720_rows(const X4VideoNv12Layout *l,
+    const uint8_t *source,size_t source_bytes,uint32_t *dst,size_t dst_bytes,
+    unsigned first,unsigned rows,const X4VideoPipelineColor *color)
+{
+    unsigned cx=0,cy=0;
+    if(!color||!rows||rows>16||first>=1080||rows>1080-first||
+        validated_color_layout(l,source_bytes,&cx,&cy)||cx||cy||
+        l->visible_width!=1280||l->visible_height!=720||
+        l->coded_width!=1280||l->coded_height!=720||l->storage_height!=720||
+        validated_destination(source,source_bytes,dst,dst_bytes,1920,1080,1920))return X4_PIPELINE_INVALID;
+    ColorCoefficients m=color_coefficients(color);
+    /* The production row function writes absolute destination row indices.
+     * Its own smooth scratch slot 2 is exclusive here: streaming converters
+     * use 0/1, and the three-worker probe is a different compiled program.
+     * Only these <=16 rows are converted; no frame-sized copy or staging. */
+    color_convert_rows(l,source,dst,1920,1080,1920,first,first+rows,0,0,&m,color,2);
+#if defined(__SSE2__)
+    _mm_sfence();
+#endif
     return 0;
 }

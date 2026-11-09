@@ -15,7 +15,7 @@ for public in 1 0; do
     "$cc" "${flags[@]}" ${X4_UI_TEST_FLAGS:-} "${includes[@]}" -DX4_PUBLIC="$public" \
         tests/test_tarea20b_menu.c src/ui/screen.c src/ui/apple_ui.c src/ui/canvas.c \
         src/ui/lang.c src/ui/net_hint.c src/ui/picture_settings.c src/ui/server_settings.c \
-        src/ui/product_metadata.c src/auth/public_image_policy.c src/auth/json.c \
+        src/ui/product_metadata.c src/ui/image_area.c src/auth/public_image_policy.c src/auth/json.c \
         src/streaming/stream_profile.c src/auth/release_check.c src/input/touch_menu.c \
         third_party/qrcodegen/qrcodegen.c "$build_dir/font.o" -pthread -lm -o "$build_dir/menu-$edition"
     objdump -d --disassemble=x4_touch_menu_copy_opaque_row "$build_dir/menu-$edition" > "$build_dir/opaque-copy-$edition.asm"

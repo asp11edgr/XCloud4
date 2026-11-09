@@ -1,3 +1,4 @@
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 /* SPDX-License-Identifier: GPL-3.0-only */
 #pragma once
 #include <stdbool.h>
@@ -31,6 +32,9 @@ typedef enum {
     X4_TOUCH_MENU_ACTION_CANCEL,
     X4_TOUCH_MENU_ACTION_MARK_TEST,
     X4_TOUCH_MENU_ACTION_EXIT_APP,
+    X4_TOUCH_MENU_ACTION_RELOAD_STREAM,
+    X4_TOUCH_MENU_ACTION_NET_HUD,
+    X4_TOUCH_MENU_ACTION_TOGGLE_MIC,
 } X4TouchMenuAction;
 
 typedef struct {
@@ -43,6 +47,7 @@ typedef struct {
     uint64_t touch_start_us;
     uint64_t last_activity_us;
     uint64_t nexus_until_us;
+    bool mic_enabled; /* Current launch snapshot, not the saved preference. */
 } X4TouchMenu;
 
 void x4_touch_menu_init(X4TouchMenu *menu, bool is_public);

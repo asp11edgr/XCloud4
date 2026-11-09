@@ -4,7 +4,7 @@
 #include <stdio.h>
 typedef struct X4LiveAudio X4LiveAudio;
 typedef struct {
-    uint64_t packets, frames, dropped, lost, bad_frames, underflows;
+    uint64_t packets, bytes, frames, dropped, lost, bad_frames, underflows;
     int error;
     bool playing;
     bool previous, detailed_metrics_available, fec_implemented, worker_joined;
@@ -21,9 +21,13 @@ typedef struct {
 } X4LiveAudioSnapshot;
 /* payload_type is fixed before the worker starts; -1 locks the first RTP. */
 X4LiveAudio *x4_live_audio_start(int *error, int payload_type);
-/* previous=true preserves the 0.7.47 worker; false selects adaptive 50 ms/PLC. */
+/* previous=true preserves the 0.7.47 worker; false selects adaptive 50 ms/PLC/FEC. */
 X4LiveAudio *x4_live_audio_start_mode(int *error, int payload_type, bool previous);
 void x4_live_audio_receive(X4LiveAudio *, const uint8_t *, size_t);
+/* RTC closed/joined: owner resets RTP reception only; never reopens AudioOut. */
+int x4_live_audio_begin_epoch(X4LiveAudio *);
+/* Only media bridge with an immutable per-peer generation. */
+void x4_live_audio_receive_for_epoch(X4LiveAudio *,const uint8_t *,size_t,uint64_t);
 void x4_live_audio_snapshot(const X4LiveAudio *, X4LiveAudioSnapshot *);
 void x4_live_audio_metrics_write(FILE *, const X4LiveAudioSnapshot *);
 void x4_live_audio_mute(X4LiveAudio *, bool);

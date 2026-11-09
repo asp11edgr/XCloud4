@@ -65,7 +65,11 @@ int32_t scePthreadAttrGetaffinity(const OrbisPthreadAttr *attr,void *mask)
 int32_t scePthreadAttrDestroy(OrbisPthreadAttr *attr)
 {assert(atomic_load(&cpu_calls_enabled)&&attr);return 0;}
 int scePthreadSetprio(OrbisPthread thread,int priority)
-{assert(atomic_load(&cpu_calls_enabled)&&pthread_equal(thread,pthread_self()));cpu_current_priority=priority;return 0;}
+{
+#if X4_GPU_INTEGRATION_TEST
+ if(priority==767){assert(pthread_equal(thread,pthread_self()));cpu_current_priority=priority;return 0;}
+#endif
+ assert(atomic_load(&cpu_calls_enabled)&&pthread_equal(thread,pthread_self()));cpu_current_priority=priority;return 0;}
 int32_t scePthreadSetaffinity(OrbisPthread thread,uint64_t mask)
 {assert(atomic_load(&cpu_calls_enabled)&&pthread_equal(thread,pthread_self()));
  if(mask==0x20&&atomic_exchange(&cpu_affinity_fail_once,false))return -EACCES;
@@ -318,6 +322,9 @@ static X4StreamPipeline *new_pipeline(atomic_bool *stop,unsigned session)
     /* This legacy scheduler double completes the offered slot immediately.
      * Auto/delayed depth2 is covered by the real-adapter resilience suite. */
     request.decoder_depth=X4_DEPTH_1;
+#if X4_PUBLIC && !X4_GPU_INTEGRATION_TEST
+    request.interaction_modes|=X4_INTERACTION_GPU_FORCE_CPU;
+#endif
     X4StreamPipeline *p=x4_stream_pipeline_create_request(session,NULL,stop,&request);assert(p);return p;
 }
 typedef struct {X4StreamPipeline *pipeline;atomic_bool done;int result;} AdmissionFailure;

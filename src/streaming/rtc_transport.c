@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #include "rtc_transport.h"
 #include "rtc_native.h"
 #include "rtc_receive_diag.h"
@@ -12,6 +13,23 @@
 #include "../input/rumble.h"
 #include "../media/live_trace.h"
 #include "../auth/json.h"
+#if defined(X4_OPENORBIS) || defined(X4_MIC_HOST_TEST)
+#define X4_MIC_TRANSPORT 1
+#include "../audio/mic_capture.h"
+#include "../audio/mic_rtp.h"
+#include <time.h>
+#else
+#define X4_MIC_TRANSPORT 0
+#endif
+#include "../core/x4_log.h"
+#if defined(X4_OPENORBIS) || defined(X4_RECOVERY43_TRANSPORT_TEST)
+#define X4_RECOVERY43_TRANSPORT 1
+#include "recovery43_bridge.h"
+#include "recovery43_sdp.h"
+#include "receiver_nack_state.h"
+#else
+#define X4_RECOVERY43_TRANSPORT 0
+#endif
 #include <rtc/rtc.h>
 #include <orbis/libkernel.h>
 #include <stdatomic.h>
@@ -19,6 +37,39 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if X4_RECOVERY43_TRANSPORT && X4_STREAM_PROFILE && (defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST))
+#define X4_REMB_ENABLED 1
+#include "remb_estimator.h"
+typedef struct {
+    X4RembSettings settings;
+    X4RembEstimator estimator;
+    X4Recovery43Snapshot repair;
+    uint64_t sampled_us, expired, attempted_us, sent, refused, decreases, increases;
+    uint32_t sender_ssrc, video_ssrc, attempted_bps, sent_bps, min_sent_bps, max_sent_bps;
+    uint32_t received_bps, max_received_bps, loss_ppm, max_loss_ppm;
+    int32_t delay_us, max_delay_us;
+    bool started, negotiated, loss_valid, have_expired, delay_valid, have_max_delay, final_reported;
+} X4RembState;
+static void remb44a_begin(X4Rtc *);
+static void remb44a_tick(X4Rtc *, uint64_t now);
+#if X4_PUBLIC
+enum { X4_REMB_PUBLIC_REPORT_INTERVAL_US = 30000000 };
+/* Session owner resets before starting a peer and folds its counters after
+ * joining the NACK sender. Export runs after the session owner has finished. */
+static X4RembSummary remb_finished_peers;
+static uint64_t remb_first_peer_us, remb_next_report_us, remb_final_pipeline_us;
+static const X4Trace *remb_session_trace;
+static void remb44c_periodic(const X4Rtc *, uint64_t now);
+static void remb44c_finish_peer(const X4Rtc *);
+#else
+static void remb44a_report(const X4Rtc *, bool final);
+#endif
+extern int x4_rtc_send_video_remb(int video_track, uint32_t sender_ssrc,
+    uint32_t video_ssrc, uint32_t bitrate_bps);
+#else
+#define X4_REMB_ENABLED 0
+#endif
+#line 40
 #define SDP_CAP 32768u
 #define CANDIDATE_CAP 1024u
 #define MID_CAP 32u
@@ -40,6 +91,50 @@ typedef struct { X4Rtc *context; unsigned active; } CallbackSlot;
 static CallbackSlot slots[CALLBACK_SLOTS];
 static unsigned slots_used;
 static atomic_flag callback_gate = ATOMIC_FLAG_INIT;
+
+enum LifetimeStep {
+    LIFETIME_TYPE, LIFETIME_ID, LIFETIME_CONTENT, LIFETIME_REASON, LIFETIME_TIMER,
+    LIFETIME_IDLE, LIFETIME_TERMINAL, LIFETIME_REPEAT
+};
+
+#if !X4_PUBLIC
+enum { LAB_MESSAGE_LINES = 64, LAB_LIFETIME_LINES = 8 };
+enum LabTarget {
+    LAB_TARGET_ABSENT, LAB_TARGET_OTHER, LAB_TARGET_SYSTEM_UI, LAB_TARGET_SYSTEM_UI_CONFIG,
+    LAB_TARGET_LIFETIME, LAB_TARGET_SERVER_CLOSE, LAB_TARGET_COUNT
+};
+enum LabIdKind { LAB_ID_ABSENT, LAB_ID_OTHER, LAB_ID_STRING, LAB_ID_NUMBER };
+enum LabClosure {
+    LAB_CLOSE_CHAT, LAB_CLOSE_CONTROL, LAB_CLOSE_INPUT, LAB_CLOSE_MESSAGE,
+    LAB_CLOSE_SCTP, LAB_CLOSE_DTLS, LAB_CLOSE_PEER, LAB_CLOSE_LOCAL_CHAT,
+    LAB_CLOSE_LOCAL_CONTROL, LAB_CLOSE_LOCAL_INPUT, LAB_CLOSE_LOCAL_MESSAGE, LAB_CLOSE_COUNT
+};
+typedef struct {
+    atomic_bool ready;
+    uint64_t at;
+    unsigned arrival;
+    int state_or_rc;
+} LabClosureSample;
+typedef struct {
+    atomic_bool ready;
+    const char *type; /* fixed label only */
+    enum LabTarget target;
+    size_t content_wire_bytes;
+    bool control;
+    uint8_t id_kind;
+    char content[161]; /* canonical public fields only */
+} LabMessageSample;
+typedef struct {
+    atomic_bool ready;
+    enum LifetimeStep step;
+    int ack_rc;
+} LabLifetimeSample;
+static atomic_uint lab_message_lines, lab_close_arrival, lab_close_order;
+static atomic_uint_fast64_t lab_first_video;
+/* The pinned native diagnostic hook has no per-peer user pointer. The
+ * session owner closes and drains the current peer before opening another. */
+static X4Rtc *lab_transport_context;
+#endif
 
 struct X4Rtc {
 #if X4_STREAM_PROFILE
@@ -63,6 +158,10 @@ struct X4Rtc {
 #endif
     uint64_t diagnostic_pli_ordinal; /* Session owner is the sole writer. */
     bool handshake_ack, startup_sent;
+    bool reconnect_peer;
+#ifdef X4_OPENORBIS
+    bool udp_buffers_logged; /* Session owner only. */
+#endif
     uint64_t started_at;
     X4GamepadSource input_source;
     void *input_user;
@@ -77,6 +176,14 @@ struct X4Rtc {
     atomic_bool input_stop, input_ready, input_metadata_sent, startup_complete;
     atomic_int input_error;
     atomic_uint_fast64_t input_packets, input_dropped;
+    atomic_bool server_terminal_claimed, server_closed;
+    atomic_uint_fast64_t server_idle_sequence;
+    atomic_uint server_idle_seconds;
+    /* Written once by the terminal-notice winner, published by server_closed.
+     * Snapshot never reads them before that acquire; no callback spins. */
+    bool server_hr_valid;
+    uint32_t server_hr;
+    char server_reason[41];
 #if X4_STREAM_PROFILE
     X4StreamStartup *stream_startup;
 #endif
@@ -86,7 +193,119 @@ struct X4Rtc {
 #endif
     uint32_t sdp_video_ssrc, sdp_video_pt;
     char sdp_video_mid[32];
+#if !X4_PUBLIC
+    atomic_uint lab_close_mask;
+    atomic_uint_fast64_t lab_target_counts[LAB_TARGET_COUNT];
+    LabClosureSample lab_closures[LAB_CLOSE_COUNT];
+    LabMessageSample lab_messages[LAB_MESSAGE_LINES];
+    unsigned lab_next_message; /* session owner only */
+    atomic_uint lab_lifetime_reserved;
+    LabLifetimeSample lab_lifetime[LAB_LIFETIME_LINES];
+    LabLifetimeSample lab_lifetime_terminal;
+    unsigned lab_next_lifetime; /* session owner only */
+    bool lab_lifetime_terminal_logged; /* session owner only */
+#endif
+#if X4_MIC_TRANSPORT
+    uint64_t mic_generation;
+    X4MicRtpClock mic_clock;
+    OrbisPthread mic_thread;
+    atomic_bool mic_stop, mic_done;
+    bool mic_thread_started;
+#endif
+#if X4_RECOVERY43_TRANSPORT
+    /* Append-only: all pre-existing input/audio/video offsets stay fixed. */
+    unsigned recovery43_mode;
+#if !X4_PUBLIC
+    unsigned recovery43_loss;
+    uint32_t recovery43_seed;
+    uint64_t recovery43_next_poll; /* NACK owner only; final is after join. */
+#endif
+    bool recovery43_started, recovery43_answered, recovery43_offer_failed;
+    X4Recovery43Offer recovery43_offered;
+#endif
+#if X4_REMB_ENABLED
+    X4RembState remb;
+#endif
+#line 190
 };
+
+#if X4_RECOVERY43_TRANSPORT
+static void recovery43_prepare(X4Rtc *rtc)
+{
+#if X4_STREAM_PROFILE
+    rtc->recovery43_mode=x4_stream_request_recovery_mode(&rtc->request_config);
+#elif X4_PUBLIC
+    rtc->recovery43_mode=2;
+#endif
+#if X4_PUBLIC
+    rtc->recovery43_started=x4_recovery43_begin(rtc->nack_epoch,rtc->recovery43_mode,0,0)==0;
+    if(!rtc->recovery43_started)rtc->recovery43_mode=0;
+#else
+#if X4_STREAM_PROFILE
+    rtc->recovery43_loss=x4_stream_request_loss_percent(&rtc->request_config);
+#endif
+    int random_rc=x4_native_random(&rtc->recovery43_seed,sizeof(rtc->recovery43_seed));
+    if(random_rc<0||!rtc->recovery43_seed){
+        x4_log_printf("XCloud4: recuperacion43 sin semilla rc=%d; Solo NACK sin perdida\n",random_rc);
+        rtc->recovery43_mode=rtc->recovery43_loss=0;
+        rtc->recovery43_seed=0;
+    }
+    int rc=x4_recovery43_begin(rtc->nack_epoch,rtc->recovery43_mode,
+        rtc->recovery43_loss,rtc->recovery43_seed);
+    rtc->recovery43_started=rc==0;
+    if(rc){rtc->recovery43_mode=rtc->recovery43_loss=0;}
+    x4_log_printf("XCloud4: recuperacion43 inicio modo=%u perdida=%u semilla=%u rc=%d\n",
+        rtc->recovery43_mode,rtc->recovery43_loss,rtc->recovery43_seed,rc);
+    if(!rtc->recovery43_mode&&rtc->recovery43_loss)
+        x4_log_printf("XCloud4: Con Solo NACK la pérdida simulada no se puede recuperar "
+            "(protección anti-repetición del SRTP); usar RTX o una red real\n");
+#endif
+}
+static void recovery43_accept(X4Rtc *rtc,const char *sdp)
+{
+    if(rtc->recovery43_answered)return;
+    if(!rtc->recovery43_started){
+#if X4_PUBLIC
+        rtc->recovery43_answered=true;
+        x4_log_printf("XCloud4: recuperacion43 negociacion rtx=0 fec=0\n");
+#endif
+        return;
+    }
+    X4Recovery43Negotiation answer={0};
+    unsigned mode=rtc->recovery43_offer_failed?0:rtc->recovery43_mode;
+    int parse_rc=x4_recovery43_sdp_answer(sdp,strlen(sdp),mode,&answer);
+#if X4_PUBLIC
+    /* Only activate repair if the server accepted both offered mappings. */
+    if(mode&&(!parse_rc)&&(!answer.rtx_accepted||!answer.fec_accepted)){
+        mode=0;
+        parse_rc=x4_recovery43_sdp_answer(sdp,strlen(sdp),mode,&answer);
+    }
+#endif
+    X4VideoRepair43Config config={.mode=mode,
+#if !X4_PUBLIC
+        .loss_percent=rtc->recovery43_loss,.seed=rtc->recovery43_seed,
+#endif
+        .media_ssrc=answer.media_ssrc,
+        .rtx_ssrc=answer.rtx_ssrc,.fec_ssrc=answer.fec_ssrc,
+        .media_pt=answer.media_pt,.rtx_pt=answer.rtx_pt,.fec_pt=answer.fec_pt,
+        .rtx_accepted=answer.rtx_accepted,.fec_accepted=answer.fec_accepted,
+        .mutable_extensions=answer.mutable_extensions};
+    int rc=parse_rc?parse_rc:x4_recovery43_answer(rtc->nack_epoch,&config);
+    rtc->recovery43_answered=true;
+#if X4_PUBLIC
+    x4_log_printf("XCloud4: recuperacion43 negociacion rtx=%u fec=%u\n",
+        !rc&&answer.rtx_accepted?1u:0u,!rc&&answer.fec_accepted?1u:0u);
+#else
+    unsigned applied=rc?0u:answer.fec_accepted?2u:answer.rtx_accepted?1u:0u;
+    x4_log_printf("XCloud4: recuperacion43 respuesta solicitado=%u aplicado=%u "
+        "rtx=%s fec=%s pt_video=%u pt_rtx=%u pt_fec=%u ext_mutable=%u "
+        "perdida_solicitada=%u perdida_aplicada=%u parse_rc=%d setup_rc=%d\n",
+        rtc->recovery43_mode,applied,!rc&&answer.rtx_accepted?"aceptado":"no",
+        !rc&&answer.fec_accepted?"aceptado":"no",answer.media_pt,answer.rtx_pt,answer.fec_pt,
+        answer.mutable_extensions?1u:0u,rtc->recovery43_loss,rc?0u:rtc->recovery43_loss,parse_rc,rc);
+#endif
+}
+#endif
 
 static void lock(atomic_flag *flag) { while (atomic_flag_test_and_set_explicit(flag, memory_order_acquire)) {} }
 static void unlock(atomic_flag *flag) { atomic_flag_clear_explicit(flag, memory_order_release); }
@@ -107,6 +326,105 @@ static void leave(CallbackSlot *slot)
     --slot->active;
     unlock(&callback_gate);
 }
+#if !X4_PUBLIC
+static void lab_peer_diagnostics_init(X4Rtc *rtc)
+{
+    atomic_init(&rtc->lab_close_mask, 0);
+    for (unsigned i = 0; i < LAB_TARGET_COUNT; ++i) atomic_init(&rtc->lab_target_counts[i], 0);
+    for (unsigned i = 0; i < LAB_CLOSE_COUNT; ++i) atomic_init(&rtc->lab_closures[i].ready, false);
+    for (unsigned i = 0; i < LAB_MESSAGE_LINES; ++i) atomic_init(&rtc->lab_messages[i].ready, false);
+    rtc->lab_next_message = atomic_load_explicit(&lab_message_lines, memory_order_relaxed);
+    atomic_init(&rtc->lab_lifetime_reserved, 0);
+    for (unsigned i = 0; i < LAB_LIFETIME_LINES; ++i) atomic_init(&rtc->lab_lifetime[i].ready, false);
+    atomic_init(&rtc->lab_lifetime_terminal.ready, false);
+    rtc->lab_next_lifetime = 0;
+    rtc->lab_lifetime_terminal_logged = false;
+}
+
+static void lab_observe_close(X4Rtc *rtc, enum LabClosure event, int state_or_rc)
+{
+    uint64_t at = sceKernelGetProcessTime();
+    if (atomic_fetch_or_explicit(&rtc->lab_close_mask, 1u << event, memory_order_relaxed) & (1u << event))
+        return;
+    LabClosureSample *sample = &rtc->lab_closures[event];
+    sample->at = at;
+    sample->arrival = atomic_fetch_add_explicit(&lab_close_arrival, 1, memory_order_relaxed);
+    sample->state_or_rc = state_or_rc;
+    atomic_store_explicit(&sample->ready, true, memory_order_release);
+}
+
+/* Session owner only, after all callbacks have drained. Report by monotonic
+ * timestamp, with capture order as the tie breaker. No native callback logs. */
+static void lab_emit_closures(const X4Rtc *rtc)
+{
+    static const char *const labels[LAB_CLOSE_COUNT] = {
+        "chat", "control", "input", "message", "SCTP", "DTLS", "peer",
+        "chat", "control", "input", "message"
+    };
+    unsigned pending = 0;
+    for (unsigned i = 0; i < LAB_CLOSE_COUNT; ++i)
+        if (atomic_load_explicit(&rtc->lab_closures[i].ready, memory_order_acquire))
+            pending |= 1u << i;
+    uint64_t first = atomic_load_explicit(&lab_first_video, memory_order_relaxed);
+    while (pending) {
+        unsigned event = LAB_CLOSE_COUNT;
+        for (unsigned i = 0; i < LAB_CLOSE_COUNT; ++i) {
+            if (!(pending & (1u << i))) continue;
+            const LabClosureSample *sample = &rtc->lab_closures[i];
+            if (event == LAB_CLOSE_COUNT || sample->at < rtc->lab_closures[event].at ||
+                (sample->at == rtc->lab_closures[event].at && sample->arrival < rtc->lab_closures[event].arrival))
+                event = i;
+        }
+        pending &= ~(1u << event);
+        const LabClosureSample *sample = &rtc->lab_closures[event];
+        unsigned order = atomic_fetch_add_explicit(&lab_close_order, 1, memory_order_relaxed) + 1u;
+        int64_t ms = first && sample->at >= first ? (int64_t)((sample->at - first) / 1000u) : -1;
+        x4_log_printf("XCloud4: RTC cierre orden=%u peer=%u desde_video_ms=%lld parte=%s origen=%s estado_rc=%d\n",
+            order, rtc->nack_epoch, (long long)ms, labels[event],
+            event >= LAB_CLOSE_LOCAL_CHAT ? "liberacion_local" : "observado", sample->state_or_rc);
+    }
+}
+
+void x4_rtc_lab_native_transport_state(int source, int state)
+{
+    /* prepare_port.py assigns native event 80 to DTLS and 87 to SCTP.
+     * libdatachannel's pinned Transport::State uses Disconnected=0, Failed=4.
+     * Never enable the dependency's textual logger. */
+    if (state != 0 && state != 4) return;
+    enum LabClosure event;
+    if (source == 80) event = LAB_CLOSE_DTLS;
+    else if (source == 87) event = LAB_CLOSE_SCTP;
+    else return;
+    lock(&callback_gate);
+    X4Rtc *rtc = lab_transport_context;
+    if (rtc) ++rtc->slot->active;
+    unlock(&callback_gate);
+    if (rtc) {
+        lab_observe_close(rtc, event, state);
+        leave(rtc->slot);
+    }
+}
+
+static void lab_channel_closed(int channel, void *pointer)
+{
+    X4Rtc *rtc = enter(pointer);
+    if (!rtc) return;
+    for (unsigned i = 0; i < 4; ++i) {
+        if (rtc->channels[i] != channel) continue;
+        lab_observe_close(rtc, (enum LabClosure)(LAB_CLOSE_CHAT + i), 0);
+        break;
+    }
+    leave(pointer);
+}
+
+static void lab_mark_first_video(void)
+{
+    uint_fast64_t absent = 0;
+    (void)atomic_compare_exchange_strong_explicit(&lab_first_video, &absent,
+        sceKernelGetProcessTime(), memory_order_relaxed, memory_order_relaxed);
+}
+#endif
+
 static void fail(X4Rtc *rtc, int error)
 {
     atomic_store(&rtc->error, error);
@@ -116,11 +434,77 @@ static void fail(X4Rtc *rtc, int error)
  * only creates bounded numeric requests; existing protected transport sends
  * happen here, never while the receive state gate is held. A 500us sleep is
  * a requested cadence, not a promised dispatch deadline. */
+#if X4_RECOVERY43_TRANSPORT && !X4_PUBLIC && defined(X4_OPENORBIS) && X4_STREAM_PROFILE
+static void recovery43b_report(const X4Rtc *rtc,bool final)
+{
+    if(rtc->video<0)return;
+    X4ReceiverNackMetrics nack={0};
+    rtcX4VideoRrSnapshot rr={0};
+    int nack_rc=x4_rtc_receiver_nack_metrics(rtc->video,&nack);
+    int rr_rc=rtcX4GetVideoRrSnapshot(rtc->video,&rr);
+    const char *const nack_names[]={"T43c","T43","T43b","T46b"};
+    const char *const rr_names[]={"cero","reparados","edge"};
+    X4StreamNackPolicy policy=x4_stream_request_nack_policy(&rtc->request_config);
+    X4StreamRrMode rr_mode=x4_stream_request_rr_mode(&rtc->request_config);
+    unsigned grace_ms,min_ms,max_ms;
+    x4_rtc_diag_video_grace_stats(policy,sceKernelGetProcessTime(),&grace_ms,&min_ms,&max_ms);
+    unsigned current_us=policy==X4_NACK_POLICY_T43B&&!nack_rc?nack.grace_us:grace_ms*1000u;
+    x4_log_printf("XCloud4: recuperacion43b fase=%s nack=%s rr=%s gracia_us=%u "
+        "gracia_min_ms=%u gracia_max_ms=%u rtt_p50_ms=%d "
+        "peticiones=%llu reintentos=%llu posiciones=%llu suprimidas_presupuesto=%llu "
+        "vencidos_sin_primero=%llu vencidos_reintento=%llu vencidos_reintento_sin_retorno=%llu "
+        "vencidos_sin_envio=%llu retorno_reintento_p50_us=%llu retorno_reintento_p95_us=%llu "
+        "retorno_primero_p95_us=%u retorno_primero_muestras=%u "
+        "liberaciones_arranque=%llu fci=%llu rtcp_nack=%llu nack_rc=%d "
+        "rr_enviados=%llu fraccion=%u fraccion_max=%u rr_fraccion_positiva=%llu acumulada=%d "
+        "seq_ext=%u jitter90k=%u lsr=%u dlsr=%u rr_rc=%d\n",
+        final?"fin":"periodico",nack_names[policy],rr_names[rr_mode],
+        current_us,min_ms,max_ms,x4_rtc_diag_rtt_p50_ms(),
+        (unsigned long long)nack.initial_requests,(unsigned long long)nack.retries,
+        (unsigned long long)nack.requested_positions,(unsigned long long)nack.budget_suppressed_positions,
+        (unsigned long long)nack.expired_no_first,(unsigned long long)nack.expired_retry_late,
+        (unsigned long long)nack.expired_retry_no_response,(unsigned long long)nack.expired_unsent,
+        (unsigned long long)nack.retry_return_p50_us,(unsigned long long)nack.retry_return_p95_us,
+        nack.first_return_p95_us,nack.first_return_samples,
+        (unsigned long long)nack.startup_releases,
+        (unsigned long long)nack.fci_total,(unsigned long long)nack.rtcp_packets,nack_rc,
+        (unsigned long long)rr.reports,(unsigned)rr.fractionLost,(unsigned)rr.maxFractionLost,
+        (unsigned long long)rr.reportsWithLoss,(int)rr.cumulativeLost,
+        (unsigned)rr.extendedSequence,(unsigned)rr.jitter,(unsigned)rr.lsr,(unsigned)rr.dlsr,rr_rc);
+}
+#endif
 static void *nack_sender(void *pointer)
 {
     X4Rtc *rtc = pointer;
     while (!atomic_load_explicit(&rtc->nack_stop, memory_order_acquire)) {
         (void)x4_rtc_poll_receiver_nack(rtc->video);
+#if X4_RECOVERY43_TRANSPORT && !X4_PUBLIC
+        uint64_t now=sceKernelGetProcessTime();
+#if X4_REMB_ENABLED
+        remb44a_tick(rtc,now);
+#endif
+#line 443
+#if defined(X4_OPENORBIS) && X4_STREAM_PROFILE
+        x4_rtc_diag_startup_report(now,false);
+#endif
+        if(now>=rtc->recovery43_next_poll){
+            if(rtc->recovery43_started)x4_recovery43_poll(rtc->nack_epoch,now,false);
+#if defined(X4_OPENORBIS) && X4_STREAM_PROFILE
+            recovery43b_report(rtc,false);
+#endif
+#if X4_REMB_ENABLED
+            remb44a_report(rtc,false);
+#endif
+#line 451
+            rtc->recovery43_next_poll=now+10000000u;
+        }
+#endif
+#if X4_REMB_ENABLED && X4_PUBLIC
+        const uint64_t now = sceKernelGetProcessTime();
+        remb44a_tick(rtc, now);
+        remb44c_periodic(rtc, now);
+#endif
+#line 454
         sceKernelUsleep(NACK_POLL_USEC);
     }
     return NULL;
@@ -305,9 +689,9 @@ static void sdp_shape_log(const char *sdp, size_t length)
         ssrc_lines, bare_ssrc, stored ? media[0].kind : 0, stored > 1 ? media[1].kind : 0);
     for (unsigned i = 0; i < stored; ++i) {
         m = &media[i];
-        printf("XCloud4: SDP media index=%u kind=%u port=%d midtype=%u midnum=%u direction=%u rtp=%u pts=%u overflow=%u setup=%u trickle=%u sctp=%d\n",
-            i, m->kind, m->port, m->mid_type, m->mid, m->direction, m->rtp, m->pt_count, m->pt_overflow,
-            m->setup, m->trickle, m->sctp_port);
+        printf("XCloud4: SDP media index=%u kind=%u port_present=%u midtype=%u direction=%u rtp=%u pts=%u overflow=%u setup=%u trickle=%u sctp_present=%u\n",
+            i, m->kind, (unsigned)(m->port > 0), m->mid_type, m->direction, m->rtp, m->pt_count, m->pt_overflow,
+            m->setup, m->trickle, (unsigned)(m->sctp_port > 0));
         for (unsigned j = 0; j < m->pt_count; ++j)
             printf("XCloud4: SDP payload media=%u index=%u pt=%u\n", i, j, m->pts[j]);
         printf("XCloud4: SDP codec media=%u h264=%d opus=%d feedback=%u nack=%u pli=%u fir=%u remb=%u profile_present=%u profile=%06X known31=%u known32=%u\n",
@@ -342,9 +726,11 @@ static void sdp_receive_shape(X4Rtc *rtc, const char *sdp, size_t length, unsign
         if (is_video && rtc && scope == 1) {
             if (sdp_prefix(line, "a=mid:")) {
                 SdpSpan mid_span = sdp_after(line, 6);
-                size_t n = mid_span.n < sizeof(rtc->sdp_video_mid) - 1 ? mid_span.n : sizeof(rtc->sdp_video_mid) - 1;
-                memcpy(rtc->sdp_video_mid, mid_span.p, n);
-                rtc->sdp_video_mid[n] = '\0';
+                unsigned number;
+                /* This copy feeds the klog and metrics, never negotiation. */
+                const char *label = !mid_span.n ? "" : sdp_equal(mid_span, "video") ? "video" :
+                    sdp_number(mid_span, 999999u, &number) ? "numerico" : "oculto";
+                snprintf(rtc->sdp_video_mid, sizeof(rtc->sdp_video_mid), "%s", label);
             } else if (sdp_prefix(line, "a=rtpmap:")) {
                 SdpSpan rest = sdp_after(line, 9), type = sdp_token(&rest), codec = sdp_token(&rest);
                 unsigned pt = 0;
@@ -383,6 +769,11 @@ static void sdp_receive_shape(X4Rtc *rtc, const char *sdp, size_t length, unsign
             while (rest.n && (rest.p[0]==' ' || rest.p[0]=='\t')) rest = sdp_after(rest,1);
             unsigned mask = sdp_equal(rest,"nack") ? 1 : sdp_equal(rest,"nack pli") ? 2 :
                 sdp_equal(rest,"ccm fir") ? 4 : sdp_equal(rest,"goog-remb") ? 8 : 0;
+#if X4_REMB_ENABLED
+            if (rtc && scope == 1 && !rtc->nack_thread_started && is_video && mask == 8 &&
+                (pt == 128 || pt == X4_RECEIVER_NACK_VIDEO_PT)) rtc->remb.negotiated = true;
+#endif
+#line 718
             x4_rtc_receive_setting(13, key | pt, mask, 0);
             printf("XCloud4: SDP receive feedback scope=%u media=%u pt=%u mask=%u\n",scope,media,pt,mask);
             ++records;
@@ -464,6 +855,10 @@ static void state_callback(int pc, rtcState state, void *pointer)
     if (!rtc) return;
     if (!atomic_load(&rtc->error)) atomic_store(&rtc->state, state);
     printf("XCloud4: RTC estado=%d\n", (int)state);
+#if !X4_PUBLIC
+    if (state == RTC_CLOSED || state == RTC_FAILED)
+        lab_observe_close(rtc, LAB_CLOSE_PEER, (int)state);
+#endif
     leave(pointer);
 }
 static void ice_state_callback(int pc, rtcIceState state, void *pointer)
@@ -493,8 +888,13 @@ static void rtp_callback(int track, const char *packet, int size, void *pointer)
         x4_rtc_receive_packet(X4_RD_APP, packet, (size_t)size,
             x4_rtc_receive_delivery_time(), X4_RD_AUTHENTICATED);
         int kind = track == rtc->video ? X4_RTC_VIDEO : X4_RTC_AUDIO;
-        if (kind == X4_RTC_VIDEO) atomic_fetch_add(&rtc->video_packets, 1);
-        else atomic_fetch_add(&rtc->audio_packets, 1);
+        if (kind == X4_RTC_VIDEO) {
+#if !X4_PUBLIC
+            if (atomic_fetch_add(&rtc->video_packets, 1) == 0) lab_mark_first_video();
+#else
+            atomic_fetch_add(&rtc->video_packets, 1);
+#endif
+        } else atomic_fetch_add(&rtc->audio_packets, 1);
         lock(&rtc->data_gate);
         X4RtcMediaCallback callback = rtc->media;
         void *user = rtc->media_user;
@@ -538,22 +938,56 @@ static void input_header(X4Rtc *rtc, uint8_t *packet, uint16_t type)
     for(unsigned i=0;i<8;++i)packet[6+i]=(uint8_t)(bits>>(8*i));
 }
 
-/* Single-controller Xbox input 1.0 report. Layout and physicality trailers
- * match pinned GreenVita input.rs and PSBox input_packet.cpp. They are wire
- * constants, not an arbitrary serialized controller struct. */
-static void input_gamepad(X4Rtc *rtc, const X4GamepadFrame *frame, uint8_t packet[38])
+typedef struct {
+    bool connected;
+    uint16_t buttons;
+    int16_t axes[4];
+    uint16_t triggers[2];
+} InputMappedState;
+static InputMappedState input_mapped_state(const X4GamepadFrame *frame)
+{
+    InputMappedState state={.connected=frame->connected,.buttons=frame->buttons&0xfffeu,
+        .axes={frame->left_x,frame->left_y,frame->right_x,frame->right_y},
+        .triggers={frame->left_trigger,frame->right_trigger}};
+    for(unsigned i=0;i<4;++i)if(state.axes[i]<-32767)state.axes[i]=-32767;
+    return state;
+}
+static bool input_same_state(const InputMappedState *a,const InputMappedState *b)
+{
+    if(a->connected!=b->connected || a->buttons!=b->buttons)return false;
+    for(unsigned i=0;i<4;++i)if(a->axes[i]!=b->axes[i])return false;
+    return a->triggers[0]==b->triggers[0] && a->triggers[1]==b->triggers[1];
+}
+/* input 1.0, with one 23-byte block per announced controller. The mixed
+ * physicality endianness is part of the wire format. */
+enum { INPUT_GAMEPAD_PREFIX = 15, INPUT_GAMEPAD_BLOCK = 23,
+       INPUT_GAMEPAD_MAX = INPUT_GAMEPAD_PREFIX + X4_GAMEPAD_COUNT * INPUT_GAMEPAD_BLOCK };
+static void input_gamepad_block(uint8_t *block, const InputMappedState *state, uint8_t index)
+{
+    block[0]=index;
+    input_u16(block+1,state->buttons);
+    for(unsigned i=0;i<4;++i)input_u16(block+3+2*i,(uint16_t)state->axes[i]);
+    input_u16(block+11,state->triggers[0]);input_u16(block+13,state->triggers[1]);
+    input_u32(block+15,1);
+    block[19]=block[20]=block[21]=0;block[22]=1; /* uint32 big endian. */
+}
+static size_t input_gamepads(X4Rtc *rtc, const InputMappedState pads[X4_GAMEPAD_COUNT],
+    unsigned mask, uint8_t packet[INPUT_GAMEPAD_MAX])
 {
     input_header(rtc,packet,2);
-    packet[14]=1;packet[15]=0;
-    input_u16(packet+16,frame->buttons & 0xfffeu);
-    int16_t axes[]={frame->left_x,frame->left_y,frame->right_x,frame->right_y};
-    for(unsigned i=0;i<4;++i) {
-        if(axes[i]<-32767)axes[i]=-32767;
-        input_u16(packet+18+2*i,(uint16_t)axes[i]);
+    /* P1 always occupies the first block. Reuse the mapped values used by
+     * change detection, so the single-pad path neither scans nor maps twice. */
+    input_gamepad_block(packet+INPUT_GAMEPAD_PREFIX,&pads[0],0);
+    size_t end=INPUT_GAMEPAD_PREFIX+INPUT_GAMEPAD_BLOCK;
+    unsigned count=1;
+    for(unsigned pending=mask&~1u;pending;pending&=pending-1u) {
+        unsigned i=(unsigned)__builtin_ctz(pending);
+        input_gamepad_block(packet+end,&pads[i],(uint8_t)i);
+        end+=INPUT_GAMEPAD_BLOCK;
+        ++count;
     }
-    input_u16(packet+26,frame->left_trigger);input_u16(packet+28,frame->right_trigger);
-    input_u32(packet+30,1);
-    packet[34]=packet[35]=packet[36]=0;packet[37]=1; /* uint32 big endian. */
+    packet[14]=(uint8_t)count;
+    return end;
 }
 
 static void input_error(X4Rtc *rtc,int error)
@@ -587,26 +1021,6 @@ typedef struct {
 static InputMetrics input_metrics;
 static atomic_flag input_metrics_claim = ATOMIC_FLAG_INIT;
 
-typedef struct {
-    bool connected;
-    uint16_t buttons;
-    int16_t axes[4];
-    uint16_t triggers[2];
-} InputMappedState;
-static InputMappedState input_mapped_state(const X4GamepadFrame *frame)
-{
-    InputMappedState state={.connected=frame->connected,.buttons=frame->buttons&0xfffeu,
-        .axes={frame->left_x,frame->left_y,frame->right_x,frame->right_y},
-        .triggers={frame->left_trigger,frame->right_trigger}};
-    for(unsigned i=0;i<4;++i)if(state.axes[i]<-32767)state.axes[i]=-32767;
-    return state;
-}
-static bool input_same_state(const InputMappedState *a,const InputMappedState *b)
-{
-    if(a->connected!=b->connected || a->buttons!=b->buttons)return false;
-    for(unsigned i=0;i<4;++i)if(a->axes[i]!=b->axes[i])return false;
-    return a->triggers[0]==b->triggers[0] && a->triggers[1]==b->triggers[1];
-}
 static void input_timing_record(InputTiming *timing,uint64_t us,unsigned quantum)
 {
     ++timing->count;timing->total_us+=us;
@@ -614,14 +1028,16 @@ static void input_timing_record(InputTiming *timing,uint64_t us,unsigned quantum
     uint64_t bin=us/quantum;
     ++timing->bins[bin<INPUT_METRIC_BINS-1u?bin:INPUT_METRIC_BINS-1u];
 }
-static bool input_metrics_begin(bool legacy,int priority_return)
+static bool input_metrics_begin_mode(bool legacy,int priority_return,bool preserve)
 {
     if(atomic_flag_test_and_set_explicit(&input_metrics_claim,memory_order_acquire))return false;
-    memset(&input_metrics,0,sizeof(input_metrics));
+    if(!preserve||!input_metrics.available)memset(&input_metrics,0,sizeof(input_metrics));
     input_metrics.available=true;input_metrics.legacy=legacy;
-    input_metrics.priority_return=priority_return;
+    input_metrics.priority_return=priority_return;input_metrics.ended_us=0;
     return true;
 }
+static bool input_metrics_begin(bool legacy,int priority_return)
+{return input_metrics_begin_mode(legacy,priority_return,false);}
 static void input_metrics_ready(bool own,uint64_t now)
 {
     if(own && !input_metrics.first_ready_us) {
@@ -732,6 +1148,108 @@ void x4_rtc_input_metrics_write(FILE *f)
     }
     atomic_flag_clear_explicit(&input_metrics_claim,memory_order_release);
 }
+typedef struct {
+    unsigned announced;
+    unsigned absence_active;
+    uint64_t absence_since[X4_GAMEPAD_COUNT], absence_generation[X4_GAMEPAD_COUNT];
+#if X4_RUMBLE
+    bool rumble_targets_set;
+    unsigned rumble_targets;
+    uint64_t rumble_generation[X4_GAMEPAD_COUNT];
+#endif
+#if !X4_PUBLIC
+    bool saw_presence;
+    unsigned presence;
+    uint64_t reports[X4_GAMEPAD_COUNT], neutral[X4_GAMEPAD_COUNT];
+    uint64_t adds[X4_GAMEPAD_COUNT], removes[X4_GAMEPAD_COUNT], control_errors[X4_GAMEPAD_COUNT];
+#endif
+} InputGamepadTracker;
+
+#define INPUT_REMOVE_DEBOUNCE_USEC 2000000u
+
+static inline bool input_topology_pending(const X4Rtc *rtc,const InputGamepadTracker *tracker,
+    const X4GamepadRoster *roster,unsigned present)
+{
+#if !X4_PUBLIC
+    if(!tracker->saw_presence || tracker->presence!=present)return true;
+#endif
+    if(!roster->multiplayer)return false;
+    if((present|tracker->announced)&~1u)return true;
+#if X4_RUMBLE
+    return rtc->rumble && (!tracker->rumble_targets_set || tracker->rumble_targets!=present ||
+        tracker->rumble_generation[0]!=roster->generation[0]);
+#else
+    (void)rtc;
+    return false;
+#endif
+}
+
+static void input_reconcile_gamepads(X4Rtc *rtc, InputGamepadTracker *tracker,
+    const X4GamepadRoster *roster, unsigned present, uint64_t now)
+{
+#if !X4_PUBLIC
+    unsigned observed=tracker->saw_presence?tracker->presence^present:present|1u;
+    for(;observed;observed&=observed-1u) {
+        unsigned i=(unsigned)__builtin_ctz(observed);
+        printf("XCloud4: RTC mandos presencia indice=%u conectado=%u generacion=%llu\n",
+            i,(present&(1u<<i))?1u:0u,(unsigned long long)roster->generation[i]);
+    }
+    tracker->saw_presence=true;tracker->presence=present;
+#endif
+    if(!roster->multiplayer)return;
+    /* P1 is permanently announced in start_channels. For any other slot a
+     * fresh generation restarts the absence window, even if the intervening
+     * reconnect was too short for the sender to observe directly. */
+    for(unsigned pending=(present|tracker->announced)&~1u;pending;pending&=pending-1u) {
+        unsigned i=(unsigned)__builtin_ctz(pending),bit=1u<<i;
+        bool added=(present&bit)!=0, announced=(tracker->announced&bit)!=0;
+        if(added || !announced)tracker->absence_active&=~bit;
+        if(added==announced)continue;
+        if(!added) {
+            bool reversed=(tracker->absence_active&bit) && now<tracker->absence_since[i];
+            if(!(tracker->absence_active&bit) || reversed ||
+               tracker->absence_generation[i]!=roster->generation[i]) {
+                tracker->absence_active|=bit;
+                tracker->absence_generation[i]=roster->generation[i];
+                uint64_t changed=roster->changed_us[i];
+                tracker->absence_since[i]=!reversed && changed && changed<=now?changed:now;
+            }
+            if(now-tracker->absence_since[i]<INPUT_REMOVE_DEBOUNCE_USEC)continue;
+        }
+        if(!rtcIsOpen(rtc->channels[1]))continue;
+        char message[70];
+        int length=snprintf(message,sizeof(message),
+            "{\"message\":\"gamepadChanged\",\"gamepadIndex\":%u,\"wasAdded\":%s}",
+            i,added?"true":"false");
+        if(length<=0 || (size_t)length>=sizeof(message))continue;
+        int rc=send_text(rtc->channels[1],message);
+        if(rc<0) {
+#if !X4_PUBLIC
+            ++tracker->control_errors[i];
+#endif
+            continue;
+        }
+        if(added)tracker->announced|=bit;
+        else {tracker->announced&=~bit;tracker->absence_active&=~bit;}
+#if !X4_PUBLIC
+        if(added)++tracker->adds[i];else ++tracker->removes[i];
+        printf("XCloud4: RTC mandos aviso indice=%u alta=%u rc=%d\n",i,added?1u:0u,rc);
+#endif
+    }
+#if X4_RUMBLE
+    /* A new slot is actionable only after its local registration succeeds.
+     * A physically missing slot is ineligible even during the wire grace. */
+    unsigned targets=present&tracker->announced;
+    if(rtc->rumble && (!tracker->rumble_targets_set || tracker->rumble_targets!=targets ||
+        memcmp(tracker->rumble_generation,roster->generation,sizeof(tracker->rumble_generation)))) {
+        if(x4_rumble_set_targets(rtc->rumble,(uint8_t)targets,roster->generation)) {
+            tracker->rumble_targets_set=true;tracker->rumble_targets=targets;
+            memcpy(tracker->rumble_generation,roster->generation,sizeof(tracker->rumble_generation));
+        }
+    }
+#endif
+}
+
 static void *input_sender(void *pointer)
 {
     X4Rtc *rtc=pointer;
@@ -740,107 +1258,92 @@ static void *input_sender(void *pointer)
 #if X4_STREAM_PROFILE
     legacy=(rtc->request_config.interaction_modes&X4_INTERACTION_INPUT_60HZ)!=0;
 #endif
-    bool own_metrics=input_metrics_begin(legacy,priority_return);
+    bool own_metrics=rtc->reconnect_peer?input_metrics_begin_mode(legacy,priority_return,true):
+        input_metrics_begin(legacy,priority_return);
     printf("XCloud4: RTC input mode=%s priority=400 return=0x%08x\n",
         legacy?"legacy_60hz":"immediate",(unsigned)priority_return);
-    InputMappedState last_success={0};bool have_success=false;
-    if(!legacy) {
-        bool have_attempt=false;uint64_t last_attempt_us=0,last_success_us=0;
-        while(!atomic_load(&rtc->input_stop)) {
-            uint64_t until=sceKernelGetProcessTime()+INPUT_POLL_USEC;
-            lock(&rtc->data_gate);
-            X4GamepadSource source=rtc->input_source;void *user=rtc->input_user;
-            unlock(&rtc->data_gate);
-            bool ready=source && atomic_load(&rtc->input_metadata_sent) &&
-                atomic_load(&rtc->startup_complete) && !atomic_load(&rtc->error) &&
-                atomic_load(&rtc->state)==X4_RTC_CONNECTED && rtcIsOpen(rtc->channels[2]);
-            atomic_store(&rtc->input_ready,ready);
-            if(ready) {
-                X4GamepadFrame frame={0};
-                if(!source(user,&frame) || !frame.connected)frame=(X4GamepadFrame){0};
-                InputMappedState current=input_mapped_state(&frame);
-                uint64_t now=sceKernelGetProcessTime();input_metrics_ready(own_metrics,now);
-                bool changed=!have_success || !input_same_state(&current,&last_success);
-                bool keepalive=have_success && now>=last_success_us && now-last_success_us>=INPUT_INTERVAL_USEC;
-                bool capped=have_attempt && now>=last_attempt_us && now-last_attempt_us<INPUT_MINIMUM_USEC;
-                if((changed || keepalive) && !atomic_load(&rtc->input_stop)) {
-                    if(capped){if(own_metrics)++input_metrics.cap_delays;}
-                    else {
-                        int buffered=rtcGetBufferedAmount(rtc->channels[2]);
-                        if(buffered) {
-                            atomic_fetch_add(&rtc->input_dropped,1);
-                            if(own_metrics) {
-                                if(buffered>0)++input_metrics.busy_deferrals;
-                                else ++input_metrics.buffer_query_errors;
-                            }
-                            if(buffered<0)input_error(rtc,buffered);
-                        } else {
-                            uint8_t packet[38];input_gamepad(rtc,&frame,packet);
-                            uint64_t begin=sceKernelGetProcessTime();last_attempt_us=begin;have_attempt=true;
-                            int rc=rtcSendMessage(rtc->channels[2],(const char *)packet,sizeof(packet));
-                            uint64_t end=sceKernelGetProcessTime();
-                            input_metrics_send(own_metrics,&frame,changed,begin,end,rc);
-                            if(rc<0){atomic_fetch_add(&rtc->input_dropped,1);input_error(rtc,rc);}
-                            else {
-                                atomic_fetch_add(&rtc->input_packets,1);input_error(rtc,0);
-                                last_success=current;have_success=true;last_success_us=end;
-                            }
-                        }
-                    }
-                }
-            }
-            /* Fresh poll deadline, no catch-up queue. A newer source sample
-             * supersedes any change deferred by the cap or channel backlog. */
-            while(!atomic_load(&rtc->input_stop)) {
-                uint64_t now=sceKernelGetProcessTime();if(now>=until)break;
-                sceKernelUsleep((unsigned)(until-now));
-            }
-        }
-    } else while(!atomic_load(&rtc->input_stop)) {
-        uint64_t until=sceKernelGetProcessTime()+INPUT_INTERVAL_USEC;
+    InputGamepadTracker tracker={.announced=1u};
+    InputMappedState last_success[X4_GAMEPAD_COUNT]={0};
+    unsigned last_mask=0;
+    bool have_attempt=false;
+    uint64_t last_attempt_us=0,last_success_us=0;
+    while(!atomic_load(&rtc->input_stop)) {
+        uint64_t until=sceKernelGetProcessTime()+(legacy?INPUT_INTERVAL_USEC:INPUT_POLL_USEC);
         lock(&rtc->data_gate);
-        X4GamepadSource source=rtc->input_source;
-        void *user=rtc->input_user;
+        X4GamepadSource source=rtc->input_source;void *user=rtc->input_user;
         unlock(&rtc->data_gate);
         bool ready=source && atomic_load(&rtc->input_metadata_sent) &&
             atomic_load(&rtc->startup_complete) && !atomic_load(&rtc->error) &&
             atomic_load(&rtc->state)==X4_RTC_CONNECTED && rtcIsOpen(rtc->channels[2]);
         atomic_store(&rtc->input_ready,ready);
         if(ready) {
-            X4GamepadFrame frame={0};
-            /* Auth copies its mailbox under its own gate. No RTC gate is
-             * held across this call; close joins before freeing either. */
-            if(!source(user,&frame) || !frame.connected)frame=(X4GamepadFrame){0};
-            input_metrics_ready(own_metrics,sceKernelGetProcessTime());
-            if(!atomic_load(&rtc->input_stop)) {
-                int buffered=rtcGetBufferedAmount(rtc->channels[2]);
-                if(buffered) {
-                    atomic_fetch_add(&rtc->input_dropped,1);
-                    if(own_metrics) {
-                        if(buffered>0)++input_metrics.busy_deferrals;
-                        else ++input_metrics.buffer_query_errors;
+            X4GamepadRoster roster;
+            bool fresh=source(user,&roster);
+            uint64_t now=sceKernelGetProcessTime();
+            input_metrics_ready(own_metrics,now);
+            unsigned present=fresh ? (roster.connected_mask & (roster.multiplayer?15u:1u)) : 0u;
+            if(fresh && input_topology_pending(rtc,&tracker,&roster,present) &&
+                !atomic_load(&rtc->input_stop))
+                input_reconcile_gamepads(rtc,&tracker,&roster,present,now);
+            unsigned mask=tracker.announced,extra=mask&~1u;
+            static const X4GamepadFrame neutral={0};
+            const X4GamepadFrame *primary=(present&1u) && roster.pads[0].connected?&roster.pads[0]:&neutral;
+            InputMappedState current[X4_GAMEPAD_COUNT];
+            current[0]=input_mapped_state(primary);
+            bool changed=last_mask!=mask || !input_same_state(&current[0],&last_success[0]);
+            for(unsigned pending=extra;pending;pending&=pending-1u) {
+                unsigned i=(unsigned)__builtin_ctz(pending);
+                const X4GamepadFrame *frame=(present&(1u<<i)) && roster.pads[i].connected?&roster.pads[i]:&neutral;
+                current[i]=input_mapped_state(frame);
+                if(!changed && !input_same_state(&current[i],&last_success[i]))changed=true;
+            }
+            bool keepalive=last_mask && now>=last_success_us && now-last_success_us>=INPUT_INTERVAL_USEC;
+            bool capped=!legacy && have_attempt && now>=last_attempt_us &&
+                now-last_attempt_us<INPUT_MINIMUM_USEC;
+            if((legacy || changed || keepalive) && !atomic_load(&rtc->input_stop)) {
+                if(capped){if(own_metrics)++input_metrics.cap_delays;}
+                else {
+                    int buffered=rtcGetBufferedAmount(rtc->channels[2]);
+                    if(buffered) {
+                        atomic_fetch_add(&rtc->input_dropped,1);
+                        if(own_metrics) {
+                            if(buffered>0)++input_metrics.busy_deferrals;
+                            else ++input_metrics.buffer_query_errors;
+                        }
+                        if(buffered<0)input_error(rtc,buffered);
+                    } else {
+                        uint8_t packet[INPUT_GAMEPAD_MAX];
+                        size_t size=input_gamepads(rtc,current,mask,packet);
+                        uint64_t begin=sceKernelGetProcessTime();last_attempt_us=begin;have_attempt=true;
+                        int rc=rtcSendMessage(rtc->channels[2],(const char *)packet,(int)size);
+                        uint64_t end=sceKernelGetProcessTime();
+                        input_metrics_send(own_metrics,primary,changed,begin,end,rc);
+                        if(rc<0){atomic_fetch_add(&rtc->input_dropped,1);input_error(rtc,rc);}
+                        else {
+                            atomic_fetch_add(&rtc->input_packets,1);input_error(rtc,0);
+                            last_success[0]=current[0];
+#if !X4_PUBLIC
+                            ++tracker.reports[0];
+                            if(!primary->connected)++tracker.neutral[0];
+#endif
+                            for(unsigned pending=extra;pending;pending&=pending-1u) {
+                                unsigned i=(unsigned)__builtin_ctz(pending);
+                                last_success[i]=current[i];
+#if !X4_PUBLIC
+                                ++tracker.reports[i];
+                                if(!current[i].connected)++tracker.neutral[i];
+#endif
+                            }
+                            last_mask=mask;last_success_us=end;
+                        }
                     }
-                    if(buffered<0)input_error(rtc,buffered);
-                } else {
-                    uint8_t packet[38];
-                    input_gamepad(rtc,&frame,packet);
-                    InputMappedState current=input_mapped_state(&frame);
-                    bool changed=!have_success || !input_same_state(&current,&last_success);
-                    uint64_t begin=sceKernelGetProcessTime();
-                    int rc=rtcSendMessage(rtc->channels[2],(const char *)packet,sizeof(packet));
-                    uint64_t end=sceKernelGetProcessTime();
-                    input_metrics_send(own_metrics,&frame,changed,begin,end,rc);
-                    if(rc<0) {atomic_fetch_add(&rtc->input_dropped,1);input_error(rtc,rc);}
-                    else {atomic_fetch_add(&rtc->input_packets,1);input_error(rtc,0);last_success=current;have_success=true;}
                 }
             }
         }
-        /* No catch-up bursts: each iteration starts a fresh monotonic
-         * deadline; interrupted sleeps cannot exceed the 60 Hz ceiling. */
+        /* Fresh poll deadline, no catch-up queue. The latest sample wins. */
         while(!atomic_load(&rtc->input_stop)) {
-            uint64_t t=sceKernelGetProcessTime();
-            if(t>=until)break;
-            sceKernelUsleep((unsigned)(until-t));
+            uint64_t now=sceKernelGetProcessTime();if(now>=until)break;
+            sceKernelUsleep((unsigned)(until-now));
         }
     }
     atomic_store(&rtc->input_ready,false);
@@ -848,6 +1351,22 @@ static void *input_sender(void *pointer)
     if(own_metrics && rtc->rumble) {
         x4_rumble_snapshot(rtc->rumble,&input_metrics.rumble);
         input_metrics.rumble_available=true;
+    }
+#endif
+#if !X4_PUBLIC
+    X4RumbleSnapshot vibration={0};
+#if X4_RUMBLE
+    if(rtc->rumble) {
+        if(own_metrics)vibration=input_metrics.rumble;
+        else x4_rumble_snapshot(rtc->rumble,&vibration);
+    }
+#endif
+    tracker.adds[0]=atomic_load(&rtc->startup_complete)?1u:0u;
+    for(unsigned i=0;i<X4_GAMEPAD_COUNT;++i) {
+        printf("XCloud4: RTC mandos resumen indice=%u informes=%llu neutros=%llu altas=%llu bajas=%llu vibracion_recibida=%llu fallos_aviso=%llu\n",
+            i,(unsigned long long)tracker.reports[i],(unsigned long long)tracker.neutral[i],
+            (unsigned long long)tracker.adds[i],(unsigned long long)tracker.removes[i],
+            (unsigned long long)vibration.received_by_index[i],(unsigned long long)tracker.control_errors[i]);
     }
 #endif
     input_metrics_end(own_metrics);
@@ -949,11 +1468,297 @@ static void channel_open(int channel, void *pointer)
     start_channels(rtc);
     leave(pointer);
 }
+static bool lifetime_reason(const char *reason)
+{
+    size_t n=strlen(reason);
+    if(!n||n>40||!((reason[0]>='A'&&reason[0]<='Z')||(reason[0]>='a'&&reason[0]<='z')))return false;
+    for(size_t i=1;i<n;++i)if(!((reason[i]>='A'&&reason[i]<='Z')||
+        (reason[i]>='a'&&reason[i]<='z')||(reason[i]>='0'&&reason[i]<='9')))return false;
+    return true;
+}
+static bool lifetime_hr(X4JsonSpan value,uint32_t *out)
+{
+    if(!x4_json_uint32(value,out))return true;
+    /* HRESULT may be a signed JSON int32, or an explicit hexadecimal string.
+     * Bound both representations; never forward arbitrary display text. */
+    if(x4_json_type(value)==X4_JSON_T_NUMBER&&value.length>1&&value.length<=11&&value.data[0]=='-'){
+        uint64_t n=0;
+        for(size_t i=1;i<value.length;++i){unsigned d=(unsigned char)value.data[i]-'0';if(d>9)return false;n=n*10+d;}
+        if(n>2147483648ull)return false;
+        *out=0u-(uint32_t)n;return true;
+    }
+    char text[11];
+    if(x4_json_token(value,text,sizeof(text))||strlen(text)<3||text[0]!='0'||(text[1]!='x'&&text[1]!='X'))return false;
+    uint32_t n=0;
+    for(size_t i=2;text[i];++i){unsigned d;
+        if(text[i]>='0'&&text[i]<='9')d=(unsigned)(text[i]-'0');
+        else if(text[i]>='a'&&text[i]<='f')d=(unsigned)(text[i]-'a')+10;
+        else if(text[i]>='A'&&text[i]<='F')d=(unsigned)(text[i]-'A')+10;
+        else return false;
+        n=(n<<4)|d;
+    }
+    *out=n;return true;
+}
+static bool lifetime_id(X4JsonSpan value)
+{
+    /* The enclosing JSON is already validated. An opaque string can contain
+     * punctuation or escapes. Echo the original span rather than decoding it
+     * and imposing an alphabet or changing its JSON type. */
+    X4JsonType type=x4_json_type(value);
+    return (type==X4_JSON_T_STRING&&value.length>2)||
+        (type==X4_JSON_T_NUMBER&&value.length<68);
+}
+
+#if !X4_PUBLIC
+static void lifetime_note(X4Rtc *rtc,enum LifetimeStep step,int ack_rc)
+{
+    /* Keep a separate slot for the first terminal notice even after the
+     * bounded diagnostic history has filled. Only the terminal winner uses it. */
+    LabLifetimeSample *sample=&rtc->lab_lifetime_terminal;
+    if(step!=LIFETIME_TERMINAL){
+        unsigned i=atomic_load_explicit(&rtc->lab_lifetime_reserved,memory_order_relaxed);
+        do {
+            if(i>=LAB_LIFETIME_LINES)return;
+        } while(!atomic_compare_exchange_weak_explicit(&rtc->lab_lifetime_reserved,&i,i+1u,
+            memory_order_relaxed,memory_order_relaxed));
+        sample=&rtc->lab_lifetime[i];
+    }
+    sample->step=step;
+    sample->ack_rc=ack_rc;
+    atomic_store_explicit(&sample->ready,true,memory_order_release);
+}
+
+static void lifetime_emit(const LabLifetimeSample *sample)
+{
+    static const char *const fields[]={
+        [LIFETIME_TYPE]="resultado=rechazado paso=tipo motivo=ausente_o_inesperado",
+        [LIFETIME_ID]="resultado=rechazado paso=id motivo=ausente_o_invalido",
+        [LIFETIME_CONTENT]="resultado=rechazado paso=contenido motivo=ausente_o_invalido",
+        [LIFETIME_REASON]="resultado=rechazado paso=motivo motivo=ausente_o_invalido",
+        [LIFETIME_TIMER]="resultado=rechazado paso=temporizador motivo=invalido",
+        [LIFETIME_IDLE]="resultado=aceptado paso=aviso motivo=inactividad",
+        [LIFETIME_TERMINAL]="resultado=aceptado paso=aviso motivo=terminal",
+        [LIFETIME_REPEAT]="resultado=aceptado paso=aviso motivo=terminal_repetido",
+    };
+    x4_log_printf("XCloud4: RTC lifetime %s\n",fields[sample->step]);
+    if(sample->step>=LIFETIME_IDLE)
+        x4_log_printf("XCloud4: RTC lifetime paso=ack rc=%d\n",sample->ack_rc);
+}
+#else
+#define lifetime_note(rtc,step,ack_rc) ((void)(rtc),(void)(step),(void)(ack_rc))
+#endif
+
+static void lifetime_message(X4Rtc *rtc,int channel,const char *data,size_t length)
+{
+    X4JsonSpan root,type,target,content,id,body,reason,value;
+    char kind[32],destination[96],buffer[4097],label[41]={0};
+    if(x4_json_parse(data,length,&root)||
+        x4_json_member(root,"target",&target)!=1||x4_json_token(target,destination,sizeof(destination))||
+        strcmp(destination,"/streaming/sessionLifetimeManagement/serverInitiatedDisconnect"))return;
+    int ack_rc=0;
+    enum LifetimeStep step=LIFETIME_TYPE;
+    if(x4_json_member(root,"type",&type)!=1||x4_json_token(type,kind,sizeof(kind))||
+        (strcmp(kind,"TransactionStart")&&strcmp(kind,"Message")))goto done;
+    step=LIFETIME_ID;
+    static const char prefix[]="{\"type\":\"TransactionComplete\",\"content\":\"\\\"\\\"\",\"id\":";
+    static const char suffix[]=",\"cv\":\"\"}";
+    if(x4_json_member(root,"id",&id)!=1||!lifetime_id(id)||
+        id.length>sizeof(buffer)-(sizeof(prefix)-1)-sizeof(suffix))goto done;
+    step=LIFETIME_CONTENT;
+    if(x4_json_member(root,"content",&content)!=1)goto done;
+    body=content;
+    if(x4_json_type(content)==X4_JSON_T_STRING&&
+        (x4_json_token(content,buffer,sizeof(buffer))||x4_json_parse(buffer,strlen(buffer),&body)))goto done;
+    if(x4_json_type(body)!=X4_JSON_T_OBJECT)goto done;
+    step=LIFETIME_REASON;
+    if(x4_json_member(body,"reason",&reason)!=1||x4_json_type(reason)!=X4_JSON_T_STRING)goto done;
+    /* A syntactically valid but unsafe/oversized reason still closes the
+     * session, with no reason exposed; it is not an RTC/network failure. */
+    if(x4_json_token(reason,label,sizeof(label))||!lifetime_reason(label))label[0]='\0';
+    if(!strcmp(label,"WarningForBeingIdle")){
+        step=LIFETIME_TIMER;
+        uint32_t seconds=120;
+        int found=x4_json_member(body,"secondsUntilKick",&value);
+        if(found<0||(found==1&&(x4_json_uint32(value,&seconds)||seconds<1||seconds>3600)))goto done;
+        atomic_store_explicit(&rtc->server_idle_seconds,seconds,memory_order_relaxed);
+        atomic_fetch_add_explicit(&rtc->server_idle_sequence,1,memory_order_release);
+        step=LIFETIME_IDLE;
+    }else if(!atomic_exchange_explicit(&rtc->server_terminal_claimed,true,memory_order_acq_rel)){
+        /* Only an idle warning needs a valid timer. Optional diagnostic
+         * HRESULT metadata must not discard an explicit terminal reason. */
+        uint32_t hr=0;
+        rtc->server_hr_valid=x4_json_member(body,"hr",&value)==1&&lifetime_hr(value,&hr);
+        rtc->server_hr=hr;
+        memcpy(rtc->server_reason,label,sizeof(label));
+        atomic_store_explicit(&rtc->server_closed,true,memory_order_release);
+        step=LIFETIME_TERMINAL;
+    }else step=LIFETIME_REPEAT;
+    /* A peer can close the channel while we acknowledge the transaction.
+     * Reuse the decoded content buffer now that no body fields are read. */
+    memcpy(buffer,prefix,sizeof(prefix)-1);
+    memcpy(buffer+sizeof(prefix)-1,id.data,id.length);
+    memcpy(buffer+sizeof(prefix)-1+id.length,suffix,sizeof(suffix));
+    ack_rc=send_text(channel,buffer);
+done:
+    lifetime_note(rtc,step,ack_rc);
+}
+#if !X4_PUBLIC
+static const char *const lab_targets[LAB_TARGET_COUNT] = {
+    "ausente", "oculto", "/streaming/systemUi/*", "/streaming/systemUi/configuration",
+    "/streaming/sessionLifetimeManagement/*",
+    "/streaming/sessionLifetimeManagement/serverInitiatedDisconnect"
+};
+
+static const char *lab_safe_word(X4JsonSpan value, const char *const *words, size_t count)
+{
+    char decoded[64];
+    if (x4_json_token(value, decoded, sizeof(decoded))) return NULL;
+    for (size_t i = 0; i < count; ++i)
+        if (!strcmp(decoded, words[i])) return words[i];
+    return NULL;
+}
+
+static enum LabTarget lab_target(X4JsonSpan value)
+{
+    static const char system_ui[] = "/streaming/systemUi/";
+    static const char lifetime[] = "/streaming/sessionLifetimeManagement/";
+    char decoded[96];
+    if (x4_json_token(value, decoded, sizeof(decoded))) return LAB_TARGET_OTHER;
+    if (!strcmp(decoded, lab_targets[LAB_TARGET_SYSTEM_UI_CONFIG])) return LAB_TARGET_SYSTEM_UI_CONFIG;
+    if (!strcmp(decoded, lab_targets[LAB_TARGET_SERVER_CLOSE])) return LAB_TARGET_SERVER_CLOSE;
+    if (!strncmp(decoded, system_ui, sizeof(system_ui)-1)) return LAB_TARGET_SYSTEM_UI;
+    if (!strncmp(decoded, lifetime, sizeof(lifetime)-1)) return LAB_TARGET_LIFETIME;
+    return LAB_TARGET_OTHER;
+}
+
+static void lab_safe_content(X4JsonSpan content, enum LabTarget target, char output[161])
+{
+    static const char *const reasons[] = {
+        "KickForClosedGame", "WarningForBeingIdle", "SessionExpired",
+        "SessionTimeLimitExceeded", "UserRequestedSessionEnd", "GameSessionEnded",
+        "KickForOutOfStreamingTime"
+    };
+    static const char *const ui_types[] = {"ShowMessage", "OpenDialog", "CloseDialog", "Notify", "Configuration"};
+    X4JsonSpan inner = content, value;
+    char decoded[512];
+    memcpy(output, "oculto", sizeof("oculto"));
+    if (x4_json_type(content) == X4_JSON_T_STRING &&
+        (x4_json_token(content, decoded, sizeof(decoded)) ||
+        x4_json_parse(decoded, strlen(decoded), &inner))) return;
+    if (target == LAB_TARGET_LIFETIME || target == LAB_TARGET_SERVER_CLOSE) {
+        const char *reason = NULL;
+        uint32_t seconds;
+        if (x4_json_member(inner, "reason", &value) == 1)
+            reason = lab_safe_word(value, reasons, sizeof(reasons)/sizeof(reasons[0]));
+        bool seconds_valid = x4_json_member(inner, "secondsUntilKick", &value) == 1 &&
+            !x4_json_uint32(value, &seconds) && seconds >= 1 && seconds <= 3600;
+        if (reason && seconds_valid)
+            (void)snprintf(output, 161, "reason=%s secondsUntilKick=%u", reason, (unsigned)seconds);
+        else if (reason) (void)snprintf(output, 161, "reason=%s", reason);
+        else if (seconds_valid) (void)snprintf(output, 161, "secondsUntilKick=%u", (unsigned)seconds);
+    } else if (x4_json_member(inner, "type", &value) == 1) {
+        const char *type = lab_safe_word(value, ui_types, sizeof(ui_types)/sizeof(ui_types[0]));
+        if (type) (void)snprintf(output, 161, "type=%s", type);
+    }
+}
+
+static void lab_queue_message(X4Rtc *rtc, bool control, const char *data, size_t length)
+{
+    static const char *const types[] = {
+        "HandshakeAck", "Handshake", "Message", "TransactionStart", "TransactionComplete",
+        "TransactionCancel", "TransactionError", "TransactionProgress", "MessageAck",
+        "authorizationResponse", "authorizationAccepted", "authorizationFailed",
+        "videoKeyframeRequested", "gamepadChanged", "userRequestedResolutionUpdate"
+    };
+    X4JsonSpan root, field, content = {0};
+    const char *type = "no_json";
+    enum LabTarget target = LAB_TARGET_ABSENT;
+    uint8_t id_kind = LAB_ID_ABSENT;
+    if (data && length && length <= 4096 && !x4_json_parse(data, length, &root) &&
+        x4_json_type(root) == X4_JSON_T_OBJECT) {
+        int found = x4_json_member(root, "type", &field);
+        if (found == 0 && control) found = x4_json_member(root, "message", &field);
+        const char *safe_type = found == 1 ? lab_safe_word(field, types, sizeof(types)/sizeof(types[0])) : NULL;
+        type = safe_type ? safe_type : found ? "oculto" : "ausente";
+        found = x4_json_member(root, "target", &field);
+        target = found == 1 ? lab_target(field) : found ? LAB_TARGET_OTHER : LAB_TARGET_ABSENT;
+        found = x4_json_member(root, "id", &field);
+        if (found) id_kind = LAB_ID_OTHER;
+        if (found == 1 && (target == LAB_TARGET_LIFETIME || target == LAB_TARGET_SERVER_CLOSE)) {
+            X4JsonType kind = x4_json_type(field);
+            if (kind == X4_JSON_T_STRING) id_kind = LAB_ID_STRING;
+            else if (kind == X4_JSON_T_NUMBER) id_kind = LAB_ID_NUMBER;
+        }
+        if (x4_json_member(root, "content", &content) != 1) content = (X4JsonSpan){0};
+    }
+    atomic_fetch_add_explicit(&rtc->lab_target_counts[target], 1, memory_order_relaxed);
+    unsigned line = atomic_load_explicit(&lab_message_lines, memory_order_relaxed);
+    do {
+        if (line >= LAB_MESSAGE_LINES) return;
+    } while (!atomic_compare_exchange_weak_explicit(&lab_message_lines, &line, line + 1u,
+        memory_order_relaxed, memory_order_relaxed));
+    LabMessageSample *sample = &rtc->lab_messages[line];
+    sample->type = type;
+    sample->target = target;
+    sample->control = control;
+    sample->id_kind = id_kind;
+    sample->content_wire_bytes = content.length;
+    memcpy(sample->content, "-", sizeof("-"));
+    if (content.length && target >= LAB_TARGET_SYSTEM_UI)
+        lab_safe_content(content, target, sample->content);
+    atomic_store_explicit(&sample->ready, true, memory_order_release);
+}
+
+/* A later callback may publish first. Emit only the contiguous prefix so the
+ * session owner's log preserves reservation order without waiting for writers. */
+static void lab_emit_messages(X4Rtc *rtc)
+{
+    static const char *const id_labels[] = {
+        [LAB_ID_ABSENT] = "id_tipo=ausente", [LAB_ID_OTHER] = "id_tipo=otro",
+        [LAB_ID_STRING] = "id_tipo=string", [LAB_ID_NUMBER] = "id_tipo=numero"
+    };
+    for (; rtc->lab_next_message < LAB_MESSAGE_LINES; ++rtc->lab_next_message) {
+        const LabMessageSample *sample = &rtc->lab_messages[rtc->lab_next_message];
+        if (!atomic_load_explicit(&sample->ready, memory_order_acquire)) break;
+        bool lifetime = sample->target == LAB_TARGET_LIFETIME || sample->target == LAB_TARGET_SERVER_CLOSE;
+        const char *id_label = lifetime ? id_labels[sample->id_kind] :
+            (sample->id_kind == LAB_ID_ABSENT ? "id=0" : "id=1");
+        x4_log_printf("XCloud4: RTC mensaje orden=%u canal=%s type=%s target=%s %s content_wire_bytes=%zu content=%.160s\n",
+            rtc->lab_next_message + 1u, sample->control ? "control" : "message",
+            sample->type, lab_targets[sample->target], id_label,
+            sample->content_wire_bytes, sample->content);
+    }
+    for(;rtc->lab_next_lifetime<LAB_LIFETIME_LINES;++rtc->lab_next_lifetime){
+        const LabLifetimeSample *sample=&rtc->lab_lifetime[rtc->lab_next_lifetime];
+        if(!atomic_load_explicit(&sample->ready,memory_order_acquire))break;
+        lifetime_emit(sample);
+    }
+    if(!rtc->lab_lifetime_terminal_logged&&
+        atomic_load_explicit(&rtc->lab_lifetime_terminal.ready,memory_order_acquire)){
+        lifetime_emit(&rtc->lab_lifetime_terminal);
+        rtc->lab_lifetime_terminal_logged=true;
+    }
+}
+
+static void lab_close_summary(X4Rtc *rtc)
+{
+    for (unsigned i = 0; i < LAB_TARGET_COUNT; ++i) {
+        uint64_t total = atomic_load_explicit(&rtc->lab_target_counts[i], memory_order_relaxed);
+        if (total) x4_log_printf("XCloud4: RTC mensajes resumen peer=%u target=%s total=%llu\n",
+            rtc->nack_epoch, lab_targets[i], (unsigned long long)total);
+    }
+}
+#endif
+
 static void channel_message(int channel, const char *data, int size, void *pointer)
 {
     X4Rtc *rtc = enter(pointer);
     if (!rtc) return;
     size_t length = size < 0 ? (size_t)(-(int64_t)size - 1) : (size_t)size;
+#if !X4_PUBLIC
+    if (channel == rtc->channels[1] || channel == rtc->channels[3])
+        lab_queue_message(rtc, channel == rtc->channels[1], data, length);
+#endif
 #if X4_RUMBLE
     /* libdatachannel's nonnegative size denotes binary. Input report bytes
      * are parsed into an optional latest slot; hardware stays on main. */
@@ -968,21 +1773,316 @@ static void channel_message(int channel, const char *data, int size, void *point
             rtc->handshake_ack = true;
             unlock(&rtc->data_gate);
             start_channels(rtc);
-        }
+        }else lifetime_message(rtc,channel,data,length);
     }
     leave(pointer);
 }
 
-#if X4_STREAM_PROFILE
-X4Rtc *x4_rtc_open_request(int *error, const X4StreamRequestConfig *request)
-#else
-X4Rtc *x4_rtc_open(int *error)
+#if X4_MIC_TRANSPORT
+_Static_assert(CALLBACK_SLOTS == X4_MIC_RR_SLOTS, "RTC and microphone report slot bounds must match");
+
+static void microphone_offer(X4Rtc *rtc, rtcTrackInit *audio)
+{
+    X4MicRequest request = x4_mic_request();
+    if (!request.generation) return;
+    if (!x4_mic_rtp_seed(&rtc->mic_clock.seed, x4_native_random)) {
+        x4_mic_capture_reject(request.generation);
+#if !X4_PUBLIC
+        x4_log_printf("XCloud4: microphone offer seed unavailable\n");
 #endif
+        return;
+    }
+    rtc->mic_generation = request.generation;
+#if X4_PUBLIC
+    rtc->mic_clock.frame_samples = 480;
+#else
+    rtc->mic_clock.frame_samples = request.frame_ms == 20 ? 960 : 480;
+#endif
+    atomic_init(&rtc->mic_stop, false);
+    atomic_init(&rtc->mic_done, false);
+    audio->direction = RTC_DIRECTION_SENDRECV;
+    audio->ssrc = rtc->mic_clock.seed.ssrc;
+    audio->name = "audio";
+#if !X4_PUBLIC
+    x4_log_printf("XCloud4: microphone offer sendrecv=1 frame_ms=%u\n", rtc->mic_clock.frame_samples / 48u);
+#endif
+}
+
+static bool microphone_ntp(uint64_t *ntp)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) || now.tv_sec < 0 ||
+        now.tv_nsec < 0 || now.tv_nsec >= 1000000000L) return false;
+    uint32_t seconds = (uint32_t)((uint64_t)now.tv_sec + UINT64_C(2208988800));
+    *ntp = ((uint64_t)seconds << 32) | (((uint64_t)now.tv_nsec << 32) / UINT64_C(1000000000));
+    return true;
+}
+
+static void microphone_wipe(void *memory, size_t size)
+{
+    volatile uint8_t *bytes = memory;
+    while (size--) *bytes++ = 0;
+}
+
+#if !X4_PUBLIC
+typedef struct {
+    uint32_t bins[42];
+    uint64_t samples, maximum;
+    unsigned errors, sender_reports;
+} MicSendStats;
+
+static void microphone_latency(MicSendStats *stats, uint64_t lag)
+{
+    size_t bin = lag / 1000u < 41 ? (size_t)(lag / 1000u) : 41;
+    ++stats->bins[bin];
+    ++stats->samples;
+    if (lag > stats->maximum) stats->maximum = lag;
+}
+
+static unsigned microphone_latency_percentile(const MicSendStats *stats, unsigned percentile)
+{
+    if (!stats->samples) return 0;
+    uint64_t rank = (stats->samples * percentile + 99u) / 100u, total = 0;
+    for (unsigned i = 0; i < 42; ++i) {
+        total += stats->bins[i];
+        if (total >= rank) return i;
+    }
+    return 41;
+}
+
+static void microphone_log_sender(unsigned slot, uint32_t packets, uint32_t bytes, const MicSendStats *stats)
+{
+    X4MicReceiverStats rr = x4_mic_rr_snapshot(slot);
+    x4_log_printf("XCloud4: microphone tx_ok=%u tx_error=%u opus_bytes=%u sr=%u rr=%u "
+        "rr_fraction_q8=%u rr_lost=%d rr_jitter_48khz=%u rr_ext_seq=%u "
+        "capture_send_p50_ms_bucket=%u capture_send_p95_ms_bucket=%u capture_send_max_us=%llu\n",
+        packets, stats->errors, bytes, stats->sender_reports, rr.reports, rr.fraction_lost,
+        (int)rr.total_lost, rr.jitter, rr.last_sequence,
+        microphone_latency_percentile(stats, 50), microphone_latency_percentile(stats, 95),
+        (unsigned long long)stats->maximum);
+}
+#endif
+
+static void *microphone_sender(void *argument)
+{
+    X4Rtc *rtc = argument;
+    uint64_t generation = rtc->mic_generation, peer = rtc->nack_epoch;
+    unsigned slot = rtc->nack_epoch - 1u;
+    uint64_t now = sceKernelGetProcessTime();
+    uint64_t open_deadline = now + 10000000u;
+    while (!atomic_load_explicit(&rtc->mic_stop, memory_order_acquire) && !rtcIsOpen(rtc->audio)) {
+        int state = atomic_load_explicit(&rtc->state, memory_order_acquire);
+        if (state == X4_RTC_FAILED || state == X4_RTC_CLOSED) goto done;
+        if (sceKernelGetProcessTime() >= open_deadline) {
+            x4_mic_capture_reject(generation);
+            goto done;
+        }
+        sceKernelUsleep(10000);
+    }
+    if (atomic_load_explicit(&rtc->mic_stop, memory_order_acquire)) goto done;
+    if (!x4_mic_capture_attach(generation, peer)) {
+        x4_mic_capture_reject(generation);
+        goto done;
+    }
+    if (atomic_load_explicit(&rtc->mic_stop, memory_order_acquire)) {
+        x4_mic_capture_detach(generation, peer);
+        goto done;
+    }
+    X4MicRtpClock clock = rtc->mic_clock;
+    if (!x4_mic_rr_bind(slot, clock.seed.ssrc)) {
+        x4_mic_capture_detach(generation, peer);
+        x4_mic_capture_reject(generation);
+        goto done;
+    }
+    uint32_t packets = 0, payload_bytes = 0;
+    uint64_t last_epoch = 0, next_sr = 0;
+    X4MicFrame frame;
+    uint8_t packet[X4_MIC_RTP_HEADER + sizeof(frame.data)];
+#if !X4_PUBLIC
+    MicSendStats stats = {0};
+    uint64_t next_log = now + 5000000u;
+#endif
+    while (!atomic_load_explicit(&rtc->mic_stop, memory_order_acquire)) {
+        int state = atomic_load_explicit(&rtc->state, memory_order_acquire);
+        if (state == X4_RTC_FAILED || state == X4_RTC_CLOSED) break;
+        now = sceKernelGetProcessTime();
+        bool have_frame = x4_mic_capture_take(generation, peer, now, &frame);
+        if (have_frame && frame.size && frame.size <= sizeof(frame.data) && frame.samples == clock.frame_samples) {
+            memcpy(packet + X4_MIC_RTP_HEADER, frame.data, frame.size);
+            X4MicRtpClock next = clock;
+            if (x4_mic_rtp_header(&next, frame.sample_us, frame.epoch, packet) &&
+                !atomic_load_explicit(&rtc->mic_stop, memory_order_acquire) &&
+                x4_mic_capture_send_allowed(generation, peer, frame.epoch)) {
+                clock = next;
+                int result = rtcSendMessage(rtc->audio, (const char *)packet, X4_MIC_RTP_HEADER + frame.size);
+                if (result >= 0) {
+                    ++packets;
+                    payload_bytes += frame.size;
+                    last_epoch = frame.epoch;
+                    if (!next_sr) next_sr = now + 4500000u + clock.seed.timestamp % 1000000u;
+#if !X4_PUBLIC
+                    uint64_t after = sceKernelGetProcessTime();
+                    if (after >= frame.captured_us) microphone_latency(&stats, after - frame.captured_us);
+#endif
+                }
+#if !X4_PUBLIC
+                else ++stats.errors;
+#endif
+            }
+        }
+        if (last_epoch && next_sr && now >= next_sr &&
+            !atomic_load_explicit(&rtc->mic_stop, memory_order_acquire) &&
+            x4_mic_capture_send_allowed(generation, peer, last_epoch)) {
+            uint64_t ntp;
+            if (microphone_ntp(&ntp)) {
+                uint8_t report[X4_MIC_RTCP_SR_BYTES];
+                x4_mic_rtcp_sender_report(report, clock.seed.ssrc, ntp,
+                    x4_mic_rtp_time_at(&clock, sceKernelGetProcessTime()), packets, payload_bytes);
+                int result = rtcSendMessage(rtc->audio, (const char *)report, sizeof(report));
+#if !X4_PUBLIC
+                if (result >= 0) ++stats.sender_reports;
+#else
+                (void)result;
+#endif
+            }
+            next_sr = now + 4500000u + (clock.seed.timestamp ^ packets) % 1000000u;
+        }
+#if !X4_PUBLIC
+        if (now >= next_log) {
+            microphone_log_sender(slot, packets, payload_bytes, &stats);
+            next_log = now + 5000000u;
+        }
+#endif
+        if (!have_frame) sceKernelUsleep(2000);
+    }
+    microphone_wipe(&frame, sizeof(frame));
+    microphone_wipe(packet, sizeof(packet));
+    x4_mic_rr_unbind(slot);
+    x4_mic_capture_detach(generation, peer);
+#if !X4_PUBLIC
+    microphone_log_sender(slot, packets, payload_bytes, &stats);
+#endif
+done:
+    atomic_store_explicit(&rtc->mic_done, true, memory_order_release);
+    return NULL;
+}
+
+static void microphone_answer(X4Rtc *rtc, const char *sdp, int native_rc)
+{
+    if (!rtc->mic_generation) return;
+    bool accepted = native_rc >= 0 && x4_mic_sdp_can_send(sdp, strlen(sdp));
+    int sender_rc = 0;
+    if (accepted && !rtc->mic_thread_started) {
+        OrbisPthreadAttr attr;
+        sender_rc = scePthreadAttrInit(&attr);
+        if (!sender_rc) {
+            sender_rc = scePthreadAttrSetstacksize(&attr, 256u * 1024u);
+            if (!sender_rc) sender_rc = scePthreadCreate(&rtc->mic_thread, &attr, microphone_sender, rtc, "x4-mic-rtp");
+            (void)scePthreadAttrDestroy(&attr);
+        }
+        rtc->mic_thread_started = sender_rc == 0;
+    }
+    if (!accepted || sender_rc) x4_mic_capture_reject(rtc->mic_generation);
+#if !X4_PUBLIC
+    x4_log_printf("XCloud4: microphone answer accepted=%u native_rc=%d sender_rc=%d\n",
+        accepted ? 1u : 0u, native_rc, sender_rc);
+#endif
+}
+
+static int microphone_close(X4Rtc *rtc)
+{
+    if (!rtc->mic_thread_started) return 0;
+    atomic_store_explicit(&rtc->mic_stop, true, memory_order_release);
+    x4_mic_capture_detach(rtc->mic_generation, rtc->nack_epoch);
+    x4_mic_rr_unbind(rtc->nack_epoch - 1u);
+    uint64_t deadline = sceKernelGetProcessTime() + 100000u;
+    while (!atomic_load_explicit(&rtc->mic_done, memory_order_acquire)) {
+        if (sceKernelGetProcessTime() >= deadline) return RTC_ERR_NOT_AVAIL;
+        sceKernelUsleep(1000);
+    }
+    int rc = scePthreadJoin(rtc->mic_thread, NULL);
+    if (!rc) rtc->mic_thread_started = false;
+    return rc;
+}
+#endif
+
+#ifdef X4_OPENORBIS
+typedef struct {
+    int rcvbuf, sndbuf, requested, attempts;
+    bool available;
+} X4UdpBuffers;
+
+extern int x4_rtc_native_udp_buffers(int pc, int *rcvbuf, int *sndbuf,
+    int *requested, int *attempts);
+
+#if X4_PUBLIC
+static atomic_flag udp_buffers_gate = ATOMIC_FLAG_INIT;
+static X4UdpBuffers udp_buffers_last;
+
+void x4_rtc_diag_write_udp_json(FILE *f)
+{
+    lock(&udp_buffers_gate);
+    X4UdpBuffers values = udp_buffers_last;
+    unlock(&udp_buffers_gate);
+    if (!values.available) {
+        fputs("\"udp_buffers\":null,", f);
+        return;
+    }
+    fprintf(f, "\"udp_buffers\":{\"rcvbuf_bytes\":%d,\"sndbuf_bytes\":%d,"
+        "\"requested_rcvbuf_bytes\":%d,\"receive_attempts\":%d},",
+        values.rcvbuf, values.sndbuf, values.requested, values.attempts);
+}
+#endif
+
+static void report_udp_buffers(X4Rtc *rtc)
+{
+    if (rtc->udp_buffers_logged || rtc->pc < 0) return;
+    X4UdpBuffers values = {0};
+    if (x4_rtc_native_udp_buffers(rtc->pc, &values.rcvbuf, &values.sndbuf,
+            &values.requested, &values.attempts) != 0) return;
+    rtc->udp_buffers_logged = true;
+#if X4_PUBLIC
+    values.available = true;
+    lock(&udp_buffers_gate);
+    udp_buffers_last = values;
+    unlock(&udp_buffers_gate);
+#endif
+    x4_log_printf("XCloud4: red udp rcvbuf=%d sndbuf=%d pedido=%d intentos=%d\n",
+        values.rcvbuf, values.sndbuf, values.requested, values.attempts);
+}
+#endif
+
+static void open_diagnostics(bool reconnect)
+{
+    if (reconnect) return;
+#if defined(X4_OPENORBIS) && X4_PUBLIC
+    lock(&udp_buffers_gate);
+    udp_buffers_last = (X4UdpBuffers){0};
+    unlock(&udp_buffers_gate);
+#endif
+#if X4_REMB_ENABLED && X4_PUBLIC
+    remb_first_peer_us = sceKernelGetProcessTime();
+    remb_next_report_us = remb_first_peer_us + X4_REMB_PUBLIC_REPORT_INTERVAL_US;
+    remb_session_trace = NULL;
+    remb_finished_peers = (X4RembSummary){0};
+#endif
+#line 2004
+    x4_rtc_receive_diag_reset();
+#if !X4_PUBLIC
+    atomic_store_explicit(&lab_message_lines, 0, memory_order_relaxed);
+    atomic_store_explicit(&lab_close_arrival, 0, memory_order_relaxed);
+    atomic_store_explicit(&lab_close_order, 0, memory_order_relaxed);
+    atomic_store_explicit(&lab_first_video, 0, memory_order_relaxed);
+#endif
+}
+static X4Rtc *open_request_mode(int *error,const X4StreamRequestConfig *request,bool reconnect)
 {
     int rc = -44;
 #if X4_STREAM_PROFILE
     if (!request || (unsigned)request->profile>X4_REQUEST_1080P_C ||
         (unsigned)request->color_preference>X4_COLOR_FORCE_601 || request->cpu_variant>X4_CPU_3) goto fail_no_context;
+#else
+    (void)request;
 #endif
     if (x4_native_entropy_prepare() < 0 || x4_native_net_prepare() < 0) goto fail_no_context;
     X4Rtc *rtc = calloc(1, sizeof(*rtc));
@@ -991,8 +2091,9 @@ X4Rtc *x4_rtc_open(int *error)
     rtc->request_config=x4_stream_request_capture(request);
 #endif
     rtc->pc = rtc->video = rtc->audio = -1;
+    rtc->reconnect_peer=reconnect;
     rtc->started_at = sceKernelGetProcessTime();
-    x4_rtc_receive_diag_reset();
+    open_diagnostics(reconnect);
     for (unsigned i=0;i<4;++i) rtc->channels[i]=-1;
     atomic_init(&rtc->state, X4_RTC_NEW);
     atomic_init(&rtc->error, 0);
@@ -1005,12 +2106,23 @@ X4Rtc *x4_rtc_open(int *error)
     atomic_init(&rtc->input_metadata_sent,false);atomic_init(&rtc->startup_complete,false);
     atomic_init(&rtc->input_error,0);
     atomic_init(&rtc->input_packets,0);atomic_init(&rtc->input_dropped,0);
+    atomic_init(&rtc->server_terminal_claimed,false);atomic_init(&rtc->server_closed,false);
+    atomic_init(&rtc->server_idle_sequence,0);atomic_init(&rtc->server_idle_seconds,120);
     atomic_flag_clear(&rtc->data_gate);
     lock(&callback_gate);
     if (slots_used < CALLBACK_SLOTS) { rtc->slot=&slots[slots_used++]; rtc->slot->context=rtc; }
     unlock(&callback_gate);
     if (!rtc->slot) { free(rtc); rc=-45; goto fail_no_context; }
     rtc->nack_epoch = (uint32_t)(rtc->slot - slots) + 1u;
+#if X4_RECOVERY43_TRANSPORT
+    recovery43_prepare(rtc);
+#endif
+#if !X4_PUBLIC
+    lab_peer_diagnostics_init(rtc);
+    lock(&callback_gate);
+    lab_transport_context = rtc;
+    unlock(&callback_gate);
+#endif
     rtcInitLogger(RTC_LOG_NONE, NULL); /* Raw dependency logs can contain ICE credentials. */
     /* Explicit application policy: four RTC workers. The SDK's precompiled
      * hardware_concurrency probe reported200112 workers in the actual0.7.1
@@ -1049,6 +2161,9 @@ X4Rtc *x4_rtc_open(int *error)
 #else
         .profile=X4_STREAM_H264_FMTP};
 #endif
+#if X4_MIC_TRANSPORT
+    microphone_offer(rtc, &audio);
+#endif
     CHECK(rtc->audio=rtcAddTrackEx(rtc->pc,&audio));
     CHECK(rtc->video=rtcAddTrackEx(rtc->pc,&video));
     int tracks[]={rtc->audio,rtc->video};
@@ -1058,7 +2173,17 @@ X4Rtc *x4_rtc_open(int *error)
         CHECK(rtcChainRtcpReceivingSession(tracks[i]));
         CHECK(rtcSetMessageCallback(tracks[i],rtp_callback));
     }
-    CHECK(x4_rtc_configure_receiver_nack(rtc->video, X4_RECEIVER_NACK, rtc->nack_epoch));
+#if X4_STREAM_PROFILE
+    const X4StreamNackPolicy nack_policy=x4_stream_request_nack_policy(&rtc->request_config);
+    x4_rtc_diag_reset_video_rtt();
+#ifdef X4_OPENORBIS
+    CHECK(rtcX4ConfigureVideoRr(rtc->video,(rtcX4VideoRrMode)x4_stream_request_rr_mode(&rtc->request_config),
+        (uint8_t)video.payloadType));
+#endif
+#else
+    const X4StreamNackPolicy nack_policy=X4_NACK_POLICY_T43;
+#endif
+    CHECK(x4_rtc_configure_receiver_nack(rtc->video,X4_RECEIVER_NACK,rtc->nack_epoch,nack_policy));
     const char *labels[]={"chat","control","input","message"};
     const char *protocols[]={"chatV1","controlV1","1.0","messageV1"};
     for(unsigned i=0;i<4;++i) {
@@ -1070,6 +2195,15 @@ X4Rtc *x4_rtc_open(int *error)
         CHECK(rtcSetOpenCallback(rtc->channels[i],channel_open));
         CHECK(rtcSetMessageCallback(rtc->channels[i],channel_message));
     }
+#if !X4_PUBLIC
+    /* Register after the channel array is complete and before negotiation.
+     * A diagnostic hook failure must not affect the session. */
+    for (unsigned i = 0; i < 4; ++i) {
+        int diagnostic_rc = rtcSetClosedCallback(rtc->channels[i], lab_channel_closed);
+        if (diagnostic_rc < 0)
+            printf("XCloud4: RTC observador cierre canal=%u rc=%d\n", i, diagnostic_rc);
+    }
+#endif
     CHECK(rtcSetLocalDescription(rtc->pc,"offer"));
 #undef CHECK
     if(error)*error=0;
@@ -1082,19 +2216,21 @@ fail_no_context:
     return NULL;
 }
 
-#if X4_STREAM_PROFILE
 X4Rtc *x4_rtc_open(int *error)
 {
+#if X4_STREAM_PROFILE
     X4StreamRequestConfig c=x4_stream_settings_get();
-    return x4_rtc_open_request(error,&c);
-}
+    return open_request_mode(error,&c,false);
 #else
+    return open_request_mode(error,NULL,false);
+#endif
+}
 X4Rtc *x4_rtc_open_request(int *error, const X4StreamRequestConfig *request)
 {
-    (void)request;
-    return x4_rtc_open(error);
+    return open_request_mode(error,request,false);
 }
-#endif
+X4Rtc *x4_rtc_open_reconnect_request(int *error,const X4StreamRequestConfig *request)
+{return open_request_mode(error,request,true);}
 
 void x4_rtc_set_media_callback(X4Rtc *rtc,X4RtcMediaCallback callback,void *user)
 {
@@ -1105,10 +2241,20 @@ void x4_rtc_set_diagnostic_trace(X4Rtc *rtc, X4Trace *trace)
 {
     if (rtc) {
         rtc->diagnostic_trace = trace;
+#if X4_REMB_ENABLED && X4_PUBLIC
+        if (!rtc->reconnect_peer) remb_session_trace = trace;
+#endif
+#line 2178
         x4_rtc_receive_attach(trace);
         x4_rtc_receive_setting(20, 1, 1, 0); /* ReceivingSession, receiver generator, sender responder */
-        x4_rtc_nack_event(X4_MON_CR_NACK_STATE, 4u | (X4_RECEIVER_NACK ? 1u : 0u),
-            (uint64_t)rtc->nack_epoch<<32, 0, X4_RECEIVER_NACK, 64, (16ull<<32)|64);
+#if X4_STREAM_PROFILE
+        const bool legacy=x4_stream_request_legacy_nack(&rtc->request_config);
+#else
+        const bool legacy=true;
+#endif
+        x4_rtc_nack_event(X4_MON_CR_NACK_STATE,4u|(X4_RECEIVER_NACK?1u:0u),
+            (uint64_t)rtc->nack_epoch<<32,0,X4_RECEIVER_NACK,legacy?64u:512u,
+            legacy?((16ull<<32)|64u):((1000ull<<32)|512u));
         (void)x4_rtc_receive_track_config(rtc->audio);
         (void)x4_rtc_receive_track_config(rtc->video);
     }
@@ -1207,6 +2353,16 @@ int x4_rtc_local_description(X4Rtc *rtc,char *sdp,size_t capacity)
         x4_trace_sdp_bandwidth_record(rtc->diagnostic_trace,0,offer_bandwidth.video_sections,
             offer_bandwidth.as_lines,offer_bandwidth.first_as_kbps,offer_bandwidth.malformed_as_lines);
 #endif
+#if X4_RECOVERY43_TRANSPORT
+    if(rtc->recovery43_mode){
+        int recovery_rc=x4_recovery43_sdp_offer(sdp,capacity,rtc->recovery43_mode,&rtc->recovery43_offered);
+        rtc->recovery43_offer_failed=recovery_rc!=0;
+#if !X4_PUBLIC
+        if(recovery_rc)x4_log_printf("XCloud4: recuperacion43 oferta rc=%d; sin RTX/FEC\n",recovery_rc);
+#endif
+        rc=(int)strlen(sdp)+1;
+    }
+#endif
     if(!atomic_exchange(&rtc->offer_logged,true)) {
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
         printf("XCloud4: SDP offer video bandwidth profile=%s sections=%u AS_lines=%u first_AS_kbps=%u malformed=%u (requested, not delivered)\n",
@@ -1242,6 +2398,10 @@ int x4_rtc_set_remote_description(X4Rtc *rtc,const char *sdp)
     if(observed)x4_trace_sdp_bandwidth_record(rtc->diagnostic_trace,1,bandwidth.video_sections,
         bandwidth.as_lines,bandwidth.first_as_kbps,bandwidth.malformed_as_lines);
 #endif
+#if X4_RECOVERY43_TRANSPORT
+    /* Publish the accepted mapping before the native call can deliver RTP. */
+    recovery43_accept(rtc,sdp);
+#endif
     int rc=rtcSetRemoteDescription(rtc->pc,sdp,"answer");
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     if(observed)printf("XCloud4: SDP answer video bandwidth sections=%u AS_lines=%u first_AS_kbps=%u malformed=%u native_set_remote_rc=%d (response metadata, not measured bitrate)\n",
@@ -1259,11 +2419,18 @@ int x4_rtc_set_remote_description(X4Rtc *rtc,const char *sdp)
         (void)x4_rtc_receive_track_config(rtc->audio);
         (void)x4_rtc_receive_track_config(rtc->video);
         if (!rtc->nack_thread_started) {
+#if X4_REMB_ENABLED
+            remb44a_begin(rtc);
+#endif
+#line 2301
             int thread_rc = scePthreadCreate(&rtc->nack_thread, NULL, nack_sender, rtc, "XCloud4Nack");
             if (thread_rc) { fail(rtc, thread_rc); return thread_rc; }
             rtc->nack_thread_started = true;
         }
     }
+#if X4_MIC_TRANSPORT
+    microphone_answer(rtc, sdp, rc);
+#endif
     return rc;
 }
 int x4_rtc_add_remote_candidate(X4Rtc *rtc,const char *candidate,const char *mid)
@@ -1306,11 +2473,24 @@ void x4_rtc_snapshot(X4Rtc *rtc,X4RtcSnapshot *snapshot)
 {
     if(!snapshot)return;
     *snapshot=(X4RtcSnapshot){.state=X4_RTC_CLOSED};if(!rtc)return;
+#if !X4_PUBLIC
+    lab_emit_messages(rtc);
+#endif
     snapshot->state=(X4RtcState)atomic_load(&rtc->state);snapshot->error=atomic_load(&rtc->error);
+#ifdef X4_OPENORBIS
+    if (snapshot->state == X4_RTC_CONNECTED) report_udp_buffers(rtc);
+#endif
     snapshot->gathering_done=atomic_load(&rtc->gathering_done);
     snapshot->video_packets=atomic_load(&rtc->video_packets);snapshot->audio_packets=atomic_load(&rtc->audio_packets);
     snapshot->input_ready=atomic_load(&rtc->input_ready);snapshot->input_error=atomic_load(&rtc->input_error);
     snapshot->input_packets=atomic_load(&rtc->input_packets);snapshot->input_dropped=atomic_load(&rtc->input_dropped);
+    snapshot->server_idle_sequence=atomic_load_explicit(&rtc->server_idle_sequence,memory_order_acquire);
+    snapshot->server_idle_seconds=atomic_load_explicit(&rtc->server_idle_seconds,memory_order_relaxed);
+    snapshot->server_closed=atomic_load_explicit(&rtc->server_closed,memory_order_acquire);
+    if(snapshot->server_closed){
+        snapshot->server_hr_valid=rtc->server_hr_valid;snapshot->server_hr=rtc->server_hr;
+        memcpy(snapshot->server_reason,rtc->server_reason,sizeof(snapshot->server_reason));
+    }
 }
 bool x4_rtc_keyframe_startup_ready(X4Rtc *rtc)
 {
@@ -1349,16 +2529,28 @@ int x4_rtc_request_keyframe(X4Rtc *rtc)
     }
     uint64_t ordinal = ++rtc->diagnostic_pli_ordinal;
     x4_trace_record(trace, X4_TRACE_PLI_ATTEMPT, 2, ordinal, 0);
+#if !X4_PUBLIC && defined(X4_OPENORBIS) && X4_STREAM_PROFILE
+    x4_rtc_diag_startup_pli(sceKernelGetProcessTime());
+#endif
     int rc = rtcRequestKeyframe(rtc->video);
+#if X4_RECOVERY43_TRANSPORT
+    if(rtc->recovery43_started)x4_recovery43_note_media(rtc->nack_epoch,0,0,1,0);
+#endif
     x4_trace_record(trace, X4_TRACE_PLI_RESULT, 2, ordinal, (uint32_t)rc);
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     x4_keyframe_limiter_note_transport(rtc->keyframe_limiter,control_attempted,control_result,true,rc);
 #endif
     return rc;
 }
-int x4_rtc_close(X4Rtc *rtc)
+int x4_rtc_close_snapshot(X4Rtc *rtc,X4RtcSnapshot *final)
 {
-    if(!rtc)return 0;
+    if(!rtc){if(final)x4_rtc_snapshot(NULL,final);return 0;}
+#if X4_MIC_TRANSPORT
+    /* The sender is the only new owner of the audio track. Preserve the
+     * entire RTC context and retry close if an in-flight native send stalls. */
+    int mic_rc = microphone_close(rtc);
+    if (mic_rc) return mic_rc;
+#endif
 #if X4_RUMBLE
     x4_rumble_disable(rtc->rumble);
 #endif
@@ -1368,6 +2560,22 @@ int x4_rtc_close(X4Rtc *rtc)
         if (rc) { fail(rtc,rc); return rc; } /* Preserve context on join failure. */
         rtc->nack_thread_started=false;
     }
+#if X4_RECOVERY43_TRANSPORT && !X4_PUBLIC && defined(X4_OPENORBIS) && X4_STREAM_PROFILE
+    recovery43b_report(rtc,true);
+    x4_rtc_diag_startup_report(sceKernelGetProcessTime(),true);
+#endif
+#if X4_REMB_ENABLED
+    if (!rtc->remb.final_reported) {
+        x4_rtc_diag_remb_end(rtc->nack_epoch);
+#if X4_PUBLIC
+        remb44c_finish_peer(rtc);
+#else
+        remb44a_report(rtc,true);
+#endif
+        rtc->remb.final_reported = true;
+    }
+#endif
+#line 2439
     if (rtc->video>=0) {
         uint64_t deadline=sceKernelGetProcessTime()+100000u;
         int rc;
@@ -1396,11 +2604,43 @@ int x4_rtc_close(X4Rtc *rtc)
      * before deleting asynchronous library objects; stale callbacks see NULL.
      * Slots are deliberately never reused (bounded to64 sessions per process). */
     lock(&callback_gate);rtc->slot->context=NULL;unlock(&callback_gate);
-    for(unsigned i=0;i<4;++i)if(rtc->channels[i]>=0) {rtcSetMessageCallback(rtc->channels[i],NULL);rtcSetOpenCallback(rtc->channels[i],NULL);rtcDeleteDataChannel(rtc->channels[i]);}
+    for (unsigned i = 0; i < 4; ++i) if (rtc->channels[i] >= 0) {
+        rtcSetMessageCallback(rtc->channels[i], NULL);
+        rtcSetOpenCallback(rtc->channels[i], NULL);
+#if !X4_PUBLIC
+        rtcSetClosedCallback(rtc->channels[i], NULL);
+        int removed = rtcDeleteDataChannel(rtc->channels[i]);
+        lab_observe_close(rtc, (enum LabClosure)(LAB_CLOSE_LOCAL_CHAT + i), removed);
+#else
+        rtcDeleteDataChannel(rtc->channels[i]);
+#endif
+    }
     if(rtc->video>=0) {rtcSetMessageCallback(rtc->video,NULL);rtcDeleteTrack(rtc->video);}
     if(rtc->audio>=0) {rtcSetMessageCallback(rtc->audio,NULL);rtcDeleteTrack(rtc->audio);}
-    if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);}
+    if(rtc->pc>=0) {rtcSetLocalDescriptionCallback(rtc->pc,NULL);rtcSetLocalCandidateCallback(rtc->pc,NULL);rtcSetStateChangeCallback(rtc->pc,NULL);rtcSetIceStateChangeCallback(rtc->pc,NULL);rtcSetGatheringStateChangeCallback(rtc->pc,NULL);rtcDeletePeerConnection(rtc->pc);
+#ifdef X4_OPENORBIS
+        rtc->pc=-1; /* Final snapshot cannot query a deleted peer. */
+#endif
+    }
+#if !X4_PUBLIC
+    lock(&callback_gate);
+    if (lab_transport_context == rtc) lab_transport_context = NULL;
+    unlock(&callback_gate);
+#endif
     for(;;) {lock(&callback_gate);unsigned active=rtc->slot->active;unlock(&callback_gate);if(!active)break;sceKernelUsleep(1000);}
+#if X4_RECOVERY43_TRANSPORT
+    if(rtc->recovery43_started){
+        /* The NACK logger is joined and application callbacks are quiescent.
+         * Any native handler still unwinding retains its own recovery State. */
+        x4_recovery43_end(rtc->nack_epoch);
+        rtc->recovery43_started=false;
+    }
+#endif
+#if !X4_PUBLIC
+    lab_emit_messages(rtc);
+    lab_emit_closures(rtc);
+    lab_close_summary(rtc);
+#endif
 #if X4_RUMBLE
     X4RumbleSnapshot vibration={0};
     x4_rumble_snapshot(rtc->rumble,&vibration);
@@ -1412,7 +2652,216 @@ int x4_rtc_close(X4Rtc *rtc)
 #endif
     x4_nack_grace_inbox_unbind(rtc->grace_inbox);
     x4_rtc_receive_detach(rtc->diagnostic_trace);
+    /* Every entered callback is gone, including a terminal notification
+     * racing the decision to replace this peer. The owner must inspect this
+     * result before opening another peer or summing per-peer counters. */
+    if(final)x4_rtc_snapshot(rtc,final);
     volatile unsigned char *wipe=(unsigned char *)rtc;for(size_t i=0;i<sizeof(*rtc);++i)wipe[i]=0;
     free(rtc);
     return 0;
 }
+int x4_rtc_close(X4Rtc *rtc)
+{return x4_rtc_close_snapshot(rtc,NULL);}
+
+#if X4_REMB_ENABLED
+static uint32_t remb44a_cap(X4StreamRequestProfile profile)
+{
+    switch (profile) {
+    case X4_REQUEST_1080P_HQ: return 30000000u; /* Máxima */
+    case X4_REQUEST_1080P_G: return 20000000u; /* Alta */
+    case X4_REQUEST_1080P_G8: case X4_REQUEST_1080P_H: return 12000000u;
+    default: return 10000000u; /* 720p */
+    }
+}
+
+static void remb44a_begin(X4Rtc *rtc)
+{
+    X4RembState *state = &rtc->remb;
+    state->settings = x4_stream_settings_remb();
+    if (state->settings.mode != X4_REMB_OFF && state->negotiated) {
+        int rc = x4_native_random(&state->sender_ssrc, sizeof(state->sender_ssrc));
+        if (rc < 0) {
+            state->sender_ssrc = 0;
+            x4_log_printf("XCloud4: remb sin identificador local rc=%d\n", rc);
+        } else if (!state->sender_ssrc) {
+            state->sender_ssrc = 1;
+        }
+    }
+    const bool mapped = x4_recovery43_snapshot(rtc->nack_epoch, &state->repair) &&
+        state->repair.configured;
+    const uint32_t expected = mapped ? state->repair.accepted.media_ssrc : 0;
+    const unsigned pt = mapped ? state->repair.accepted.media_pt : X4_RECEIVER_NACK_VIDEO_PT;
+    x4_rtc_diag_remb_begin(rtc->nack_epoch, expected, pt);
+}
+
+static uint32_t remb44a_rate(uint64_t bytes, uint64_t duration_us)
+{
+    if (bytes > UINT64_MAX / 8000000u) return UINT32_MAX;
+    const uint64_t bps = bytes * 8000000u / duration_us;
+    return bps > UINT32_MAX ? UINT32_MAX : (uint32_t)bps;
+}
+
+static void remb44a_sample(X4RembState *state, const X4RembReceiveWindow *window,
+    uint64_t now, bool repair_valid, uint64_t expired)
+{
+    const uint64_t elapsed = now - state->sampled_us;
+    state->sampled_us = now;
+    state->received_bps = remb44a_rate(window->bytes, elapsed);
+    if (state->received_bps > state->max_received_bps) state->max_received_bps = state->received_bps;
+
+    /* Count final expirations once. An unresolved hole can be repaired across
+     * a one-second boundary and is not loss until the existing ledger expires it. */
+    const bool comparable_loss = repair_valid && state->have_expired && expired >= state->expired;
+    const uint64_t lost = comparable_loss ? expired - state->expired : 0;
+    const uint64_t expected = window->packets + lost;
+    state->loss_ppm = expected ? (uint32_t)(lost * 1000000u / expected) : 0;
+    state->expired = expired;
+    state->have_expired = repair_valid;
+    state->loss_valid = comparable_loss;
+    if (state->loss_ppm > state->max_loss_ppm) state->max_loss_ppm = state->loss_ppm;
+
+    state->delay_us = window->delay_us;
+    state->delay_valid = window->delay_valid;
+    if (state->delay_valid && (!state->have_max_delay || state->delay_us > state->max_delay_us)) {
+        state->max_delay_us = state->delay_us;
+        state->have_max_delay = true;
+    }
+
+    if (state->settings.mode == X4_REMB_ADAPTIVE) {
+        const uint32_t before = state->estimator.target_bps;
+        /* No sample cannot prove a stable interval. A bad metric can still
+         * justify a decrease if the other metric is unavailable. */
+        const uint32_t received = (comparable_loss && state->delay_valid) ||
+            state->loss_ppm > 20000u || state->delay_us > 30000 ?
+            state->received_bps : 0;
+        if (x4_remb_estimator_update(&state->estimator, now, received,
+                state->loss_ppm, state->delay_us)) {
+            state->decreases += state->estimator.target_bps < before;
+            state->increases += state->estimator.target_bps > before;
+        }
+    }
+}
+
+static void remb44a_tick(X4Rtc *rtc, uint64_t now)
+{
+    X4RembState *state = &rtc->remb;
+    const bool sample_due = !state->started || (now >= state->sampled_us &&
+        now - state->sampled_us >= X4_REMB_ESTIMATOR_INTERVAL_US);
+    if (sample_due && atomic_load_explicit(&rtc->video_packets, memory_order_relaxed)) {
+        X4RembReceiveWindow window;
+        if (x4_rtc_diag_remb_take(rtc->nack_epoch, &window)) {
+            const bool repair_valid = x4_recovery43_snapshot(rtc->nack_epoch, &state->repair) &&
+                state->repair.configured;
+            const uint64_t expired = repair_valid ? state->repair.repair.gaps_expired : 0;
+            if (state->started) {
+                remb44a_sample(state, &window, now, repair_valid, expired);
+            } else {
+                state->started = true;
+                state->sampled_us = now;
+                state->expired = expired;
+                state->have_expired = repair_valid;
+                state->video_ssrc = window.video_ssrc;
+                x4_remb_estimator_init(&state->estimator, remb44a_cap(rtc->request_config.profile), now);
+                if (state->sender_ssrc == state->video_ssrc) {
+                    state->sender_ssrc ^= UINT32_C(0x80000000);
+                    if (!state->sender_ssrc) state->sender_ssrc = 1;
+                }
+            }
+        }
+    }
+    if (!state->started || state->settings.mode == X4_REMB_OFF || !state->negotiated || !state->sender_ssrc ||
+        atomic_load_explicit(&rtc->state, memory_order_relaxed) != X4_RTC_CONNECTED) return;
+    const uint32_t target = state->settings.mode == X4_REMB_FIXED ?
+        state->settings.fixed_mbps * 1000000u : state->estimator.target_bps;
+    if (!x4_remb_send_due(now, state->attempted_us, state->attempted_bps, target)) return;
+    state->attempted_us = sceKernelGetProcessTime();
+    state->attempted_bps = target;
+    int rc = x4_rtc_send_video_remb(rtc->video, state->sender_ssrc, state->video_ssrc, target);
+    if (rc != 1) {
+        ++state->refused;
+        return;
+    }
+    ++state->sent;
+    state->sent_bps = target;
+    if (!state->min_sent_bps || target < state->min_sent_bps) state->min_sent_bps = target;
+    if (target > state->max_sent_bps) state->max_sent_bps = target;
+}
+
+#if X4_PUBLIC
+static void remb44c_add_peer(X4RembSummary *total, const X4RembState *peer)
+{
+    total->sent += peer->sent;
+    total->decreases += peer->decreases;
+    total->increases += peer->increases;
+    if (peer->started) total->received_bps = peer->received_bps;
+    if (peer->sent) {
+        total->sent_bps = peer->sent_bps;
+        if (!total->min_sent_bps || peer->min_sent_bps < total->min_sent_bps)
+            total->min_sent_bps = peer->min_sent_bps;
+        if (peer->max_sent_bps > total->max_sent_bps)
+            total->max_sent_bps = peer->max_sent_bps;
+    }
+    if (peer->max_loss_ppm > total->max_loss_ppm) total->max_loss_ppm = peer->max_loss_ppm;
+    if (peer->have_max_delay && (!total->have_max_delay || peer->max_delay_us > total->max_delay_us)) {
+        total->max_delay_us = peer->max_delay_us;
+        total->have_max_delay = true;
+    }
+}
+
+static void remb44c_report(const X4RembSummary *total)
+{
+    x4_log_printf("XCloud4: remb modo=adaptable enviados=%llu actual_mbps=%.6f min_mbps=%.6f "
+        "max_mbps=%.6f bajadas=%llu subidas=%llu R_mbps=%.6f L_max_ppm=%u D_max_ms=%.3f\n",
+        (unsigned long long)total->sent, total->sent_bps / 1000000.0, total->min_sent_bps / 1000000.0,
+        total->max_sent_bps / 1000000.0, (unsigned long long)total->decreases,
+        (unsigned long long)total->increases, total->received_bps / 1000000.0,
+        total->max_loss_ppm, total->max_delay_us / 1000.0);
+}
+
+static void remb44c_periodic(const X4Rtc *rtc, uint64_t now)
+{
+    if (now < remb_next_report_us) return;
+    remb_next_report_us = now + X4_REMB_PUBLIC_REPORT_INTERVAL_US;
+    X4RembSummary total = remb_finished_peers;
+    remb44c_add_peer(&total, &rtc->remb);
+    remb44c_report(&total);
+}
+
+static void remb44c_finish_peer(const X4Rtc *rtc)
+{
+    remb44c_add_peer(&remb_finished_peers, &rtc->remb);
+}
+
+void x4_rtc_remb_finish_summary(const X4Trace *trace, uint64_t pipeline_started_us,
+    X4RembSummary *out)
+{
+    /* If signaling never reached RTC, or a trace address has been reused,
+     * the prior session's totals must not appear in this pipeline's report. */
+    const bool matching = pipeline_started_us && pipeline_started_us <= remb_first_peer_us &&
+        trace == remb_session_trace;
+    *out = matching ? remb_finished_peers : (X4RembSummary){0};
+    if (remb_final_pipeline_us != pipeline_started_us) {
+        remb_final_pipeline_us = pipeline_started_us;
+        remb44c_report(out);
+    }
+}
+#else
+#line 2650
+static void remb44a_report(const X4Rtc *rtc, bool final)
+{
+    const X4RembState *state = &rtc->remb;
+    const char *mode = state->settings.mode == X4_REMB_FIXED ? "fijo" :
+        state->settings.mode == X4_REMB_ADAPTIVE ? "adaptable" : "no";
+    x4_log_printf("XCloud4: remb fase=%s modo=%s negociado=%u actual_bps=%u min_bps=%u max_bps=%u "
+        "enviados=%llu rechazados=%llu R_bps=%u R_max_bps=%u L_ppm=%u L_max_ppm=%u L_valida=%u "
+        "D_us=%d D_max_us=%d D_valido=%u bajadas=%llu subidas=%llu\n",
+        final ? "fin" : "periodico", mode, (unsigned)state->negotiated,
+        state->sent_bps, state->min_sent_bps, state->max_sent_bps,
+        (unsigned long long)state->sent, (unsigned long long)state->refused,
+        state->received_bps, state->max_received_bps, state->loss_ppm, state->max_loss_ppm,
+        (unsigned)state->loss_valid, state->delay_us, state->max_delay_us,
+        (unsigned)state->delay_valid, (unsigned long long)state->decreases,
+        (unsigned long long)state->increases);
+}
+#endif
+#endif

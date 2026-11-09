@@ -2,6 +2,66 @@
 """Validate the JSON from real streaming export in the host runtime fixture."""
 import importlib.util, json, sys
 from pathlib import Path
+if len(sys.argv)>2 and sys.argv[2]=='privacy':
+    import re
+    base=Path(sys.argv[1]);public=base/'public-1';lab=base/'public-0'
+    first_text=(public/'first-public.json').read_text()
+    text=(public/'last-stream.json').read_text();p=json.loads(text)
+    first=json.loads(first_text)
+    assert first['profile']==0 and p['profile']==1
+    assert not list(public.glob('xcloud4-stream-*.json'))
+    assert not (public/'last-stream.json.tmp').exists()
+    for report_text in (first_text,text):
+        assert 'candidate:' not in report_text and not re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b',report_text)
+        assert not re.search(r'(?<![0-9A-Za-z])(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f:]*',report_text)
+        assert not any(key in report_text for key in ('game_server_ip','game_server_port','selected_candidate_pair',
+                       'remote_candidates','"port"','"ssrc"','305419896','2452903544'))
+    for n,report in enumerate((first,p)):
+        assert report['remb']==dict(modo='adaptable',enviados=30+n,actual_mbps=13.500007,
+            min_mbps=10.05,max_mbps=20,bajadas=2,subidas=3,R_mbps=11.800001,
+            L_max_ppm=30000,D_max_ms=(-25.501,40.001)[n])
+        assert len(report['inbound_rtp'])==1 and report['inbound_rtp'][0]['packets']==1
+        assert report['sdp_video']==dict(payload_type=102,mid='video')
+        assert report['udp_buffers'] is None  # No native peer in this fixture.
+    assert p['ice']==dict(remote_candidate_counts=dict(host=1,srflx=1,relay=1,prflx=0,unknown=0),
+                         selected_pair_classification=dict(remote_type='relay',transport='TCP'))
+    reports=list(lab.glob('xcloud4-stream-*-p*-*.json'));assert len(reports)==2
+    decoded={json.loads(f.read_text())['profile']:json.loads(f.read_text()) for f in reports}
+    assert set(decoded)=={0,1} and not (lab/'last-stream.json').exists()
+    identity=(Path(__file__).resolve().parents[1]/'src/core/build_identity.h').read_text()
+    labels=re.findall(r'#if X4_PUBLIC\s*\n#define X4_SOURCE_ID "([0-9a-f]{40})"\s*\n#else\s*\n#define X4_SOURCE_ID "([0-9a-f]{40})"\s*\n#endif',identity)
+    assert len(labels)==1, 'Expected one explicit public/Lab source-label block'
+    public_id,lab_id=labels[0]
+    assert first['source_id']==p['source_id']==public_id
+    assert decoded[0]['source_id']==decoded[1]['source_id']==lab_id
+    assert {f.name for f in reports}=={f'xcloud4-stream-{lab_id[:12]}-p0-101.json',f'xcloud4-stream-{lab_id[:12]}-p1-102.json'}
+    assert decoded[0]['ice']['remote_candidates'][0]['ip_prefix']=='192.0.x.x'
+    selected=decoded[0]['ice']['selected_candidate_pair']
+    assert selected==dict(local='unknown/unknown',remote='relay/tcp',
+                          local_prefix='192.0.x.x',remote_prefix='2001:db8::/32')
+    # Preserve the inherited metrics except ICE/privacy, the product-specific
+    # GPU quality subsection, public native UDP buffers, build identity and REMB.
+    # The Lab's control structure also has its existing extra uint64_t pacing metric.
+    for old,new in ((decoded[0],first),(decoded[1],p)):
+        public_only={'remb','udp_buffers'}
+        assert set(old)|public_only==set(new) and not public_only.intersection(old)
+        old_common={k:v for k,v in old.items() if k not in {'ice','source_id'}}
+        new_common={k:v for k,v in new.items() if k not in {'ice','source_id'}|public_only}
+        old_common['inbound_rtp']=[dict(row) for row in old_common['inbound_rtp']]
+        old_common['sdp_video']=dict(old_common['sdp_video'])
+        # The inherited inbound key stores its occupancy bit at bit 63.
+        assert old_common['inbound_rtp'][0].pop('ssrc')==0x92345678
+        assert old_common['sdp_video'].pop('ssrc')==0x12345678
+        old_common['gpu_conversion']=dict(old_common['gpu_conversion'])
+        new_common['gpu_conversion']=dict(new_common['gpu_conversion'])
+        assert 'pausa_repetidas' in old_common['gpu_conversion'].pop('quality')
+        assert set(new_common['gpu_conversion'].pop('quality'))=={'requested_dither','effective_dither','dither_frames','reason'}
+        assert old_common.pop('control_context_bytes')==new_common.pop('control_context_bytes')+8
+        differing=sorted(k for k in old_common if old_common[k]!=new_common[k])
+        assert not differing, differing
+    assert first['schema']==p['schema']=='X4STREAM_PIPELINE5'
+    print('PASS actual exporter: exact public REMB schema and decimals; public report without IP/port/SSRC; atomic overwrite; Lab paths and inherited metrics preserved')
+    raise SystemExit(0)
 files=list(Path(sys.argv[1]).glob('xcloud4-stream-*-p*-11.json'))
 assert len(files)==1, files
 d=json.loads(files[0].read_text())
@@ -52,6 +112,15 @@ assert d['sdp_profiles']['accepted_answer'][0]['profile_level_id']=='42e020'
 assert d['stacks'][0] is None  # separate assembly owner is not part of this mock
 for t in d['stacks'][1:]:assert t['configured_bytes']==262144 and t['create_result']==t['join_result']==0
 m=d['metrics'];assert m['presentations']==s['presentations']
+assert len(m['stages'])==18
+# These two IDs retain the generic stage ABI; this fixture records ownership
+# through the dedicated per-output group, not duplicate generic timings.
+for name in ('decoder_slot_acquisition_wait','decoder_ring_gate_wait'):
+ assert m['stages'][name]['count']==0 and m['stages'][name]['p50_upper_us'] is None
+ownership=m['decoder_ownership']
+assert ownership['samples']==100
+assert ownership['slot_acquisition_wait']['count']==ownership['ring_gate_wait']['count']==100
+assert sum(ownership['held_native_by_count'])==sum(ownership['occupied_ring_by_count'])==100
 if m['presentations']>1:
     assert m['presentation_interval_us']==m['last_present_us']-m['first_present_us']
     assert abs(m['images_per_second']-(m['presentations']-1)*1e6/m['presentation_interval_us'])<1e-6

@@ -1,0 +1,26 @@
+m=video 9 UDP/TLS/RTP/SAVPF 116 39 102 103 104 107 108 109 114 115 117 40 122 123 124 49
+a=rtpmap:102 H264/90000
+a=rtcp-fb:102 goog-remb
+a=rtcp-fb:102 transport-cc
+a=rtcp-fb:102 ccm fir
+a=rtcp-fb:102 nack
+a=rtcp-fb:102 nack pli
+a=fmtp:102 level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42002a
+a=rtpmap:103 rtx/90000
+a=fmtp:103 apt=102
+a=rtpmap:116 H264/90000            (Main, el que eligió Edge)
+a=rtpmap:117 rtx/90000
+a=fmtp:117 apt=116
+a=rtpmap:122 red/90000
+a=rtpmap:123 rtx/90000
+a=fmtp:123 apt=122
+a=rtpmap:124 ulpfec/90000
+a=rtpmap:49 flexfec-03/90000
+a=rtcp-fb:49 goog-remb
+a=rtcp-fb:49 transport-cc
+a=fmtp:49 repair-window=10000000
+a=ssrc-group:FID 100 200
+a=ssrc-group:FEC-FR 100 300
+a=ssrc:100 cname:synthetic
+a=ssrc:200 cname:synthetic
+a=ssrc:300 cname:synthetic

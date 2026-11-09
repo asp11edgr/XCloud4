@@ -143,7 +143,7 @@ int main(int argc,char **argv)
     for (unsigned lang=0;lang<2;++lang) {
         x4_lang_set(lang ? X4_LANG_EN : X4_LANG_ES,lang ? "en-US" : "es-MX",lang ? "US" : "MX");
         X4PictureSettingsUi ui={.open=true};
-        for (unsigned quality=0;quality<3;++quality) {
+        for (unsigned quality=0;quality<4;++quality) {
             ui.selected=quality;
             render_checked(&ui,pixels);
         }

@@ -13,7 +13,16 @@ enum {
     X4_RECEIVER_NACK_VIDEO_PT = 102,
     X4_RECEIVER_NACK_RANGE_MAX = 64,
     X4_RECEIVER_NACK_WATCH_SLOTS = 16,
-    X4_RECEIVER_NACK_SESSION_REQUEST_MAX = 64
+    X4_RECEIVER_NACK_SESSION_REQUEST_MAX = 64,
+    X4_RECEIVER_NACK_ADAPTIVE_MAX = 512,
+    X4_RECEIVER_NACK_MASK_WORDS = 8,
+    X4_RECEIVER_NACK_ADAPTIVE_SLOTS = 64,
+    X4_RECEIVER_NACK_TOKEN_US = 1000,
+    X4_NACK_STARTUP_GRACE_MS = 250,
+    X4_NACK_STARTUP_WINDOW_US = 10000000,
+    X4_NACK_RETRY_HISTOGRAM = 128,
+    X4_NACK_FIRST_RETURN_WINDOW = 256,
+    X4_NACK_FIRST_RETURN_MINIMUM = 32
 };
 
 enum X4ReceiverNackObservationFlags {
@@ -32,7 +41,8 @@ enum X4ReceiverNackSuppression {
     X4_NACK_REQUEST_RESERVED = 0,
     X4_NACK_SUPPRESSED_DISABLED = 1,
     X4_NACK_SUPPRESSED_RANGE = 2,
-    X4_NACK_SUPPRESSED_BUDGET = 3
+    X4_NACK_SUPPRESSED_BUDGET = 3,
+    X4_NACK_SUPPRESSED_SLOTS = 9
 };
 
 typedef struct {
@@ -123,22 +133,40 @@ typedef struct {
     uint64_t gap_id;
     uint64_t request_id;
     uint64_t first_extended;
-    uint64_t pending;
-    uint64_t arrived;
+    uint64_t pending[X4_RECEIVER_NACK_MASK_WORDS];
+    uint64_t arrived[X4_RECEIVER_NACK_MASK_WORDS];
+    uint64_t deadline_us, send_due_us;
+    unsigned retry_delay_us, sends;
     uint64_t detected_us;
-    uint64_t requested_us;
+    uint64_t requested_us, initial_us, retry_us;
     uint32_t count;
-    bool used;
+    bool used, startup, expired, suppressed;
 } X4ReceiverNackRange;
+
+typedef struct X4ReceiverNackMetrics {
+    uint64_t initial_requests, retries, requested_positions, budget_suppressed_positions;
+    uint64_t fci_total, rtcp_packets, grace_us;
+    uint64_t expired_no_first, expired_retry_late, expired_retry_no_response, expired_unsent;
+    uint64_t retry_return_p50_us, retry_return_p95_us, startup_releases;
+    uint32_t first_return_p95_us, first_return_samples;
+} X4ReceiverNackMetrics;
 
 typedef struct {
     X4ReceiverNackCounters counters;
-    X4ReceiverNackRange ranges[X4_RECEIVER_NACK_WATCH_SLOTS];
+    X4ReceiverNackMetrics metrics;
+    X4ReceiverNackRange ranges[X4_RECEIVER_NACK_ADAPTIVE_SLOTS];
     uint64_t high_extended;
     uint64_t recent_seen;
     uint32_t ssrc;
     uint32_t sequence_epoch;
-    uint32_t next_range;
+    uint32_t next_range, request_ordinal;
+    uint64_t token_clock_us, next_send_us;
+    unsigned tokens;
+    unsigned grace_us, retry_delay_us;
+    bool token_clock_started, legacy, grace43c, startup, policy46b;
+    uint32_t retry_returns[X4_NACK_RETRY_HISTOGRAM];
+    uint32_t first_returns[X4_NACK_FIRST_RETURN_WINDOW];
+    unsigned first_return_cursor;
     bool enabled;
     bool bound;
     bool closed;
@@ -158,13 +186,13 @@ typedef struct {
  * It does not establish handler order or authentication by itself.
  *
  * No allocations, locks, sleeps, logging, clock calls or network calls occur.
- * observe() checks at most 16 ranges of at most 64 positions; snapshot access
- * to counters is safe only under the same external ownership/serialization.
- *
- * A request_id reserves one of 64 total session attempts BEFORE transport.
- * There are no retries. Local send failure must not refund that reservation.
- * SSRC change clears watched ranges but does not reset the session budget.
- * close() retires pending positions; only init() starts a fresh session/budget.
+ * Legacy observes up to 16 ranges of at most 64 positions with 64 attempts
+ * per session and no retries. Adaptive mode owns 64 reusable slots with up to
+ * 512 positions per range. Each dispatch spends one token per position, with
+ * a 512-token burst and replenishment of 1 token/ms. A gap may dispatch once
+ * and retry once before its original deadline. Local send failure does not
+ * refund tokens. Snapshot access needs the same external serialization.
+ * SSRC change clears watched ranges without replenishing the token budget.
  * Disabled mode observes gaps and suppression but creates no pending requests.
  *
  * Sequence numbers are extended relative to the first observed wire sequence.
@@ -185,6 +213,73 @@ typedef struct {
  * delayed. request/dispatch/SRTCP/local-send times and reorder/AU utility must
  * be observed independently by the integration layer. */
 void x4_receiver_nack_init(X4ReceiverNackState *state, bool enabled);
+void x4_receiver_nack_init_mode(X4ReceiverNackState *state, bool enabled, bool legacy);
+void x4_receiver_nack_init_policy(X4ReceiverNackState *state, bool enabled,
+    bool legacy, bool grace43c);
+void x4_receiver_nack_init_46b(X4ReceiverNackState *state, bool enabled);
+void x4_receiver_nack_set_rtt(X4ReceiverNackState *state, int rtt_p50_ms);
+void x4_receiver_nack_refresh(X4ReceiverNackState *state, int rtt_p50_ms,
+    uint64_t now_us, bool startup);
+void x4_receiver_nack_snapshot(const X4ReceiverNackState *state, X4ReceiverNackMetrics *out);
+
+/* Keep the same whole-ms deadline in the reorder and the NACK owner. */
+static inline unsigned x4_nack_retry_delay_us(int rtt_ms)
+{
+    if (rtt_ms < 14) return 20000;
+    if (rtt_ms > 1000) return 1500000;
+    return (unsigned)rtt_ms * 1500u;
+}
+
+static inline unsigned x4_nack_grace_ms(int rtt_ms, bool grace43c)
+{
+    if (rtt_ms < 0) return grace43c ? 80u : 60u;
+    if (rtt_ms > 1000) return grace43c ? 120u : 100u;
+    unsigned rtt = (unsigned)rtt_ms;
+    unsigned grace = 2u * rtt + 15u;
+    if (grace43c) {
+        unsigned for_retry = (x4_nack_retry_delay_us(rtt_ms) + 999u) / 1000u + rtt + 30u;
+        if (grace < for_retry) grace = for_retry;
+        if (grace < 60u) return 60u;
+        return grace > 120u ? 120u : grace;
+    }
+    if (grace < 45u) return 45u;
+    return grace > 100u ? 100u : grace;
+}
+
+static inline unsigned x4_nack_retry46b_ms(int rtt_ms)
+{
+    unsigned rtt = rtt_ms < 0 ? 0u : rtt_ms > 1000 ? 1000u : (unsigned)rtt_ms;
+    unsigned delay = 2u * rtt + 10u;
+    return delay < 30u ? 30u : delay;
+}
+
+static inline unsigned x4_nack_grace46b_ms(int rtt_ms, uint32_t p95_us,
+    unsigned samples)
+{
+    unsigned rtt = rtt_ms < 0 ? 0u : rtt_ms > 1000 ? 1000u : (unsigned)rtt_ms;
+    unsigned grace = 2u * rtt + 15u;
+    unsigned for_retry = x4_nack_retry46b_ms(rtt_ms) + rtt + 30u;
+    if (grace < for_retry) grace = for_retry;
+    if (samples >= X4_NACK_FIRST_RETURN_MINIMUM) {
+        unsigned observed = p95_us / 1000u + (p95_us % 1000u != 0u) + 15u;
+        if (grace < observed) grace = observed;
+    }
+    if (grace < 80u) return 80u;
+    return grace > 150u ? 150u : grace;
+}
+
+/* Only the serialized receiver publishes a changed window for the worker. */
+void x4_rtc_diag_first_return_publish(uint32_t p95_us, unsigned samples);
+unsigned x4_rtc_diag_video_grace46b_ms(void);
+
+/* Adaptive owner-only. A false result may still move next_send_us; zero
+ * denotes no work. The returned selection is copied before unlocking. */
+bool x4_receiver_nack_next(X4ReceiverNackState *state, uint64_t now_us,
+    X4ReceiverNackGap *gap, uint64_t pending[X4_RECEIVER_NACK_MASK_WORDS], bool *retry);
+/* T46b anchors its retry to local send entry after constructing the RTCP
+ * packet. A selection without a send attempt cannot open the retry window. */
+void x4_receiver_nack_sent_first(X4ReceiverNackState *state, uint64_t request_id,
+    uint64_t dispatch_us);
 void x4_receiver_nack_close(X4ReceiverNackState *state);
 /* The owner calls this after a locally omitted observation, while serialized.
  * It retires watches/cancels queued positions and discards continuity so the
@@ -196,7 +291,10 @@ void x4_receiver_nack_discontinuity(X4ReceiverNackState *state);
 void x4_receiver_nack_observe(X4ReceiverNackState *state, uint32_t ssrc,
     uint8_t payload_type, uint16_t sequence, uint64_t monotonic_us,
     X4ReceiverNackObservation *observation);
-/* Read only while holding the same external serialization. The original
+void x4_receiver_nack_observe_return(X4ReceiverNackState *state, uint32_t ssrc,
+    uint8_t payload_type, uint16_t sequence, uint64_t monotonic_us,
+    bool measure_first_return, X4ReceiverNackObservation *observation);
+/* Legacy only; read under the same external serialization. The original
  * request reservation remains spent even if every position was canceled
  * before dispatch. Zero means closed/retired/evicted/unknown/complete; no
  * current position may be requested. A nonzero bitmap addresses positions

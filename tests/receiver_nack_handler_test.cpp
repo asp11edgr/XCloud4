@@ -16,6 +16,9 @@
 #include <thread>
 #include <vector>
 
+// TSan's C++ runtime owns its replacement new/delete. Allocation checks
+// run with the fixture's own hooks in plain and ASan/UBSan builds.
+#ifndef X4_NACK_TSAN_FIXTURE
 static thread_local bool countAllocation = false;
 static thread_local uint64_t allocations = 0;
 #if defined(__GNUC__) || defined(__clang__)
@@ -36,6 +39,7 @@ X4_TEST_NOINLINE void operator delete(void *value) noexcept { std::free(value); 
 X4_TEST_NOINLINE void operator delete[](void *value) noexcept { std::free(value); }
 X4_TEST_NOINLINE void operator delete(void *value, size_t) noexcept { std::free(value); }
 X4_TEST_NOINLINE void operator delete[](void *value, size_t) noexcept { std::free(value); }
+#endif
 
 namespace {
 static_assert(sizeof(X4NackGraceControl) == 88, "Functional control POD ABI");
@@ -49,6 +53,7 @@ std::atomic<unsigned> controlCount{0}, controlOmissions{0};
 std::array<std::atomic<unsigned>,4> controlOmittedKind{};
 std::atomic<bool> acceptControls{true}, recordEvents{true};
 std::atomic<uint64_t> testClock{10000};
+std::atomic<unsigned> publishedFirstReturns{0};
 std::atomic<uint32_t> entropySender{UINT32_C(0x5a5a5a5a)};
 std::atomic<bool> blockRequestRecord{false}, requestRecordEntered{false}, releaseRequestRecord{false};
 uint64_t checks = 0;
@@ -61,6 +66,7 @@ void fail(const char *expression, int line) {
 #define CASE(test) do { clearEvents(); test(); ++cases; std::printf("PASS %s\n", #test); } while (0)
 void clearEvents() {
     eventCount.store(0); eventOmissions.store(0); testClock.store(10000);
+    publishedFirstReturns.store(0);
     controlCount.store(0); controlOmissions.store(0); acceptControls.store(true); recordEvents.store(true);
     for(auto &count : controlOmittedKind) count.store(0);
 }
@@ -119,7 +125,7 @@ void incoming(const std::shared_ptr<rtc::X4ReceiverNack> &value, const rtc::mess
     rtc::message_vector packet{message};
     value->incoming(packet, [](rtc::message_ptr) { fail("incoming does not dispatch", __LINE__); });
 }
-std::vector<uint16_t> positions(const rtc::message_ptr &message) {
+std::vector<uint16_t> positions(const rtc::message_ptr &message, unsigned maxParts = 4) {
     CHECK(message && message->type == rtc::Message::Control);
     CHECK(message->size() >= 72);
     const auto *p = reinterpret_cast<const uint8_t *>(message->data()) + 56;
@@ -127,7 +133,7 @@ std::vector<uint16_t> positions(const rtc::message_ptr &message) {
     unsigned length = read16(p + 2);
     CHECK(length >= 3 && (size_t(length) + 1) * 4 == message->size() - 56);
     unsigned parts = length - 2;
-    CHECK(parts > 0 && parts <= 4);
+    CHECK(parts > 0 && parts <= maxParts);
     std::vector<uint16_t> result;
     for (unsigned i = 0; i < parts; ++i) {
         uint16_t pid = read16(p + 12 + 4 * i), mask = read16(p + 14 + 4 * i);
@@ -175,6 +181,7 @@ void authentication_and_full_rtp_validation_precede_state() {
     incoming(value, rtp(102)); CHECK(count(19) == 1);
     CHECK(value->close() == 0); CHECK(counter(101) == 1 && counter(102) == 3);
 }
+#ifndef X4_NACK_TSAN_FIXTURE
 void incoming_observation_allocates_nothing_and_never_sends() {
     auto value = generator(); auto first = rtp(100), gap = rtp(102), returned = rtp(101);
     rtc::message_vector packet; packet.reserve(1);
@@ -188,6 +195,7 @@ void incoming_observation_allocates_nothing_and_never_sends() {
     unsigned sends = 0; CHECK(value->poll([&](rtc::message_ptr) { ++sends; return true; }) == 0);
     CHECK(sends == 0 && last(28).a == 4 && value->close() == 0);
 }
+#endif
 void cancellation_mask_is_a_selection_boundary() {
     auto value = generator(); incoming(value, rtp(100)); incoming(value, rtp(105));
     auto returned = rtp(102); incoming(value, returned); CHECK(returned->x4NackIdentity != 0);
@@ -460,6 +468,109 @@ void original_sixty_four_bit_mask_and_invalid_deadline_are_explicit() {
     CHECK(request.deadline_us == 0); // Worker bridge must fail closed on this clock.
     CHECK(overflow->close() == 0);
 }
+void adaptive_512_positions_and_one_retry_on_missing_only() {
+    auto value = std::make_shared<rtc::X4ReceiverNack>(true, 5, false);
+    CHECK(value->sameConfiguration(true, 5, false));
+    CHECK(!value->sameConfiguration(true, 5, true));
+    value->acceptedFeedback(true);
+    incoming(value, rtp(65529));
+    incoming(value, rtp(506)); // The 512-position range starts at 65530.
+    rtc::message_ptr sent;
+    CHECK(value->poll([&](rtc::message_ptr message) { sent = std::move(message); return true; }) == 1);
+    auto initial = positions(sent, 31);
+    CHECK(initial.size() == 512 && initial.front() == 65530 && initial.back() == 505);
+    CHECK(countControl(X4_NACK_GRACE_REQUEST) == 0);
+    CHECK(countControl(X4_NACK_GRACE_OUTCOME) == 0);
+
+    // All but one arrive; the adaptive retry has just that exact position.
+    testClock.store(26000);
+    for (uint16_t seq : initial) if (seq != 0) incoming(value, rtp(seq));
+    testClock.store(48000);
+    CHECK(value->poll([](rtc::message_ptr) { return false; }) == 0);
+    testClock.store(50000);
+    CHECK(value->poll([&](rtc::message_ptr message) { sent = std::move(message); return true; }) == 1);
+    CHECK(positions(sent) == std::vector<uint16_t>({0}));
+    testClock.store(70000);
+    CHECK(value->poll([](rtc::message_ptr) { return false; }) == 0);
+    X4ReceiverNackMetrics metrics{};
+    CHECK(value->metrics(metrics));
+    CHECK(metrics.initial_requests == 1 && metrics.retries == 1 &&
+        metrics.requested_positions == 513 && metrics.fci_total == 32 &&
+        metrics.rtcp_packets == 2 && metrics.grace_us == 67000);
+    CHECK(value->close() == 0);
+}
+
+void adaptive_retry_close_and_arrival_share_safe_ownership() {
+    auto value = std::make_shared<rtc::X4ReceiverNack>(true, 5, false);
+    value->acceptedFeedback(true);
+    incoming(value, rtp(100));
+    incoming(value, rtp(103));
+    CHECK(value->poll([](rtc::message_ptr) { return true; }) == 1);
+    testClock.store(50000);
+    std::atomic<bool> entered{false}, release{false};
+    std::atomic<int> result{-10};
+    std::thread sender([&] {
+        result.store(value->poll([&](rtc::message_ptr) {
+            entered.store(true, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) std::this_thread::yield();
+            return true;
+        }));
+    });
+    auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!entered.load(std::memory_order_acquire) &&
+        std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+    CHECK(entered.load(std::memory_order_acquire));
+    incoming(value, rtp(101));
+    CHECK(value->close() == -1);
+    release.store(true, std::memory_order_release);
+    sender.join();
+    CHECK(result.load() == 1 && value->close() == 0);
+    CHECK(value->poll([](rtc::message_ptr) { return false; }) == 0);
+}
+
+void t46b_dispatch_clock_is_published_before_the_send_callback() {
+    auto value = std::make_shared<rtc::X4ReceiverNack>(true, 5, false, false, true);
+    CHECK(value->sameConfiguration(true, 5, false, false, true));
+    CHECK(!value->sameConfiguration(true, 5, false, true));
+    value->acceptedFeedback(true);
+    incoming(value, rtp(100));
+    incoming(value, rtp(103));
+    std::atomic<uint64_t> dispatchTime{0};
+    std::atomic<bool> release{false};
+    std::atomic<int> result{-10};
+    std::thread sender([&] {
+        result.store(value->poll([&](rtc::message_ptr message) {
+            dispatchTime.store(message->x4NackDispatch, std::memory_order_release);
+            while (!release.load(std::memory_order_acquire)) std::this_thread::yield();
+            return true;
+        }));
+    });
+    auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    uint64_t dispatch = 0;
+    while (!(dispatch = dispatchTime.load(std::memory_order_acquire)) &&
+        std::chrono::steady_clock::now() < limit) std::this_thread::yield();
+    CHECK(dispatch != 0);
+    testClock.store(dispatch + 12000u);
+    incoming(value, rtp(101));
+    X4ReceiverNackMetrics metrics{};
+    CHECK(value->metrics(metrics));
+    CHECK(metrics.first_return_samples == 1 && publishedFirstReturns.load() == 1);
+    release.store(true, std::memory_order_release);
+    sender.join();
+    CHECK(result.load() == 1);
+    testClock.store(dispatch + 61999u); // RTT=26 ms, retry=62 ms.
+    CHECK(value->poll([](rtc::message_ptr) { return false; }) == 0);
+    testClock.store(dispatch + 62000u);
+    rtc::message_ptr retried;
+    CHECK(value->poll([&](rtc::message_ptr message) { retried=std::move(message); return true; }) == 1);
+    CHECK(positions(retried) == std::vector<uint16_t>({102}));
+    testClock.store(dispatch + 63000u);
+    incoming(value, rtp(102));
+    CHECK(value->metrics(metrics));
+    CHECK(metrics.first_return_samples == 1 && metrics.retries == 1 && metrics.grace_us == 118000u);
+    CHECK(value->close() == 0);
+}
+
 void ordinary_provenance_copy_and_reused_invalid_messages_are_explicit() {
     auto value = generator();
     auto first = rtp(100); incoming(value, first);
@@ -493,6 +604,13 @@ extern "C" void x4_native_random_or_exit(void *target, size_t size) {
         uint32_t sender = entropySender.load(); std::memcpy(target, &sender, sizeof(sender));
     }
 }
+extern "C" bool x4_rtc_diag_startup_active(uint64_t) { return false; }
+extern "C" uint64_t x4_rtc_diag_startup_release_count(void) { return 0; }
+extern "C" void x4_rtc_diag_startup_range(unsigned, uint64_t, uint64_t, uint64_t) {}
+extern "C" int x4_rtc_diag_rtt_p50_ms(void) { return 26; }
+extern "C" void x4_rtc_diag_first_return_publish(uint32_t, unsigned samples) {
+    publishedFirstReturns.store(samples);
+}
 extern "C" uint64_t x4_rtc_receive_clock(void) { return testClock.fetch_add(1); }
 extern "C" void x4_rtc_nack_event(unsigned event, unsigned flags, uint64_t identity,
     uint64_t source, uint64_t a, uint64_t b, uint64_t c) {
@@ -518,9 +636,14 @@ extern "C" bool x4_rtc_nack_grace_control(const X4NackGraceControl *control) {
 }
 
 int main() {
+    CASE(adaptive_512_positions_and_one_retry_on_missing_only);
+    CASE(adaptive_retry_close_and_arrival_share_safe_ownership);
+    CASE(t46b_dispatch_clock_is_published_before_the_send_callback);
     CASE(actual_chain_incoming_runs_last_first);
     CASE(authentication_and_full_rtp_validation_precede_state);
+#ifndef X4_NACK_TSAN_FIXTURE
     CASE(incoming_observation_allocates_nothing_and_never_sends);
+#endif
     CASE(cancellation_mask_is_a_selection_boundary);
     CASE(advertised_or_disabled_feedback_does_not_send);
     CASE(answer_check_provenance_is_explicit);

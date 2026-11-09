@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "stream_pipeline.h"
-#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
+#if X4_STREAM_PROFILE && (!X4_VIDEO_PROBE || X4_PROBE_T26)
 #include "stream_diagnostics.h"
 #include "stream_wait.h"
 #include "stream_cpu.h"
@@ -13,6 +13,13 @@
 #include "../streaming/rtc_receive_diag.h"
 #include "../core/build_identity.h"
 #include "../ui/server_settings.h"
+#include "../ui/net_hud.h"
+#include "gpu_convert.h"
+#include "gpu_quality_ref.h"
+#include <emmintrin.h>
+#if !X4_PUBLIC
+#include "../ui/stream_settings.h"
+#endif
 #include <orbis/VideoOut.h>
 #include <orbis/GnmDriver.h>
 #include <stdlib.h>
@@ -20,6 +27,16 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#if defined(X4_OPENORBIS) && X4_PUBLIC
+/* Last connected peer in this session. Copies numeric values only. */
+extern void x4_rtc_diag_write_udp_json(FILE *);
+#endif
+#if X4_PUBLIC
+#include <sys/stat.h>
+#endif
+#if X4_PUBLIC && !X4_VIDEO_PROBE && (defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST))
+#include "../streaming/remb_estimator.h"
+#endif
 
 enum { STREAM_TIMEOUT_US=10000000, STREAM_SCANOUT_BYTES=0x800000,
     STREAM_SPS_BYTES=4096,
@@ -122,15 +139,50 @@ struct X4StreamPipeline {
     X4StreamPipelineSnapshot view;
     X4StreamDiagnostics *diagnostics;
     X4StreamRequestConfig request;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    bool t26_enabled;
+    X4T26PipelineHooks t26_hooks;
+#endif
     X4StreamIdrRecovery idr_recovery;
     atomic_uint_fast64_t diagnostic_calls,diagnostic_us,diagnostic_max_us;
     X4VideoPipelineDisplay display;
     int display_handle,display_allocate,display_map,display_register,display_rate;
     int display_close,display_unmap,display_release;
     off_t display_offset;void *display_memory;bool display_allocated;
-    uint32_t *display_pixels[3];
+    uint32_t *display_pixels[X4_PIPELINE_SCANOUT_CAPACITY];
+    /* Main-owned, allocated only for a frozen reconnect notice. No steady
+     * frame copy; at most one8MiB snapshot including any existing overlay. */
+    uint32_t *notice_backing;
+    bool notice_scanout[X4_PIPELINE_SCANOUT_CAPACITY];
+    bool notice_mode_active,notice_mailbox_capable,notice_mailbox_admission;
+    unsigned scanout_count;
+    X4VideoPipelineMailboxClock mailbox_clock;
+    uint64_t mailbox_late_flips;
+    unsigned last_flip_mode;bool last_flip_measured;
+    uint64_t measure_first,measure_last;
+    uint64_t acquired_slot_wait_us,acquired_ring_gate_us,acquired_full_drops;
+    unsigned acquired_held_native,acquired_occupied;
     bool converting,closed,retained,exported,video_halted,native_teardown_failed;
     bool conversion_cleanup_failed;
+    X4GpuConvert *gpu;
+    X4StreamGpuDiagnostics gpu_metrics;
+    OrbisPthread verification_worker;X4ProbeThread verification_thread;
+    X4StreamWait verification_wait;
+    atomic_bool verification_stop,verification_finished;
+    void *verification_scratch;
+    atomic_int verification_priority_result;
+    uint64_t verification_status_checks,verification_status_captures,verification_status_copies;
+    unsigned gpu_quality_requested_word,gpu_quality_accepted_word;
+    unsigned gpu_quality_log_word,gpu_quality_log_width,gpu_quality_log_sharp;
+    const char *gpu_quality_log_reason;
+    bool gpu_quality_logged;
+    bool gpu_prepare_attempted,gpu_active,gpu_quarantine,gpu_pause_conversion;
+    X4VideoPipelineColor gpu_color;
+    X4VideoPipelineLease gpu_held_image,gpu_held_scanout;
+    uint64_t gpu_log_at;
+    uint64_t gpu_pause_log_at,gpu_pause_log_seen,gpu_pause_log_duration,gpu_pause_log_frames,gpu_pause_cpu_base;
+    bool gpu_pause_log_pending,gpu_pause_log_emitted;
+    bool gpu_timestamp_unsupported_logged[X4_GPU_RESOLUTION_COUNT];
     int halt_result;
     X4StreamStartup startup;
     X4VideoPipelineLease image_lease,scanout_lease;
@@ -138,12 +190,45 @@ struct X4StreamPipeline {
     uint64_t conversion_begin,work;
     /* Diagnostic tags only; the ring policy and converter job are unchanged. */
     atomic_bool menu_open;
-    bool conversion_menu_open,scanout_menu[3];
+    bool conversion_menu_open,scanout_menu[X4_PIPELINE_SCANOUT_CAPACITY];
+    /* Main-owned provenance for completed unsubmitted READY only. A GPU
+     * verification failure must not cancel a valid CPU fallback image. */
+    bool scanout_gpu[X4_PIPELINE_SCANOUT_CAPACITY];
+    uint64_t gpu_ready_discarded_verification;
     X4UiPerf conversion_menu[2];
     uint64_t menu_presentations,menu_discarded_latency,menu_discarded_full,menu_log_at;
     int decoder_close_result;
+    /* Presentation-only additions stay after every inherited owner field. */
+    X4VideoPipelineSyncHistory synced_history;
+    uint64_t scanout_ready_us[X4_PIPELINE_SCANOUT_CAPACITY];
+    uint64_t pacing_ring_full,pacing_ring_latest;
+    bool notice_synced;
+#if !X4_PUBLIC
+    uint64_t pacing_cola_vsync_wait_drops;
+#endif
 };
 static uint64_t now_us(void){return sceKernelGetProcessTime();}
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+/* Same sole-owner teardown and successful-Delete ownership proof as the
+ * production path. Observers bracket the real stop; native time excludes
+ * their work. Reconfiguration uses the same brackets as final shutdown. */
+static int t26_stop_native(X4StreamPipeline *p,uint64_t *elapsed_us)
+{
+    if(p->t26_enabled){
+        x4_live_video_stream_info(&p->video,&p->native_info);
+        if(p->t26_hooks.before_close)
+            p->t26_hooks.before_close(p->t26_hooks.context,&p->video,&p->native_info);
+    }
+    uint64_t begin=now_us();int rc=x4_live_video_stop(&p->video);
+    if(elapsed_us)*elapsed_us=now_us()-begin;
+    if(p->t26_enabled){
+        x4_live_video_stream_info(&p->video,&p->native_info);
+        if(p->t26_hooks.after_close)
+            p->t26_hooks.after_close(p->t26_hooks.context,&p->video,&p->native_info,rc);
+    }
+    return rc;
+}
+#endif
 static bool stopping(const X4StreamPipeline *p)
 {return atomic_load_explicit(&p->cancel,memory_order_acquire)||(p->external_stop&&atomic_load_explicit(p->external_stop,memory_order_acquire));}
 /* Both gates are initialized before publication and destroyed after all
@@ -155,6 +240,7 @@ static void wake_all(X4StreamPipeline *p)
 {
     (void)x4_stream_wait_notify(&p->decode_wait);
     (void)x4_stream_wait_notify(&p->present_wait);
+    (void)x4_stream_wait_notify(&p->verification_wait);
     for(unsigned i=0;i<2;++i)(void)x4_stream_wait_notify(&p->converters[i].work_wait);
 }
 static int fail(X4StreamPipeline *p,int error)
@@ -255,10 +341,13 @@ static void duration(X4StreamPipeline *p,X4StreamStage stage,uint64_t us)
     /* A bounded one-shot update; under contention maximum is a lower bound. */
     if(cost>old)(void)atomic_compare_exchange_strong_explicit(&p->diagnostic_max_us,&old,cost,memory_order_relaxed,memory_order_relaxed);
 }
+static bool measured_output(const X4StreamPipeline *p,uint64_t output_id)
+{return !p->measure_first||(output_id>=p->measure_first&&output_id<=p->measure_last);}
 static void note_conversion_begin(X4StreamPipeline *p,uint64_t began)
 {
     if(p->flip_to_conversion_pending){
         duration(p,X4_STREAM_FLIP_END_TO_CONVERSION,began-p->flip_end_us);
+        if(p->last_flip_measured)x4_stream_diagnostics_flip_to_conversion(p->diagnostics,p->last_flip_mode,began-p->flip_end_us);
         p->flip_to_conversion_pending=false;
     }
 }
@@ -306,14 +395,19 @@ static void menu_ring_drops(X4StreamPipeline *p,uint64_t latency,uint64_t full)
 }
 static int acquire_native(X4StreamPipeline *p,X4VideoPipelineLease *lease)
 {
-    uint64_t start=now_us();
+    uint64_t start=now_us(),gate_total=0,full_total=0;
     while(!stopping(p)){
         int recovery=service_idr_wait(p);if(recovery)return recovery;
-        lock(&p->ring_gate);
+        uint64_t gate_begin=now_us();lock(&p->ring_gate);gate_total+=now_us()-gate_begin;
         uint64_t before_latency=p->ring.discarded_latency,before_full=p->ring.discarded_ready;
         int rc=x4_video_pipeline_acquire_decode(&p->ring,lease,NULL);
-        menu_ring_drops(p,before_latency,before_full);unlock(&p->ring_gate);
-        if(rc!=X4_PIPELINE_WAIT)return rc;
+        menu_ring_drops(p,before_latency,before_full);full_total+=p->ring.discarded_ready-before_full;
+        unsigned occupied=p->ring.occupied;unlock(&p->ring_gate);
+        if(rc!=X4_PIPELINE_WAIT){
+            p->acquired_slot_wait_us=now_us()-start;p->acquired_ring_gate_us=gate_total;
+            p->acquired_full_drops=full_total;p->acquired_occupied=occupied;
+            unsigned mask=x4_live_video_stream_output_held_mask(&p->video),held=0;
+            for(;mask;mask>>=1)held+=mask&1u;p->acquired_held_native=held;return rc;}
         if(now_us()-start>STREAM_TIMEOUT_US)return X4_PIPELINE_EXHAUSTED;
         int waited=x4_stream_wait_block(&p->decode_wait,X4_STREAM_WAIT_MAX_US);
         if(waited<0)return waited;
@@ -458,7 +552,12 @@ static int quiesce_native(X4StreamPipeline *p)
     uint64_t elapsed=now_us()-begin;++p->quiesce_calls;p->quiesce_us+=elapsed;
     if(elapsed>p->quiesce_max_us)p->quiesce_max_us=elapsed;
     if(wait_result)return wait_result;
-    int rc=x4_live_video_stop(&p->video);x4_live_video_stream_info(&p->video,&p->native_info);close_epoch(p,rc);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    int rc=t26_stop_native(p,NULL);
+#else
+    int rc=x4_live_video_stop(&p->video);
+#endif
+    x4_live_video_stream_info(&p->video,&p->native_info);close_epoch(p,rc);
     if(rc||p->video.state){p->native_teardown_failed=true;
         p->decoder_close_result=rc?rc:X4_PROBE_STACK_RETAINED;return p->decoder_close_result;}
     /* Successful Delete is the ownership proof for ALL native-held leases. */
@@ -475,6 +574,20 @@ static void queue_signals(X4StreamPipeline *p,const X4StreamAuOutcome *outcome)
     x4_keyframe_limiter_observe_gap(p->keyframe_limiter);
     x4_keyframe_limiter_request(p->keyframe_limiter,X4_KEYFRAME_AU_QUEUE);
 }
+/* Reconnect bridge: READY/WRITING AUs from the old peer are invalidated by
+ * the existing queue recovery generation. INFLIGHT remains pinned until its
+ * original Decode lease is released. No native ledger/output ring changes. */
+int x4_stream_pipeline_begin_receive_epoch(X4StreamPipeline *p)
+{
+    if(!p||stopping(p))return X4_STREAM_AU_STOPPED;
+    X4StreamAuOutcome outcome={0};
+    int rc=x4_stream_au_queue_require_idr(p->au_queue,X4_STREAM_AU_LOSS_BUSY,&outcome);
+    if(rc!=X4_STREAM_AU_OK)return rc;
+    queue_signals(p,&outcome);
+    (void)x4_stream_wait_notify(&p->decode_wait);
+    return 0;
+}
+
 static int retire_au(X4StreamPipeline *p,X4StreamAuLease lease,bool *active)
 {
     if(!*active)return 0;
@@ -575,7 +688,13 @@ static void *stream_pipeline_decode_worker(void *argument)
             X4StreamSpsDiagnostics depth_diagnostic={0};
             (void)x4_stream_sps_inspect_diagnostic(au->sps,au->sps_bytes,&depth_sps,&depth_diagnostic);
             unsigned selected_depth=x4_stream_request_resolve_depth(&p->request,depth_sps.coded_width,depth_sps.coded_height);
-            uint64_t began=now_us();rc=x4_live_video_stream_raw_start_cpu_depth(&p->video,au->sps,au->sps_bytes,&p->cancel,p->request.cpu_variant,selected_depth);
+            uint64_t began=now_us();
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+            if(p->t26_enabled)
+                rc=x4_live_video_t26_raw_start(&p->video,au->sps,au->sps_bytes,&p->cancel,&p->t26_hooks.native);
+            else
+#endif
+            rc=x4_live_video_stream_raw_start_cpu_depth(&p->video,au->sps,au->sps_bytes,&p->cancel,p->request.cpu_variant,selected_depth);
             x4_live_video_stream_info(&p->video,&p->native_info);
             observed_sps(p,&p->native_info.sps,&p->native_info.sps_diagnostics);
             begin_epoch(p,au,start_reason,rc,began);
@@ -625,6 +744,17 @@ static void *stream_pipeline_decode_worker(void *argument)
         if(rc){if(rc==X4_PIPELINE_WAIT&&stopping(p))rc=0;failure="native output acquisition";break;}
         p->video.trace_au=au->identity;X4ProbeNativeOutput output={0};
         rc=x4_live_video_stream_raw_decode(&p->video,lease.slot,au->data,au->bytes,au->pts,false,&output);
+        if(output.valid&&measured_output(p,output.output_id))
+            x4_stream_diagnostics_decoder_ownership(p->diagnostics,p->acquired_slot_wait_us,
+                p->acquired_ring_gate_us,p->acquired_held_native,p->acquired_occupied,p->acquired_full_drops);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+        /* Inspect the returned native bytes before publication/conversion.
+         * The observer cannot accept/reject or change any lease. */
+        if(p->t26_enabled&&p->t26_hooks.on_decode){
+            x4_live_video_stream_info(&p->video,&p->native_info);
+            p->t26_hooks.on_decode(p->t26_hooks.context,au->identity,rc,&output,&p->native_info);
+        }
+#endif
         uint64_t stopped_at=atomic_load_explicit(&p->stop_requested_us,memory_order_acquire);
         /* The raw adapter stamps exactly the SCE call, excluding input copy,
          * validation and cancellation branches that never entered Decode. */
@@ -705,10 +835,29 @@ static void *stream_pipeline_decode_worker(void *argument)
     atomic_store_explicit(&p->decoder_done,true,memory_order_release);
     (void)x4_stream_wait_notify(&p->present_wait);
     while(!atomic_load_explicit(&p->cleanup_allowed,memory_order_acquire))sceKernelUsleep(100);
-    if(p->native_teardown_failed||(!native_started&&p->video.state))
+    /* GPU timeouts do not revoke the native input lease. Main has joined all
+     * CPU converters before cleanup_allowed, so a remaining reader is GPU.
+     * Retain the decoder instead of Delete/free while its pixels are read. */
+    if(atomic_load_explicit(&p->conversion_readers,memory_order_acquire)){
+        p->native_teardown_failed=true;p->decoder_close_result=X4_PROBE_STACK_RETAINED;
+    }else
+    if(p->native_teardown_failed||(!native_started&&p->video.state
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+        /* T26 start deliberately leaves partial allocations to its caller.
+         * Let the sole Decode owner attempt the ordinary safe stop: it still
+         * rejects uncertain Create handles, failed Delete and live readers. */
+        &&!p->t26_enabled
+#endif
+        ))
         p->decoder_close_result=p->decoder_close_result?p->decoder_close_result:(p->native_info.close_result?p->native_info.close_result:X4_PROBE_STACK_RETAINED);
-    else {uint64_t began=now_us();p->decoder_close_result=x4_live_video_stop(&p->video);
-        p->native_stop_us=now_us()-began;}
+    else {
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+        p->decoder_close_result=t26_stop_native(p,&p->native_stop_us);
+#else
+        uint64_t began=now_us();p->decoder_close_result=x4_live_video_stop(&p->video);
+        p->native_stop_us=now_us()-began;
+#endif
+    }
     x4_live_video_stream_info(&p->video,&p->native_info);close_epoch(p,p->decoder_close_result);
     if(!p->decoder_close_result&&p->video.state)p->decoder_close_result=X4_PIPELINE_STATE;
     if(!p->decoder_close_result){
@@ -731,8 +880,42 @@ X4StreamPipeline *x4_stream_pipeline_create_request(uint64_t session,X4Trace *tr
     X4StreamPipeline *p=calloc(1,sizeof(*p));if(!p)return NULL;
     p->session=session;p->started=now_us();p->trace=trace;p->external_stop=stop;p->display_handle=-1;
     p->request=x4_stream_request_capture(request);
+    bool synced=x4_stream_request_vsync_policy(&p->request)==X4_VSYNC_SYNCED;
+    p->scanout_count=synced||x4_stream_request_mailbox(&p->request)?4u:3u;
+    x4_video_pipeline_mailbox_clock_init(&p->mailbox_clock);
+    x4_video_pipeline_sync_history_init(&p->synced_history);
+    atomic_init(&p->verification_priority_result,X4_GPU_CONVERT_NOT_RUN);
+    atomic_init(&p->verification_stop,false);atomic_init(&p->verification_finished,false);
+#if !X4_PUBLIC
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    /* Probe construction never consults or mutates the catalog preferences. */
+    p->gpu_metrics.requested=1u;
+    p->gpu_quality_requested_word=0u;
+#else
+    p->gpu_metrics.requested=x4_stream_settings_conversion_backend();
+    p->gpu_quality_requested_word=x4_gpu_quality_settings_get();
+#endif
+#else
+    p->gpu_metrics.requested=x4_stream_request_gpu_force_cpu(&p->request)?0u:1u;
+    p->gpu_quality_requested_word=x4_stream_request_dither_enabled(&p->request)?X4_GPU_QUALITY_DITHER:0u;
+#endif
+    p->gpu_metrics.quality_requested_word=p->gpu_quality_requested_word;
+    p->gpu_metrics.quality_reason=p->gpu_metrics.requested?"awaiting_native_layout":
+        p->gpu_quality_requested_word?"ignored_cpu":"off";
+    p->gpu_metrics.verification_priority_result=p->gpu_metrics.verification_last_result=
+        p->gpu_metrics.verification_reserve_result=p->gpu_metrics.verification_map_result=
+        p->gpu_metrics.verification_control_reserve_result=p->gpu_metrics.verification_control_map_result=X4_GPU_CONVERT_NOT_RUN;
+    p->gpu_metrics.quality_reserve_result=p->gpu_metrics.quality_map_result=
+        p->gpu_metrics.quality_unmap_result=p->gpu_metrics.quality_release_result=
+        p->gpu_metrics.intermediate_reserve_result=p->gpu_metrics.intermediate_map_result=
+        p->gpu_metrics.intermediate_unmap_result=p->gpu_metrics.intermediate_release_result=X4_GPU_CONVERT_NOT_RUN;
+    p->gpu_metrics.reason=p->gpu_metrics.requested?"awaiting_native_layout":"not_requested";
+    p->gpu_metrics.reserve_result=p->gpu_metrics.map_result=
+        p->gpu_metrics.submit_result=p->gpu_metrics.submit_done_result=
+        p->gpu_metrics.allowed_result=X4_GPU_CONVERT_NOT_RUN;
     p->color.convert_mode=p->request.convert_mode;p->color.sharpness=p->request.sharpness;
-    x4_stream_startup_init_mode(&p->startup,x4_stream_request_resolution_alias(&p->request)!=NULL,p->request.resolution_request_mode);
+    x4_stream_startup_init_mode(&p->startup,x4_stream_request_resolution_alias(&p->request)!=NULL,
+        p->request.resolution_request_mode & X4_RESOLUTION_REQUEST_MODE_MASK);
     p->display_allocate=p->display_map=p->display_register=p->display_rate=
         p->display_close=p->display_unmap=p->display_release=X4_PROBE_STACK_NOT_RUN;
     p->native_decode_result=X4_PROBE_STACK_NOT_RUN;
@@ -760,12 +943,18 @@ X4StreamPipeline *x4_stream_pipeline_create_request(uint64_t session,X4Trace *tr
     if(sync_rc){printf("XCloud4: stream sync init decode semaphore rc=%d\n",sync_rc);goto memory_fail;}
     sync_rc=x4_stream_wait_init(&p->present_wait,"x4-stream-main");
     if(sync_rc){printf("XCloud4: stream sync init main semaphore rc=%d\n",sync_rc);goto memory_fail;}
+    sync_rc=x4_stream_wait_init(&p->verification_wait,"x4-gpu-verify");
+    if(sync_rc)goto memory_fail;
     for(unsigned i=0;i<2;++i){sync_rc=x4_stream_wait_init(&p->converters[i].work_wait,
         i?"x4-stream-c1":"x4-stream-c0");
         if(sync_rc){printf("XCloud4: stream sync init converter %u semaphore rc=%d\n",i,sync_rc);goto memory_fail;}}
-    if(x4_video_pipeline_ring_init(&p->ring,session)||x4_video_pipeline_display_init(&p->display,session))goto memory_fail;
+    if(x4_video_pipeline_ring_init(&p->ring,session))goto memory_fail;
+    int display_init=synced?x4_video_pipeline_display_init_synced(&p->display,session):
+        x4_video_pipeline_display_init_mode(&p->display,session,p->scanout_count,p->scanout_count==4u);
+    if(display_init)goto memory_fail;
     p->au_queue=x4_stream_au_queue_create();if(!p->au_queue)goto memory_fail;
     p->diagnostics=x4_stream_diagnostics_create(p->started);if(!p->diagnostics)goto memory_fail;
+    x4_stream_diagnostics_vsync_init(p->diagnostics,(unsigned)x4_stream_request_vsync_policy(&p->request));
     for(unsigned i=0;i<2;++i){StreamConverter *w=&p->converters[i];w->owner=p;w->index=i;
         atomic_init(&w->submitted,0);atomic_init(&w->completed,0);atomic_init(&w->stop,false);atomic_init(&w->finished,false);}
     return p;
@@ -774,10 +963,74 @@ memory_fail:
     (void)x4_stream_au_queue_destroy(p->au_queue);
     for(unsigned i=0;i<2;++i)(void)x4_stream_wait_destroy(&p->converters[i].work_wait);
     (void)x4_stream_wait_destroy(&p->decode_wait);(void)x4_stream_wait_destroy(&p->present_wait);
+    (void)x4_stream_wait_destroy(&p->verification_wait);
     if(p->status_mutex_initialized)(void)x4_stream_mutex_destroy(&p->status_gate);
     if(p->ring_mutex_initialized)(void)x4_stream_mutex_destroy(&p->ring_gate);
     x4_stream_diagnostics_free(p->diagnostics);free(p);return NULL;
 }
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+X4StreamPipeline *x4_stream_pipeline_t26_create(uint64_t session,
+    const atomic_bool *stop,const X4T26PipelineHooks *hooks)
+{
+    if(!hooks||!hooks->native.before||!x4_t26_config_valid(&hooks->native.config)||
+        hooks->native.config.api!=X4_T26_API_V2||
+        !hooks->native.config.realistic||hooks->native.config.depth<1u||
+        hooks->native.config.depth>2u)return NULL;
+    /* No network request/alias is involved in local replay. Geometry comes
+     * from the clip SPS and native.config is the exact measured cell. */
+    X4StreamRequestConfig request=x4_stream_request_config(X4_REQUEST_720P60,X4_COLOR_AUTO_709);
+    request.cpu_variant=X4_CPU_0;
+    request.decoder_depth=(unsigned char)hooks->native.config.depth;
+    request.interaction_modes=X4_INTERACTION_VSYNC_ALWAYS;
+    request.convert_mode=1;request.sharpness=2;
+    X4StreamPipeline *p=x4_stream_pipeline_create_request(session,NULL,stop,&request);
+    if(p){p->t26_hooks=*hooks;p->t26_enabled=true;}
+    return p;
+}
+int x4_stream_pipeline_t26_set_present_policy(X4StreamPipeline *p,unsigned mode,bool mailbox)
+{
+    if(!p||!p->t26_enabled||mode>2u||p->display_handle>=0||p->decoder_thread.created||
+        p->converters[0].thread.created||p->converters[1].thread.created)return X4_PIPELINE_STATE;
+#if X4_PUBLIC
+    mailbox=false;
+#endif
+    p->scanout_count=mailbox?4u:3u;
+    int rc=x4_video_pipeline_display_init_mode(&p->display,p->session,p->scanout_count,mailbox);
+    if(!rc){x4_stream_diagnostics_vsync_init(p->diagnostics,mode);x4_video_pipeline_mailbox_clock_init(&p->mailbox_clock);}return rc;
+}
+int x4_stream_pipeline_t26_set_measure_window(X4StreamPipeline *p,uint64_t first,uint64_t last)
+{
+    if(!p||!p->t26_enabled||!first||last<first||p->decoder_thread.created)return X4_PIPELINE_INVALID;
+    p->measure_first=first;p->measure_last=last;return 0;
+}
+bool x4_stream_pipeline_t26_presentation_summary(const X4StreamPipeline *p,X4PipelinePresentationSummary *out)
+{
+    if(!x4_stream_pipeline_t26_observers_stopped(p)||!out||
+        !x4_stream_diagnostics_presentation_summary(p->diagnostics,out))return false;
+    out->mailbox_replaced=p->display.mailbox_replaced;out->mailbox_discarded_old=p->display.mailbox_discarded_old;
+    out->mailbox_late_opportunities=p->mailbox_clock.missed_opportunities;out->mailbox_late_flips=p->mailbox_late_flips;
+    out->clock_anchors=p->mailbox_clock.anchors;out->clock_invalid_anchors=p->mailbox_clock.invalid_anchors;
+    out->clock_residual_samples=p->mailbox_clock.residual_samples;out->clock_residual_sum_us=p->mailbox_clock.residual_sum_us;
+    out->clock_residual_max_us=p->mailbox_clock.residual_max_us;out->clock_period_us=p->mailbox_clock.period_us;
+    out->clock_margin_us=p->mailbox_clock.margin_us;out->clock_warmup_submissions=p->mailbox_clock.warmup_submissions;
+    out->scanouts=p->scanout_count;out->scanout_bytes=(uint64_t)p->scanout_count*STREAM_SCANOUT_BYTES;return true;
+}
+bool x4_stream_pipeline_t26_observers_stopped(const X4StreamPipeline *p)
+{
+    return p&&p->closed&&!p->decoder_thread.created&&
+        !p->converters[0].thread.created&&!p->converters[1].thread.created&&!p->verification_thread.created;
+}
+bool x4_stream_pipeline_t26_gpu_status(const X4StreamPipeline *p,
+    bool *requested,uint64_t *gpu_frames,uint64_t *cpu_frames,char reason[64])
+{
+    if(!requested||!gpu_frames||!cpu_frames||!reason||
+        !x4_stream_pipeline_t26_observers_stopped(p))return false;
+    *requested=p->gpu_metrics.requested!=0;
+    *gpu_frames=p->gpu_metrics.gpu_frames;*cpu_frames=p->gpu_metrics.cpu_frames;
+    snprintf(reason,64,"%s",p->gpu_metrics.reason?p->gpu_metrics.reason:"unknown");
+    return true;
+}
+#endif
 void x4_stream_pipeline_set_keyframe_limiter(X4StreamPipeline *p,X4KeyframeLimiter *limiter)
 {if(p)p->keyframe_limiter=limiter;}
 X4StreamStartup *x4_stream_pipeline_startup(X4StreamPipeline *p)
@@ -901,34 +1154,68 @@ void x4_stream_pipeline_snapshot(X4StreamPipeline *p,X4StreamPipelineSnapshot *o
     out->discarded_latency=p->ring.discarded_latency;out->discarded_ring_full=p->ring.discarded_ready;
     if(!p->closed)unlock(&p->ring_gate);
 }
+static void gpu_prepare(X4StreamPipeline *p);
 int x4_stream_pipeline_display_open(X4StreamPipeline *p)
 {
     if(!p||p->display_handle>=0||p->closed||p->video_halted||stopping(p))return X4_PIPELINE_STATE;
     p->display_handle=sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN,ORBIS_VIDEO_OUT_BUS_MAIN,0,NULL);
     if(p->display_handle<0)return fail_named(p,p->display_handle,"VideoOut open");
     lock(&p->status_gate);p->view.display_detached=false;unlock(&p->status_gate);
-    int rc=sceKernelAllocateDirectMemory(0,sceKernelGetDirectMemorySize(),3u*STREAM_SCANOUT_BYTES,0x200000,3,&p->display_offset);
+    int rc=sceKernelAllocateDirectMemory(0,sceKernelGetDirectMemorySize(),(size_t)p->scanout_count*STREAM_SCANOUT_BYTES,0x200000,3,&p->display_offset);
     p->display_allocate=rc;if(rc)return fail_named(p,rc,"scanout direct allocation");p->display_allocated=true;
-    rc=sceKernelMapDirectMemory(&p->display_memory,3u*STREAM_SCANOUT_BYTES,0x33,0,p->display_offset,0x200000);p->display_map=rc;if(rc)return fail_named(p,rc,"scanout direct map");
-    memset(p->display_memory,0,3u*STREAM_SCANOUT_BYTES);
-    for(unsigned i=0;i<3;++i)p->display_pixels[i]=(uint32_t*)((uint8_t*)p->display_memory+i*STREAM_SCANOUT_BYTES);
+    rc=sceKernelMapDirectMemory(&p->display_memory,(size_t)p->scanout_count*STREAM_SCANOUT_BYTES,0x33,0,p->display_offset,0x200000);p->display_map=rc;if(rc)return fail_named(p,rc,"scanout direct map");
+    memset(p->display_memory,0,(size_t)p->scanout_count*STREAM_SCANOUT_BYTES);
+    for(unsigned i=0;i<p->scanout_count;++i)p->display_pixels[i]=(uint32_t*)((uint8_t*)p->display_memory+i*STREAM_SCANOUT_BYTES);
     OrbisVideoOutBufferAttribute attribute={0};
     sceVideoOutSetBufferAttribute(&attribute,ORBIS_VIDEO_OUT_PIXEL_FORMAT_A8B8G8R8_SRGB,ORBIS_VIDEO_OUT_TILING_MODE_LINEAR,ORBIS_VIDEO_OUT_ASPECT_RATIO_16_9,1920,1080,1920);
-    rc=sceVideoOutRegisterBuffers(p->display_handle,0,(void*const*)p->display_pixels,3,&attribute);p->display_register=rc;if(rc)return fail_named(p,rc,"VideoOut register");
+    rc=sceVideoOutRegisterBuffers(p->display_handle,0,(void*const*)p->display_pixels,p->scanout_count,&attribute);p->display_register=rc;if(rc)return fail_named(p,rc,"VideoOut register");
     rc=sceVideoOutSetFlipRate(p->display_handle,ORBIS_VIDEO_OUT_FLIP_60HZ);p->display_rate=rc;if(rc)return fail_named(p,rc,"VideoOut flip rate");
+    gpu_prepare(p);
     lock(&p->status_gate);p->view.display_open=true;unlock(&p->status_gate);return 0;
 }
 static int observe_display(X4StreamPipeline *p)
 {
     if(p->display.pending<0)return 0;
     OrbisVideoOutFlipStatus status={0};int rc=sceVideoOutGetFlipStatus(p->display_handle,&status);if(rc)return rc;
+    X4VideoPipelineDisplayOccupancy occupancy;
+    if(!x4_video_pipeline_display_occupancy(&p->display,&occupancy))
+        x4_stream_diagnostics_pacing_queue(p->diagnostics,occupancy.ready,
+            status.numFlipPending,status.numGpuFlipPending);
     uint64_t now=now_us();X4VideoPipelineLease shown;
     rc=x4_video_pipeline_observe_flip(&p->display,(uint64_t)status.flipArg,now,&shown);
     if(rc==X4_PIPELINE_WAIT)return now-p->display.slots[p->display.pending].submitted_us>STREAM_TIMEOUT_US?X4_PIPELINE_STATE:0;
     if(rc)return rc;
     const X4VideoPipelineScanout *s=&p->display.slots[shown.slot];
+    if(p->notice_scanout[shown.slot]){
+        p->notice_scanout[shown.slot]=false;
+        p->display.mailbox_capable=p->notice_mailbox_capable;
+        p->display.mailbox_admission=p->notice_mailbox_admission;
+        p->display.synced=p->notice_synced;
+        p->notice_mode_active=false;
+        /* This is the same picture with UI, not a newly decoded/presented AU.
+         * Do not refresh latency/output cadence timestamps or histograms. */
+        return 0;
+    }
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(p->t26_enabled&&p->t26_hooks.on_flip)
+        p->t26_hooks.on_flip(p->t26_hooks.context,s->output_id,s->decode_end_us,s->submitted_us,now);
+#endif
     if(p->scanout_menu[shown.slot])++p->menu_presentations;
     p->last_flip_ptime=status.ptime;p->last_flip_submitted_us=s->submitted_us;p->last_flip_observed_us=now;
+    p->last_flip_mode=s->presentation_mode;p->last_flip_measured=measured_output(p,s->output_id);
+    if(p->last_flip_measured)x4_stream_diagnostics_presentation(p->diagnostics,s->presentation_mode,
+        now-s->decode_end_us,now-s->submitted_us,now);
+    if(p->last_flip_measured)x4_stream_diagnostics_pacing_observe(p->diagnostics,s->presentation_mode,
+        p->scanout_ready_us[shown.slot]?p->scanout_ready_us[shown.slot]:s->converted_us,
+        status.ptime,now,p->mailbox_clock.period_us);
+    if(p->display.synced){
+        rc=x4_video_pipeline_synced_observed(&p->display,&p->synced_history,now);
+        if(rc)return rc;
+    }
+    x4_video_pipeline_mailbox_anchor(&p->mailbox_clock,status.ptime,s->submitted_us,now,
+        s->presentation_mode!=X4_PRESENT_HSYNC);
+    if(s->presentation_mode==X4_PRESENT_VSYNC_MAILBOX&&s->target_vblank_us&&
+        status.ptime>s->target_vblank_us+p->mailbox_clock.period_us/2)++p->mailbox_late_flips;
     /* SDK ptime occupies the flip process-time field. Accept it only in the
      * submitted..observed process-time interval. Invalid/unknown clock values
      * are omitted, never silently replaced by the later observation time. */
@@ -947,20 +1234,351 @@ static int submit_display(X4StreamPipeline *p)
     X4VideoPipelineLease ready;int rc=x4_video_pipeline_ready_scanout(&p->display,&ready);
     if(rc==X4_PIPELINE_WAIT)return 0;
     if(rc)return rc;
+    bool vsync=x4_stream_diagnostics_vsync_effective(p->diagnostics);
+    bool synced=p->display.synced&&vsync;
+    bool mailbox=!synced&&p->display.mailbox_capable&&vsync;
+    if(synced||(p->notice_mode_active&&p->notice_synced)){
+        OrbisVideoOutFlipStatus status={0};
+        rc=sceVideoOutGetFlipStatus(p->display_handle,&status);if(rc)return rc;
+        X4VideoPipelineDisplayOccupancy occupancy;
+        if(!x4_video_pipeline_display_occupancy(&p->display,&occupancy))
+            x4_stream_diagnostics_pacing_queue(p->diagnostics,occupancy.ready,
+                status.numFlipPending,status.numGpuFlipPending);
+        /* The native queue and our lease must both be empty before another
+         * VSYNC. Retain READY while an external/native GPU flip is pending. */
+        if(status.numFlipPending!=0||status.numGpuFlipPending!=0)return 0;
+    }
+    uint64_t begin=now_us(),target=0;
+    /* Only the validated typed FlipStatus clock is used. Unknown/stale phase
+     * submits a conservative VSYNC warmup, never a guessed HSYNC deadline. */
+    if(mailbox){rc=x4_video_pipeline_mailbox_due(&p->mailbox_clock,begin,p->display.ready_since_us,&target);
+        if(rc==X4_PIPELINE_WAIT)return 0;if(rc)return rc;}
     if(next_stream_flip>=(uint64_t)INT64_MAX)return X4_PIPELINE_EXHAUSTED;
-    uint64_t begin=now_us(),arg=next_stream_flip++;
-    int mode=(p->request.interaction_modes&X4_INTERACTION_VSYNC_OFF)?
-        ORBIS_VIDEO_OUT_FLIP_HSYNC:ORBIS_VIDEO_OUT_FLIP_VSYNC;
+    uint64_t arg=next_stream_flip++;
+    int mode=vsync?ORBIS_VIDEO_OUT_FLIP_VSYNC:ORBIS_VIDEO_OUT_FLIP_HSYNC;
     rc=sceVideoOutSubmitFlip(p->display_handle,ready.slot,mode,(int64_t)arg);
-    uint64_t end=now_us();duration(p,X4_STREAM_FLIP_CALL,end-begin);if(rc)return rc;
-    duration(p,X4_STREAM_CONVERT_TO_SUBMIT,begin-p->display.slots[ready.slot].converted_us);
+    uint64_t end=now_us();if(!p->notice_scanout[ready.slot])duration(p,X4_STREAM_FLIP_CALL,end-begin);if(rc)return rc;
+    X4VideoPipelineScanout *slot=&p->display.slots[ready.slot];
+    slot->presentation_mode=synced?X4_PRESENT_VSYNC_SYNC:
+        vsync?(mailbox?X4_PRESENT_VSYNC_MAILBOX:X4_PRESENT_VSYNC_COLA):X4_PRESENT_HSYNC;
+    slot->target_vblank_us=target;
+    if(!p->notice_scanout[ready.slot])duration(p,X4_STREAM_CONVERT_TO_SUBMIT,begin-slot->converted_us);
     rc=x4_video_pipeline_mark_submitted(&p->display,ready,arg,end);return rc?rc:sceGnmSubmitDone();
+}
+static void gpu_status(X4StreamPipeline *p)
+{
+    if(!p->gpu)return;
+    X4GpuConvertStatus s={0};x4_gpu_convert_status(p->gpu,&s);
+    X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+    g->prepared=s.prepared;g->disabled=g->disabled||s.disabled;g->pending=s.pending;g->quarantined=s.quarantined;
+    g->timeouts=s.timeouts;g->quarantines=s.quarantines;g->late_completed=s.late_completed;
+    g->arena_bytes=(unsigned)s.arena_bytes;g->reserve_result=s.reserve_result;g->map_result=s.map_result;
+    g->submit_result=s.submit_result;g->submit_done_result=s.submit_done_result;
+    g->allowed_result=s.allowed_result;
+    g->checks=s.verification_checks;g->checked_pixels=s.verification_pixels;
+    g->pixels_outside=s.verification_outside;g->max_channel_difference=s.verification_max_difference;
+    g->verification_errors=s.verification_errors;g->verification_captures=s.verification_captures;
+    g->verification_skipped=s.verification_skipped;g->verification_prepared=s.verification_prepared;
+    g->verification_failed=s.verification_failed;g->verification_native_bytes=s.verification_native_bytes;
+    g->verification_control_bytes=s.verification_control_bytes;g->verification_priority_result=atomic_load_explicit(&p->verification_priority_result,memory_order_acquire);
+    g->verification_last_result=s.verification_last_result;g->verification_reserve_result=s.verification_reserve_result;
+    g->verification_map_result=s.verification_map_result;g->verification_control_reserve_result=s.verification_control_reserve_result;
+    g->verification_control_map_result=s.verification_control_map_result;
+    if(s.verification_checks>p->verification_status_checks){
+        x4_ui_perf_record(&g->verify,s.verification_last_worker_us);
+        p->verification_status_checks=s.verification_checks;
+    }
+    if(s.verification_copy_completed>p->verification_status_copies){
+        if(s.verification_last_copy_real_valid){x4_ui_perf_record(&g->verification_copy_real,s.verification_last_copy_real_us);++g->verification_copy_valid;}
+        p->verification_status_copies=s.verification_copy_completed;
+    }
+    if(s.verification_captures>p->verification_status_captures){
+        x4_ui_perf_record(&g->verification_enqueue,s.verification_last_enqueue_us);
+        p->verification_status_captures=s.verification_captures;
+    }
+
+    g->quality_effective_word=s.quality_effective_word;g->last_quality_key=s.quality_key;
+    g->quality_reason=s.quality_reason;g->pausa_repetidas=s.pausa_repetidas;
+    g->quality_arena_bytes=s.quality_arena_bytes;g->quality_intermediate_bytes=s.quality_intermediate_bytes;
+    g->quality_reserve_result=s.quality_reserve_result;g->quality_map_result=s.quality_map_result;
+    g->quality_unmap_result=s.quality_unmap_result;g->quality_release_result=s.quality_release_result;
+    g->intermediate_reserve_result=s.intermediate_reserve_result;g->intermediate_map_result=s.intermediate_map_result;
+    g->intermediate_unmap_result=s.intermediate_unmap_result;g->intermediate_release_result=s.intermediate_release_result;
+    for(unsigned i=0;i<X4_GPU_RESOLUTION_COUNT;++i){
+        const X4GpuTimestampStatus *t=&s.timestamps[i];
+        X4StreamGpuResolutionDiagnostics *r=&g->resolution[i];
+        r->samples=t->samples;r->valid_samples=t->valid_samples;r->invalid=t->invalid;
+        r->pending_samples=t->pending_samples;r->pending_overflow=t->pending_overflow;
+        r->clock_hz=t->clock_hz;r->clock_calibrated=t->clock_calibrated;r->unsupported=t->unsupported;
+        r->first_end_ticks=t->first_end_ticks;r->last_end_ticks=t->last_end_ticks;
+        r->first_observed_us=t->first_observed_us;r->last_observed_us=t->last_observed_us;
+        if(!s.pending&&s.last_resolution==i&&t->samples){r->latest_start_ticks=s.last_start_ticks;r->latest_end_ticks=s.last_end_ticks;}
+        if(t->unsupported&&!p->gpu_timestamp_unsupported_logged[i]){
+            printf("XCloud4 GPU marcas: resolucion=%s marcas=no_soportadas muestras=%llu invalidas=%llu\n",
+                i==X4_GPU_RESOLUTION_720?"720p":"1080p",(unsigned long long)t->samples,(unsigned long long)t->invalid);
+            p->gpu_timestamp_unsupported_logged[i]=true;
+        }
+    }
+    if(s.pause_episodes>g->pause_episodes)p->gpu_pause_cpu_base=g->pause_cpu_frames;
+    g->pause_episodes=s.pause_episodes;
+    g->pause_cpu_selections=s.pause_cpu_frames;
+    uint64_t observed=p->closed?p->ended:now_us();
+    uint64_t active=s.pause_active&&observed>=s.pause_started_us?observed-s.pause_started_us:0;
+    g->pause_active=s.pause_active&&!p->closed;g->pause_current_us=g->pause_active?active:0;
+    uint64_t longest=s.pause_max_us>active?s.pause_max_us:active;
+    if(longest>g->pause_max_us)g->pause_max_us=longest;
+    uint64_t completed=s.pause_episodes-(s.pause_active&&!p->closed?1u:0u);
+    if(completed>p->gpu_pause_log_seen){
+        p->gpu_pause_log_seen=completed;p->gpu_pause_log_pending=true;
+        p->gpu_pause_log_duration=s.pause_active?active:s.pause_last_us;
+        p->gpu_pause_log_frames=g->pause_cpu_frames-p->gpu_pause_cpu_base;
+    }
+    if(s.disabled){g->reason=s.reason;g->effective=0;}
+}
+static void gpu_discard_failed_ready(X4StreamPipeline *p)
+{
+    if(!p->gpu)return;
+    /* The worker owns copied WB pixels only. Collecting a result may disable
+     * future GPU starts, but never retires a live native/scanout GPU lease. */
+    (void)x4_gpu_convert_verification_collect(p->gpu,NULL);gpu_status(p);
+    if(!p->gpu_metrics.verification_failed)return;
+    for(unsigned i=0;i<p->display.scanout_count;++i){
+        if(p->display.slots[i].state!=X4_SCANOUT_READY||!p->scanout_gpu[i])continue;
+        uint64_t output=p->display.slots[i].output_id;
+        /* Retire only unsubmitted GPU READY after EOP. Synced can retain two
+         * READY, so its lease operation preserves a valid CPU picture. */
+        unsigned dropped;
+        if(p->display.synced){
+            X4VideoPipelineLease lease={i,p->display.epoch,p->display.slots[i].lease_generation};
+            dropped=x4_video_pipeline_cancel_ready_lease(&p->display,lease)==0?1u:0u;
+        }else dropped=x4_video_pipeline_cancel_ready_scanout(&p->display);
+        p->gpu_ready_discarded_verification+=dropped;p->scanout_gpu[i]=false;
+        if(dropped)printf("XCloud4 GPU: READY no enviada descartada por verificacion output=%llu\n",
+            (unsigned long long)output);
+        if(!p->display.synced)return;
+    }
+}
+static void gpu_log(X4StreamPipeline *p,uint64_t now)
+{
+    if(!p->gpu_metrics.requested)return;
+    gpu_status(p);
+    /* Coalesce completed episodes within a second; cumulative counters remain
+     * exact. This logs the most recent completion without waiting or looping. */
+    if(p->gpu_pause_log_pending&&(!p->gpu_pause_log_emitted||now-p->gpu_pause_log_at>=1000000)){
+        printf("XCloud4 GPU pausa: fin duracion_us=%llu frames_cpu=%llu\n",
+            (unsigned long long)p->gpu_pause_log_duration,(unsigned long long)p->gpu_pause_log_frames);
+        p->gpu_pause_log_at=now;p->gpu_pause_log_pending=false;p->gpu_pause_log_emitted=true;
+    }
+    if(now-p->gpu_log_at<5000000)return;
+    p->gpu_log_at=now;const X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+    printf("XCloud4 GPU conv: frames=%llu gpu_p50_us=%llu gpu_p95_us=%llu gpu_max_us=%llu esperas_timeout=%llu respaldo_cpu=%s verificacion_fuera=%llu pausas=%llu frames_pausa=%llu pausa_max_us=%llu prep_p50_us=%llu prep_p95_us=%llu prep_max_us=%llu eop_p50_us=%llu eop_p95_us=%llu eop_max_us=%llu verify_p50_us=%llu verify_max_us=%llu",
+        (unsigned long long)g->gpu_frames,(unsigned long long)x4_ui_perf_percentile(&g->time,50),
+        (unsigned long long)x4_ui_perf_percentile(&g->time,95),(unsigned long long)g->time.max,
+        (unsigned long long)g->timeouts,g->reason?g->reason:"no",(unsigned long long)g->pixels_outside,
+        (unsigned long long)g->pause_episodes,(unsigned long long)g->pause_cpu_frames,(unsigned long long)g->pause_max_us,
+        (unsigned long long)x4_ui_perf_percentile(&g->prep,50),(unsigned long long)x4_ui_perf_percentile(&g->prep,95),(unsigned long long)g->prep.max,
+        (unsigned long long)x4_ui_perf_percentile(&g->eop,50),(unsigned long long)x4_ui_perf_percentile(&g->eop,95),(unsigned long long)g->eop.max,
+        (unsigned long long)x4_ui_perf_percentile(&g->verify,50),(unsigned long long)g->verify.max);
+    printf(" sondeo_p50_us=%llu sondeo_p95_us=%llu sondeo_max_us=%llu sondeo_listo=%llu sondeo_agotado=%llu",
+        (unsigned long long)x4_ui_perf_percentile(&g->spin,50),
+        (unsigned long long)x4_ui_perf_percentile(&g->spin,95),(unsigned long long)g->spin.max,
+        (unsigned long long)g->spin_ready,(unsigned long long)g->spin_timeout);
+    for(unsigned i=0;i<X4_GPU_RESOLUTION_COUNT;++i){
+        const X4StreamGpuResolutionDiagnostics *r=&g->resolution[i];
+        printf(" %s_gpu_real_p50_us=%llu %s_gpu_real_p95_us=%llu %s_gpu_real_max_us=%llu %s_gpu_clock_hz=%llu %s_ts_invalidas=%llu",
+            i?"1080p":"720p",(unsigned long long)x4_ui_perf_percentile(&r->real,50),
+            i?"1080p":"720p",(unsigned long long)x4_ui_perf_percentile(&r->real,95),
+            i?"1080p":"720p",(unsigned long long)r->real.max,
+            i?"1080p":"720p",(unsigned long long)r->clock_hz,
+            i?"1080p":"720p",(unsigned long long)r->invalid);
+    }
+#if !X4_PUBLIC
+    printf(" pausa_repetidas=%llu dither_frames=%llu deband_suave_frames=%llu deband_fuerte_frames=%llu cas_baja_frames=%llu cas_media_frames=%llu",
+        (unsigned long long)g->pausa_repetidas,(unsigned long long)g->dither_frames,
+        (unsigned long long)g->deband_soft_frames,(unsigned long long)g->deband_strong_frames,
+        (unsigned long long)g->cas_low_frames,(unsigned long long)g->cas_medium_frames);
+    for(unsigned i=0;i<X4_STREAM_GPU_QUALITY_COMBINATIONS;++i){
+        const X4StreamGpuQualityDiagnostics *q=&g->by_quality[i];if(!q->frames)continue;
+        printf(" quality_%u_frames=%llu quality_%u_gpu_real_p50_us=%llu quality_%u_gpu_real_p95_us=%llu quality_%u_gpu_real_max_us=%llu",
+            i,(unsigned long long)q->frames,i,(unsigned long long)x4_ui_perf_percentile(&q->real,50),
+            i,(unsigned long long)x4_ui_perf_percentile(&q->real,95),i,(unsigned long long)q->real.max);
+    }
+#endif
+    printf("\n");
+}
+static int gpu_release_image(X4StreamPipeline *p,X4VideoPipelineLease image)
+{
+    lock(&p->ring_gate);int rc=x4_video_pipeline_release_conversion(&p->ring,image);unlock(&p->ring_gate);
+    if(rc){p->conversion_cleanup_failed=true;return rc;}
+    atomic_fetch_sub_explicit(&p->conversion_readers,1,memory_order_release);
+    return 0;
+}
+static int gpu_retire_quarantine(X4StreamPipeline *p)
+{
+    if(!p->gpu_quarantine)return 0;
+    uint64_t elapsed=0;X4GpuConvertPoll rc=x4_gpu_convert_poll(p->gpu,now_us(),&elapsed);gpu_status(p);
+    if(rc==X4_GPU_CONVERT_WAIT||rc==X4_GPU_CONVERT_TIMEOUT||rc==X4_GPU_CONVERT_VERIFY_QUARANTINE)return 0;
+    if(rc!=X4_GPU_CONVERT_LATE_DONE&&rc!=X4_GPU_CONVERT_DONE)return X4_PIPELINE_STATE;
+    int released=x4_video_pipeline_retire_quarantine(&p->display,p->gpu_held_scanout);
+    if(released)return released;
+    released=gpu_release_image(p,p->gpu_held_image);if(released)return released;
+    p->gpu_quarantine=false;
+    return x4_stream_wait_notify(&p->decode_wait);
+}
+static void *stream_pipeline_verification_worker(void *argument)
+{
+    X4StreamPipeline *p=argument;
+    atomic_store_explicit(&p->verification_priority_result,scePthreadSetprio(scePthreadSelf(),767),memory_order_release);
+    for(;;){
+        X4GpuVerifySnapshot snapshot;
+        uint64_t begin=now_us();
+        if(x4_gpu_convert_verification_take(p->gpu,&snapshot)){
+            X4GpuVerifyResult result={0};
+            (void)x4_gpu_quality_verify_snapshot(&snapshot,&result,p->verification_scratch,
+                x4_gpu_quality_verify_scratch_bytes());
+            result.worker_us=now_us()-begin;
+            (void)x4_gpu_convert_verification_complete(p->gpu,&result);
+            (void)x4_stream_wait_notify(&p->present_wait);
+        }else if(atomic_load_explicit(&p->verification_stop,memory_order_acquire))break;
+        else (void)x4_stream_wait_block(&p->verification_wait,X4_STREAM_WAIT_MAX_US);
+    }
+    atomic_store_explicit(&p->verification_finished,true,memory_order_release);return NULL;
+}
+static void gpu_prepare(X4StreamPipeline *p)
+{
+    X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+    if(!g->requested||p->gpu_prepare_attempted)return;
+    p->gpu_prepare_attempted=true;p->gpu=x4_gpu_convert_open();
+    p->verification_scratch=malloc(x4_gpu_quality_verify_scratch_bytes());
+    int rc=p->gpu?x4_gpu_convert_verification_prepare(p->gpu):X4_PIPELINE_EXHAUSTED;
+    if(!rc&&p->verification_scratch){
+        g->verification_bytes=x4_gpu_quality_verify_scratch_bytes();
+        rc=x4_probe_thread_create(&p->verification_worker,&p->verification_thread,
+            stream_pipeline_verification_worker,p,"x4-gpu-verify");
+    }else if(!rc)rc=X4_PIPELINE_EXHAUSTED;
+    if(rc){g->disabled=true;g->reason="verification_prepare_failed";}
+    gpu_status(p);
+}
+static void gpu_quality_log(X4StreamPipeline *p,const X4VideoPipelineColor *color,
+    unsigned effective,const char *reason)
+{
+    X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+#if !X4_PUBLIC
+    unsigned requested=p->gpu_quality_requested_word;
+#endif
+    if(!p->gpu_quality_logged||p->gpu_quality_log_word!=effective||
+        p->gpu_quality_log_width!=p->converting_image.layout.visible_width||p->gpu_quality_log_sharp!=color->sharpness||
+        strcmp(p->gpu_quality_log_reason,reason)){
+        g->quality_effective_word=effective;
+        g->quality_reason=reason;
+#if !X4_PUBLIC
+        printf("XCloud4 GPU calidad: requested_word=%u effective_word=%u dither=%u deband=%u CAS=%u sharpness=%u pause_repeat=%u source_width=%u reason=%s\n",
+            requested,effective,!!(effective&X4_GPU_QUALITY_DITHER),(effective&X4_GPU_QUALITY_DEBAND_MASK)>>X4_GPU_QUALITY_DEBAND_SHIFT,
+            !!(effective&X4_GPU_QUALITY_CAS),color->sharpness,!!(effective&X4_GPU_QUALITY_REPEAT),
+            p->converting_image.layout.visible_width,g->quality_reason);
+#else
+        printf("XCloud4 GPU: Dither=%u reason=%s\n",!!(effective&X4_GPU_QUALITY_DITHER),reason);
+#endif
+        p->gpu_quality_logged=true;p->gpu_quality_log_word=effective;
+        p->gpu_quality_log_width=p->converting_image.layout.visible_width;p->gpu_quality_log_sharp=color->sharpness;
+        p->gpu_quality_log_reason=reason;
+    }
+}
+static int gpu_start(X4StreamPipeline *p,const X4VideoPipelineColor *color)
+{
+    X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+    p->gpu_pause_conversion=false;p->gpu_quality_accepted_word=0;
+    unsigned requested=p->gpu_quality_requested_word;
+    bool applicable=g->requested&&p->converting_image.layout.visible_width==1920&&color->convert_mode==X4_CONVERT_SMOOTH;
+    unsigned effective=applicable&&x4_gpu_quality_active(requested,color->sharpness)?requested:0;
+    const char *inactive=requested&&!applicable?"mejoras_solo_1080p_suave":"off";
+    if(!g->requested){
+        /* Capture already names the CPU-only applicability result; preserve
+         * it in the later layout log instead of relabeling it as geometry. */
+        gpu_quality_log(p,color,0,g->quality_reason);return 0;}
+    if(g->disabled){g->effective=0;gpu_quality_log(p,color,0,"gpu_disabled");return 0;}
+    const char *reason=NULL;
+    /* layout_verified is established by the raw NV12 adapter. The SPS also
+     * proves 4:2:0 8-bit; a guessed format is never admitted to the shader. */
+    const X4StreamSps *s=&p->native_info.sps;
+    X4VideoFormat format=p->converting_image.layout_verified&&s->chroma_format_idc==1&&
+        s->bit_depth_luma==8&&s->bit_depth_chroma==8?X4_VIDEO_FORMAT_NV12:X4_VIDEO_FORMAT_UNKNOWN;
+    if(!x4_gpu_convert_admit(&p->converting_image.layout,format,color,&reason)){
+        gpu_quality_log(p,color,0,requested?"mejoras_solo_1080p_suave":"off");
+        g->effective=0;g->reason=reason;return false;
+    }
+    if(!p->gpu||!p->verification_thread.created){g->disabled=true;g->reason="verification_not_ready";return 0;}
+    if((g->gpu_frames%600u)==0u){
+        unsigned first=(unsigned)(((g->gpu_frames/600u)*16u)%(1080u-16u+1u));
+        (void)x4_gpu_convert_verification_request(p->gpu,first,16u);
+    }
+    X4GpuConvertFrame frame={.layout=p->converting_image.layout,.format=format,.color=*color,
+        .source=p->converting_image.pixels,.source_bytes=p->converting_image.owned_bytes,
+        .destination=p->display_pixels[p->scanout_lease.slot],.destination_bytes=STREAM_SCANOUT_BYTES,.destination_pitch=1920,
+        .quality_word=requested};
+    int rc=x4_gpu_convert_start(p->gpu,&frame,now_us());gpu_status(p);
+    gpu_quality_log(p,color,g->quality_effective_word,
+        g->quality_reason?g->quality_reason:inactive);
+    if(rc==X4_GPU_CONVERT_REPEAT){
+        rc=x4_video_pipeline_abort_scanout(&p->display,p->scanout_lease);
+        if(rc){p->conversion_cleanup_failed=true;return rc;}
+        rc=gpu_release_image(p,p->image_lease);if(rc)return rc;
+        p->converting=false;p->gpu_active=false;p->gpu_quality_accepted_word=0;
+        g->effective=2;g->reason="repeat_previous";
+        rc=x4_stream_wait_notify(&p->decode_wait);
+        return rc?rc:2;
+    }
+    if(rc!=X4_GPU_CONVERT_ACCEPTED){g->effective=0;g->reason=x4_gpu_convert_reason(p->gpu);
+        p->gpu_pause_conversion=g->pause_active&&g->allowed_result==0;return false;}
+    p->gpu_active=true;p->gpu_color=*color;p->gpu_quality_accepted_word=effective;
+    g->admitted=true;g->effective=1;g->reason="no";return 1;
 }
 static int finish_conversion(X4StreamPipeline *p,X4StreamOverlay overlay,void *context,bool abandon)
 {
     if(!p->converting)return 0;
     if(p->conversion_cleanup_failed)return X4_PIPELINE_STATE;
     int rc=0;
+    bool gpu_finished=false;
+    if(p->gpu_active){
+        uint64_t elapsed=0;X4GpuConvertPoll state=x4_gpu_convert_poll(p->gpu,now_us(),&elapsed);gpu_status(p);
+        if(state==X4_GPU_CONVERT_WAIT)return X4_PIPELINE_WAIT;
+        if(state==X4_GPU_CONVERT_TIMEOUT||state==X4_GPU_CONVERT_VERIFY_QUARANTINE){
+            rc=x4_video_pipeline_quarantine_scanout(&p->display,p->scanout_lease);if(rc)return rc;
+            p->gpu_held_image=p->image_lease;p->gpu_held_scanout=p->scanout_lease;
+            p->gpu_quarantine=true;p->gpu_active=false;p->converting=false;
+            /* Both leases and the GPU reader remain live. CPU fallback can
+             * use the other two scanouts; quarantine is never displayable. */
+            return 0;
+        }
+        if(state==X4_GPU_CONVERT_LATE_DONE){
+            rc=x4_video_pipeline_abort_scanout(&p->display,p->scanout_lease);if(rc)return rc;
+            rc=gpu_release_image(p,p->image_lease);if(rc)return rc;
+            p->gpu_active=false;p->converting=false;
+            return x4_stream_wait_notify(&p->decode_wait);
+        }
+        if(state!=X4_GPU_CONVERT_DONE)return X4_PIPELINE_STATE;
+        gpu_finished=true;p->gpu_active=false;++p->gpu_metrics.gpu_frames;
+        x4_ui_perf_record(&p->gpu_metrics.time,elapsed);
+        X4GpuConvertStatus timing={0};x4_gpu_convert_status(p->gpu,&timing);
+        x4_ui_perf_record(&p->gpu_metrics.prep,timing.last_prep_us);
+        x4_ui_perf_record(&p->gpu_metrics.eop,timing.last_eop_us);
+        if(timing.last_real_valid&&timing.last_resolution<X4_GPU_RESOLUTION_COUNT)
+            x4_ui_perf_record(&p->gpu_metrics.resolution[timing.last_resolution].real,timing.last_real_us);
+        unsigned qword=p->gpu_quality_accepted_word;
+        if(x4_gpu_quality_active(qword,p->gpu_color.sharpness)){
+            unsigned key=(qword&15u)|(p->gpu_color.sharpness<<4);
+            X4StreamGpuDiagnostics *q=&p->gpu_metrics;
+            if(qword&X4_GPU_QUALITY_DITHER)++q->dither_frames;
+            unsigned deband=(qword&X4_GPU_QUALITY_DEBAND_MASK)>>X4_GPU_QUALITY_DEBAND_SHIFT;
+            if(deband==1)++q->deband_soft_frames;else if(deband==2)++q->deband_strong_frames;
+            if(qword&X4_GPU_QUALITY_CAS){if(p->gpu_color.sharpness==1)++q->cas_low_frames;
+                else if(p->gpu_color.sharpness==2)++q->cas_medium_frames;}
+            if(key<X4_STREAM_GPU_QUALITY_COMBINATIONS){++q->by_quality[key].frames;
+                if(timing.last_real_valid)x4_ui_perf_record(&q->by_quality[key].real,timing.last_real_us);}
+        }
+        (void)x4_stream_wait_notify(&p->verification_wait);
+    }
+    if(!gpu_finished){
     for(unsigned i=0;i<2;++i){StreamConverter *w=&p->converters[i];
         if(atomic_load_explicit(&w->completed,memory_order_acquire)==p->work)continue;
         /* An entry that failed CPU initialization/wait before dispatch may
@@ -971,16 +1589,28 @@ static int finish_conversion(X4StreamPipeline *p,X4StreamOverlay overlay,void *c
             rc=failed?failed:X4_PIPELINE_STATE;
         }else return now_us()-p->conversion_begin>STREAM_TIMEOUT_US?X4_PROBE_STACK_TIMEOUT:X4_PIPELINE_WAIT;
     }
+    }
     uint64_t end=now_us();duration(p,X4_STREAM_CONVERSION,end-p->conversion_begin);
     if(!abandon)x4_ui_perf_record(&p->conversion_menu[p->conversion_menu_open?1:0],end-p->conversion_begin);
+    if(!gpu_finished)
     for(unsigned i=0;i<2;++i)if(p->converters[i].result)rc=p->converters[i].result;
     if(!rc&&!abandon&&!stopping(p)){
         p->scanout_menu[p->scanout_lease.slot]=atomic_load_explicit(&p->menu_open,memory_order_relaxed);
+        /* The next real conversion supersedes a frozen UI snapshot. No
+         * decoder, conversion or displayed-buffer ownership is changed. */
+        free(p->notice_backing);p->notice_backing=NULL;
+        p->notice_scanout[p->scanout_lease.slot]=false;
         if(overlay)overlay(p->display_pixels[p->scanout_lease.slot],context);
         rc=x4_video_pipeline_finish_scanout(&p->display,p->scanout_lease,p->converting_image.output_id,p->converting_image.decode_end_us,end);
-        if(!rc){lock(&p->status_gate);++p->view.conversions;p->view.convert_us+=end-p->conversion_begin;
+        if(!rc){p->scanout_ready_us[p->scanout_lease.slot]=now_us();
+            p->scanout_gpu[p->scanout_lease.slot]=gpu_finished&&
+                p->display.slots[p->scanout_lease.slot].state==X4_SCANOUT_READY;
+            lock(&p->status_gate);++p->view.conversions;p->view.convert_us+=end-p->conversion_begin;
             if(end-p->conversion_begin>p->view.convert_max_us)p->view.convert_max_us=end-p->conversion_begin;
-            unlock(&p->status_gate);}
+            unlock(&p->status_gate);
+            if(!gpu_finished){++p->gpu_metrics.cpu_frames;
+                if(p->gpu_pause_conversion)++p->gpu_metrics.pause_cpu_frames;}
+        }
         else {int aborted=x4_video_pipeline_abort_scanout(&p->display,p->scanout_lease);
             if(aborted){p->conversion_cleanup_failed=true;return aborted;}}
     }else {int aborted=x4_video_pipeline_abort_scanout(&p->display,p->scanout_lease);
@@ -994,11 +1624,107 @@ static int finish_conversion(X4StreamPipeline *p,X4StreamOverlay overlay,void *c
     int notified=x4_stream_wait_notify(&p->decode_wait);if(!rc&&notified)rc=notified;
     return rc;
 }
+int x4_stream_pipeline_redraw_notice(X4StreamPipeline *p,X4StreamOverlay overlay,void *context)
+{
+    if(!p||p->display_handle<0||p->closed||p->video_halted)return X4_PIPELINE_STATE;
+    if(p->converting)return X4_PIPELINE_WAIT;
+    int rc=observe_display(p);if(rc)return rc;
+    if(p->display.pending>=0||p->display.screen<0)return X4_PIPELINE_WAIT;
+    for(unsigned i=0;i<p->scanout_count;++i)
+        if(p->display.slots[i].state==X4_SCANOUT_READY||p->display.slots[i].state==X4_SCANOUT_WRITING)
+            return X4_PIPELINE_WAIT;
+    unsigned source=(unsigned)p->display.screen;
+    if(p->display.slots[source].state!=X4_SCANOUT_SCREEN)return X4_PIPELINE_STATE;
+    if(!p->notice_backing){
+        p->notice_backing=malloc(STREAM_SCANOUT_BYTES);if(!p->notice_backing)return -ENOMEM;
+        memcpy(p->notice_backing,p->display_pixels[source],STREAM_SCANOUT_BYTES);
+    }
+    /* Mailbox normally requires monotonically newer native output IDs. The
+     * sole quiet UI repeat keeps the same ID and uses the existing single-
+     * flight policy temporarily. Restore capability/admission at observation;
+     * no real conversion, READY or pending frame can race this exception. */
+    p->notice_mailbox_capable=p->display.mailbox_capable;
+    p->notice_mailbox_admission=p->display.mailbox_admission;
+    p->notice_synced=p->display.synced;p->display.synced=false;
+    p->display.mailbox_capable=false;p->display.mailbox_admission=false;
+    X4VideoPipelineLease target={0};
+    rc=x4_video_pipeline_acquire_scanout(&p->display,&target);
+    if(rc){p->display.mailbox_capable=p->notice_mailbox_capable;
+        p->display.mailbox_admission=p->notice_mailbox_admission;
+        p->display.synced=p->notice_synced;return rc;}
+    memcpy(p->display_pixels[target.slot],p->notice_backing,STREAM_SCANOUT_BYTES);
+    if(overlay)overlay(p->display_pixels[target.slot],context);
+    const X4VideoPipelineScanout *previous=&p->display.slots[source];
+    rc=x4_video_pipeline_finish_scanout(&p->display,target,previous->output_id,previous->decode_end_us,now_us());
+    if(rc){(void)x4_video_pipeline_abort_scanout(&p->display,target);
+        p->display.mailbox_capable=p->notice_mailbox_capable;p->display.mailbox_admission=p->notice_mailbox_admission;
+        p->display.synced=p->notice_synced;return rc;}
+    p->notice_scanout[target.slot]=true;p->scanout_gpu[target.slot]=false;
+    p->notice_mode_active=true;
+    return submit_display(p);
+}
+
+#if !X4_PUBLIC
+static bool decoded_during_flip(const X4StreamPipeline *p,uint64_t decoded_us)
+{
+    return decoded_us>=p->last_flip_submitted_us&&decoded_us<=p->last_flip_observed_us;
+}
+
+/* Snapshot under the ring gate, immediately before the normal latest selection.
+ * This is a conservative subset: only READY images decoded while the last
+ * measured Cola VSYNC was pending, not ring-full or other presentation drops. */
+static unsigned ready_during_cola_vsync(const X4StreamPipeline *p)
+{
+    if(p->ring.ready<2||!p->last_flip_measured||p->last_flip_mode!=X4_PRESENT_VSYNC_COLA)return 0;
+    unsigned count=0;
+    for(unsigned i=0;i<p->ring.output_count;++i){
+        const X4VideoPipelineOutput *slot=&p->ring.slots[i];
+        if(slot->state==X4_PIPELINE_READY&&decoded_during_flip(p,slot->decode_end_us))++count;
+    }
+    return count;
+}
+#endif
+
+static void pacing_log(X4StreamPipeline *p,uint64_t now,bool final)
+{
+#if !X4_PUBLIC
+    bool locked=!final&&!x4_stream_mutex_trylock(&p->ring_gate);
+    if(final||locked){
+        p->pacing_ring_full=p->ring.discarded_ready;
+        p->pacing_ring_latest=p->ring.discarded_latency;
+        if(locked)unlock(&p->ring_gate);
+    }
+    x4_stream_diagnostics_pacing_drops(p->diagnostics,p->synced_history.synced_recovery_drops,
+        p->display.mailbox_replaced+p->display.mailbox_discarded_old,
+        p->pacing_ring_full,p->pacing_ring_latest,p->pacing_cola_vsync_wait_drops);
+    x4_stream_diagnostics_pacing_log(p->diagnostics,now,final);
+#else
+    (void)p;(void)now;(void)final;
+#endif
+}
+
 int x4_stream_pipeline_present(X4StreamPipeline *p,X4StreamOverlay overlay,void *context)
 {
     if(!p||p->display_handle<0||p->closed||p->video_halted)return X4_PIPELINE_STATE;
+    int gpu_retired=gpu_retire_quarantine(p);if(gpu_retired)return fail_named(p,gpu_retired,"GPU quarantine ownership");
+    gpu_log(p,now_us());
+    X4StreamVsyncTransition transition;
+    while(x4_stream_diagnostics_vsync_take_transition(p->diagnostics,&transition)){
+#if !X4_PUBLIC
+        printf("XCloud4 VSYNC Auto T27: segundo=%llu AU=%llu anterior=%u actual=%u at_us=%llu\n",
+            (unsigned long long)transition.complete_second,(unsigned long long)transition.au_count,
+            transition.previous_vsync,transition.vsync,(unsigned long long)transition.at_us);
+#endif
+    }
+    (void)x4_video_pipeline_display_mailbox_admission(&p->display,
+        p->display.mailbox_capable&&x4_stream_diagnostics_vsync_effective(p->diagnostics));
     int rc=finish_conversion(p,overlay,context,false);if(rc<0)return fail_named(p,rc,"conversion completion");
+    /* A completed worker result can arrive with or without a current GPU
+     * job. Remove suspect unsubmitted GPU READY before any new SubmitFlip;
+     * CPU READY is intentionally preserved and pending flips are immutable. */
+    gpu_discard_failed_ready(p);
     rc=observe_display(p);if(rc)return fail_named(p,rc,"VideoOut flip observation");
+    pacing_log(p,now_us(),false);
     if(stopping(p))return atomic_load(&p->error);
     rc=submit_display(p);if(rc)return fail_named(p,rc,"VideoOut flip submission");
     if(!p->converting){
@@ -1007,9 +1733,18 @@ int x4_stream_pipeline_present(X4StreamPipeline *p,X4StreamOverlay overlay,void 
             X4VideoPipelineColor color;
             lock(&p->ring_gate);
             uint64_t before_latency=p->ring.discarded_latency,before_full=p->ring.discarded_ready;
+#if !X4_PUBLIC
+            unsigned waited_ready=ready_during_cola_vsync(p);
+#endif
             rc=atomic_load_explicit(&p->reconfiguring,memory_order_acquire)?X4_PIPELINE_WAIT:
                 x4_video_pipeline_take_ready(&p->ring,&p->image_lease,NULL);
             menu_ring_drops(p,before_latency,before_full);
+#if !X4_PUBLIC
+            if(!rc&&waited_ready){
+                uint64_t kept=p->ring.slots[p->image_lease.slot].decode_end_us;
+                p->pacing_cola_vsync_wait_drops+=waited_ready-decoded_during_flip(p,kept);
+            }
+#endif
             if(!rc){p->converting_image=p->images[p->image_lease.slot];color=p->color;
                 p->converting=true;atomic_fetch_add_explicit(&p->conversion_readers,1,memory_order_release);}
             unlock(&p->ring_gate);
@@ -1020,6 +1755,9 @@ int x4_stream_pipeline_present(X4StreamPipeline *p,X4StreamOverlay overlay,void 
                 extern void x4_stream_pipeline_test_before_dispatch(X4StreamPipeline *);
                 x4_stream_pipeline_test_before_dispatch(p);
 #endif
+                int gpu_result=gpu_start(p,&color);
+                if(gpu_result<0)return fail_named(p,gpu_result,"GPU repeat ownership");
+                if(gpu_result)return atomic_load_explicit(&p->error,memory_order_acquire);
                 /* Publish the complete job before any notification. Even a
                  * failed first Signal must not leave stripe1 unpublished. */
                 for(unsigned i=0;i<2;++i){StreamConverter *w=&p->converters[i];w->image=p->converting_image;w->color=color;
@@ -1057,7 +1795,8 @@ unsigned x4_stream_pipeline_main_state(const X4StreamPipeline *p)
 {
     if(!p||p->closed||p->video_halted)return 0;
     return (p->converting?X4_STREAM_MAIN_CONVERTING:0u)|
-        (p->display.pending>=0?X4_STREAM_MAIN_FLIP_PENDING:0u);
+        (p->display.pending>=0||((p->display.mailbox_admission||p->display.synced)&&
+            p->display.ready_since_us)?X4_STREAM_MAIN_FLIP_PENDING:0u);
 }
 void x4_stream_pipeline_note_controller_read(X4StreamPipeline *p,uint64_t sampled_us)
 {
@@ -1071,6 +1810,21 @@ void x4_stream_pipeline_record_audio(X4StreamPipeline *p,const X4StreamAudioObse
 int x4_stream_pipeline_wait_present(X4StreamPipeline *p,unsigned timeout_us)
 {
     if(!p||p->closed)return X4_PIPELINE_STATE;
+    if(p->gpu&&x4_gpu_convert_pending(p->gpu)&&!stopping(p)){
+        uint64_t begin=now_us();bool ready=false;
+        /* The submission owner polls only the flushed label. No semaphore
+         * token is consumed, GPU state stays untouched, and the deadline is
+         * exactly the caller's. A token remains for the next normal wait. */
+        while(!stopping(p)&&now_us()-begin<timeout_us){
+            if(x4_gpu_convert_label_ready(p->gpu)){ready=true;break;}
+            _mm_pause();
+        }
+        uint64_t elapsed=now_us()-begin;
+        x4_ui_perf_record(&p->gpu_metrics.spin,elapsed);
+        if(ready)++p->gpu_metrics.spin_ready;
+        else if(!stopping(p)&&elapsed>=timeout_us)++p->gpu_metrics.spin_timeout;
+        return 0;
+    }
     /* Cancellation wakes the current wait, but a still-open error screen
      * must keep blocking on later iterations instead of returning in a loop. */
     int rc=x4_stream_wait_block(&p->present_wait,timeout_us);
@@ -1090,9 +1844,15 @@ void x4_stream_pipeline_record_ingress_cpu(X4StreamPipeline *p,const X4StreamCpu
 static int close_display(X4StreamPipeline *p)
 {
     if(p->display_handle>=0){p->display_close=sceVideoOutClose(p->display_handle);if(p->display_close)return p->display_close;p->display_handle=-1;}
+    if(p->gpu&&x4_gpu_convert_pending(p->gpu)){
+        /* VideoOut can detach, but the GPU still owns part of this allocation.
+         * Keep ALL scanouts and native input storage; a timeout is not EOP. */
+        lock(&p->status_gate);p->view.display_open=false;p->view.display_detached=true;unlock(&p->status_gate);
+        return X4_PROBE_STACK_RETAINED;
+    }
     int rc=x4_video_pipeline_display_closed(&p->display);if(rc)return rc;
-    if(p->display_memory){p->display_unmap=sceKernelMunmap(p->display_memory,3u*STREAM_SCANOUT_BYTES);if(p->display_unmap)return p->display_unmap;p->display_memory=NULL;}
-    if(p->display_allocated){p->display_release=sceKernelReleaseDirectMemory(p->display_offset,3u*STREAM_SCANOUT_BYTES);if(p->display_release)return p->display_release;p->display_allocated=false;}
+    if(p->display_memory){p->display_unmap=sceKernelMunmap(p->display_memory,(size_t)p->scanout_count*STREAM_SCANOUT_BYTES);if(p->display_unmap)return p->display_unmap;p->display_memory=NULL;}
+    if(p->display_allocated){p->display_release=sceKernelReleaseDirectMemory(p->display_offset,(size_t)p->scanout_count*STREAM_SCANOUT_BYTES);if(p->display_release)return p->display_release;p->display_allocated=false;}
     lock(&p->status_gate);p->view.display_open=false;p->view.display_detached=true;unlock(&p->status_gate);return 0;
 }
 static int retain(X4StreamPipeline *p,int rc)
@@ -1132,6 +1892,20 @@ int x4_stream_pipeline_halt_video(X4StreamPipeline *p)
         while(!atomic_load_explicit(&w->finished,memory_order_acquire)&&!w->thread.report.wrapper_result){if(now_us()>deadline)return halt_failed(p,X4_PROBE_STACK_TIMEOUT,"halt converter timeout");sceKernelUsleep(100);}
         int rc=scePthreadJoin(w->id,NULL);x4_probe_thread_joined(&w->thread,rc);if(rc)return halt_failed(p,rc,"halt converter join");
         w->thread.created=false;}}
+    /* A late EOP may have arrived while CPU converters joined. No additional
+     * timeout is started, no GPU wait is unbounded, and no submit occurs. */
+    int gpu_retired=gpu_retire_quarantine(p);
+    if(gpu_retired)return halt_failed(p,gpu_retired,"halt GPU quarantine ownership");
+    atomic_store_explicit(&p->verification_stop,true,memory_order_release);
+    (void)x4_stream_wait_notify(&p->verification_wait);
+    if(p->verification_thread.created){
+        while(!atomic_load_explicit(&p->verification_finished,memory_order_acquire)&&!p->verification_thread.report.wrapper_result){
+            if(now_us()>deadline)return halt_failed(p,X4_PROBE_STACK_TIMEOUT,"halt verification timeout");sceKernelUsleep(100);}
+        int joined=scePthreadJoin(p->verification_worker,NULL);x4_probe_thread_joined(&p->verification_thread,joined);
+        if(joined)return halt_failed(p,joined,"halt verification join");p->verification_thread.created=false;
+    }
+    if(p->gpu){X4GpuVerifyResult verified;(void)x4_gpu_convert_verification_collect(p->gpu,&verified);gpu_status(p);
+        if(!x4_gpu_convert_verification_cancel(p->gpu)&&!x4_gpu_convert_pending(p->gpu))return halt_failed(p,X4_PROBE_STACK_RETAINED,"halt verification ownership");}
     atomic_store_explicit(&p->cleanup_allowed,true,memory_order_release);
     (void)x4_stream_wait_notify(&p->decode_wait);
     if(p->decoder_thread.created){
@@ -1158,8 +1932,10 @@ int x4_stream_pipeline_close(X4StreamPipeline *p)
     /* Full close is called after the ingress owner/callbacks have stopped.
      * Export remains possible on retained native state only after ALL CPU
      * producers joined; otherwise it must not race a live report writer. */
-    if(!p->decoder_thread.created&&!p->converters[0].thread.created&&!p->converters[1].thread.created){
+    if(!p->decoder_thread.created&&!p->converters[0].thread.created&&!p->converters[1].thread.created&&!p->verification_thread.created){
         p->ended=now_us();p->closed=true;
+        gpu_log(p,p->ended);
+        pacing_log(p,p->ended,true);
         publish_admission_failure(p);
         if(!x4_stream_au_queue_quiescent(p->au_queue)){
             int ownership=retain(p,X4_STREAM_AU_FATAL);p->halt_result=rc?rc:ownership;
@@ -1167,6 +1943,17 @@ int x4_stream_pipeline_close(X4StreamPipeline *p)
             return rc?rc:ownership;
         }
     }
+#if X4_PUBLIC && !X4_VIDEO_PROBE
+    /* Full close is the existing ingress/callback quiescence contract, unlike
+     * halt_video. Main unregisters/join-proves RTC before live_media joins the
+     * AU producer, then calls us with wait/audio snapshots already captured.
+     * Trace remains alive here; free happens after live_media releases it.
+     * Diagnostics never change a successful playback-close return code. */
+    if(!rc&&p->closed&&!p->retained&&p->view.display_detached&&!p->exported){
+        int exported=x4_stream_pipeline_export(p,NULL); /* ingress stack unavailable here */
+        printf("XCloud4: public stream diagnostic export rc=%d\n",exported);
+    }
+#endif
     return rc;
 }
 static void write_stack(FILE *f,const X4ProbeStackReport *s)
@@ -1338,23 +2125,54 @@ static void write_cpu_starvation(FILE *f,const X4StreamPipeline *p)
     fputs(",\"error\":",f);if(available)fprintf(f,"%d",a->error);else fputs("null",f);
     fputs("}}",f);
 }
+#if X4_PUBLIC && !X4_VIDEO_PROBE && (defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST))
+static void write_remb(FILE *f,const X4RembSummary *summary)
+{
+    const int64_t delay=summary->max_delay_us;
+    const uint32_t delay_us=(uint32_t)(delay<0?-delay:delay);
+    /* Integer formatting keeps the decimal point independent of locale. */
+    fprintf(f,"\"remb\":{\"modo\":\"adaptable\",\"enviados\":%llu,"
+        "\"actual_mbps\":%u.%06u,\"min_mbps\":%u.%06u,\"max_mbps\":%u.%06u,"
+        "\"bajadas\":%llu,\"subidas\":%llu,\"R_mbps\":%u.%06u,"
+        "\"L_max_ppm\":%u,\"D_max_ms\":%s%u.%03u},",
+        (unsigned long long)summary->sent,
+        summary->sent_bps/1000000u,summary->sent_bps%1000000u,
+        summary->min_sent_bps/1000000u,summary->min_sent_bps%1000000u,
+        summary->max_sent_bps/1000000u,summary->max_sent_bps%1000000u,
+        (unsigned long long)summary->decreases,(unsigned long long)summary->increases,
+        summary->received_bps/1000000u,summary->received_bps%1000000u,
+        summary->max_loss_ppm,delay<0?"-":"",delay_us/1000u,delay_us%1000u);
+}
+#endif
 int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingress_thread)
 {
     if(!p||!p->closed||p->exported)return X4_PIPELINE_STATE;
+#if X4_PUBLIC && !X4_VIDEO_PROBE && (defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST))
+    /* RTC and the receive sampler have stopped before the export. Emit the
+     * closing summary even if the report cannot be opened or written. */
+    X4RembSummary remb;
+    x4_rtc_remb_finish_summary(p->trace,p->started,&remb);
+#endif
     X4StreamAuStats queue={0};int queue_rc=x4_stream_au_queue_try_snapshot(p->au_queue,&queue);
     if(queue_rc){printf("XCloud4 stream: export AU snapshot result=%d (owners must be stopped)\n",queue_rc);return X4_PIPELINE_STATE;}
 #if X4_PUBLIC
-    static volatile int skip_public_export=1;
-    if(skip_public_export){p->exported=true;return 0;}
-#endif
+    const char *path="/data/xcloud4/last-stream.json";
+    const char *temporary="/data/xcloud4/last-stream.json.tmp";
+    errno=0;
+    if(mkdir("/data/xcloud4",0777)&&errno!=EEXIST)return errno?-errno:-1;
+    errno=0;FILE *f=fopen(temporary,"wb");
+#else
     char path[160];int n=snprintf(path,sizeof(path),"/data/xcloud4-stream-%.12s-p%u-%llu.json",X4_SOURCE_ID,(unsigned)p->request.profile,(unsigned long long)p->session);
     if(n<0||(size_t)n>=sizeof(path))return X4_PIPELINE_INVALID;
-    errno=0;FILE *f=fopen(path,"wbx");if(!f){int e=errno;printf("XCloud4 stream: export path=%s result=-1 errno=%d\n",path,e);return e?-e:-1;}
+    errno=0;FILE *f=fopen(path,"wbx");
+#endif
+    if(!f){int e=errno;printf("XCloud4 stream: export path=%s result=-1 errno=%d\n",path,e);return e?-e:-1;}
     const X4StreamVideoInfo *v=&p->native_info;
     unsigned report_depth=v->active_depth?v->active_depth:1;
     uint64_t report_budget=v->native_budget_bytes?v->native_budget_bytes:UINT64_C(134217728);
-    fprintf(f,"{\"schema\":\"X4STREAM_PIPELINE5\",\"source_id\":\"%s\",\"profile\":%u,\"ready_policy\":\"latest\",\"display_policy\":\"one_in_flight\",\"converters\":2,\"native_pipeline_depth\":%u,\"output_memory_type\":0,\"decoder_budget\":%llu,\"scanout_bytes\":25165824,\"AU_queue_bytes\":%zu,\"parameter_queue_bytes\":%u,\"AU_queue_metadata_bytes_including_parameters\":%zu,\"control_context_bytes\":%zu,",
-        X4_SOURCE_ID,(unsigned)p->request.profile,report_depth,(unsigned long long)report_budget,queue.arena_bytes,2u*X4_STREAM_AU_PARAMETER_BYTES*X4_STREAM_AU_ENTRIES,queue.metadata_bytes,sizeof(*p));
+    fprintf(f,"{\"schema\":\"X4STREAM_PIPELINE5\",\"source_id\":\"%s\",\"profile\":%u,\"ready_policy\":\"latest\",\"display_policy\":\"%s\",\"converters\":2,\"native_pipeline_depth\":%u,\"output_memory_type\":0,\"decoder_budget\":%llu,\"scanout_bytes\":%llu,\"AU_queue_bytes\":%zu,\"parameter_queue_bytes\":%u,\"AU_queue_metadata_bytes_including_parameters\":%zu,\"control_context_bytes\":%zu,",
+        X4_SOURCE_ID,(unsigned)p->request.profile,p->display.synced?"synced":p->display.mailbox_capable?"mailbox":"one_in_flight",report_depth,(unsigned long long)report_budget,(unsigned long long)p->scanout_count*STREAM_SCANOUT_BYTES,queue.arena_bytes,2u*X4_STREAM_AU_PARAMETER_BYTES*X4_STREAM_AU_ENTRIES,queue.metadata_bytes,sizeof(*p));
+    fputs("\"network_hud\":",f);x4_net_hud_write_json(f);fputc(',',f);
     fputs("\"menu_pipeline\":{\"conversion_without_menu_us\":",f);x4_ui_perf_write(f,&p->conversion_menu[0]);
     fputs(",\"conversion_with_menu_us\":",f);x4_ui_perf_write(f,&p->conversion_menu[1]);
     fprintf(f,",\"presented_with_menu\":%llu,\"discarded_latency_while_open\":%llu,\"discarded_ring_full_while_open\":%llu,\"scope\":\"conversion tagged at dispatch; presentation tagged at overlay then confirmed by flip; ring drops tagged at the event while open; excludes reconfiguration cancellations\"},",
@@ -1362,10 +2180,24 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
     fputs("\"au_queue\":",f);write_au_queue(f,&queue);
     fputs(",\"keyframe_limiter\":",f);write_keyframe_limiter(f,p->keyframe_limiter);
     fputs(",\"blocking_waits\":",f);write_waits(f,p);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    /* The offline bank owns no live-media/audio/input session. Its own
+     * report does not call this legacy exporter; keep the unused TU linked
+     * without enabling those product workers in the probe. */
+    fputs(",\"interaction\":null",f);
+#else
     fputs(",\"interaction\":",f);x4_live_interaction_metrics_write(f);
-    fprintf(f,",\"synchronization\":{\"vsync\":%s,\"native_flip_mode\":%d,\"decode_end_metric\":\"decode_end_to_flip_observation\",\"submit_end_metric\":\"submit_return_to_flip_observation\",\"scope\":\"session-captured requested native argument; native submission errors propagate unchanged; p50/p95 upper bounds and actual maximum are in metrics.stages; local flip observation is not physical scanout or input latency\"}",
-        (p->request.interaction_modes&X4_INTERACTION_VSYNC_OFF)?"false":"true",
-        (p->request.interaction_modes&X4_INTERACTION_VSYNC_OFF)?ORBIS_VIDEO_OUT_FLIP_HSYNC:ORBIS_VIDEO_OUT_FLIP_VSYNC);
+#endif
+    fprintf(f,",\"synchronization\":{\"requested_policy\":%u,\"effective_vsync_at_end\":%s,\"mailbox_capable\":%s,\"scanouts\":%u,\"display_budget_extension_bytes\":%llu,\"decode_end_metric\":\"decode_end_to_flip_observation\",\"submit_end_metric\":\"submit_return_to_flip_observation\",\"scope\":\"each submitted slot captures its actual native mode; per-mode p50/p95/p99 and max in metrics.presentation_modes; local observation is not physical scanout or input latency\"}",
+        (unsigned)x4_stream_request_vsync_policy(&p->request),x4_stream_diagnostics_vsync_effective(p->diagnostics)?"true":"false",
+        p->display.mailbox_capable?"true":"false",p->scanout_count,(unsigned long long)(p->scanout_count==4u?STREAM_SCANOUT_BYTES:0u));
+    fprintf(f,",\"mailbox\":{\"ready_replaced\":%llu,\"old_outputs_discarded\":%llu,\"late_opportunities\":%llu,\"late_observed_flips\":%llu,\"anchors\":%llu,\"invalid_anchors\":%llu,\"residual_samples\":%llu,\"residual_sum_us\":%llu,\"residual_max_us\":%llu,\"period_estimate_us\":%llu,\"margin_us\":%llu,\"warmup_submissions\":%llu,\"clock_scope\":\"nominal 60Hz seed; validated VSYNC FlipStatus.ptime phase/deltas; untyped GetVblankStatus unused; unknown or stale phase falls back to immediate VSYNC; estimate is not a hard real-time guarantee\"}",
+        (unsigned long long)p->display.mailbox_replaced,(unsigned long long)p->display.mailbox_discarded_old,
+        (unsigned long long)p->mailbox_clock.missed_opportunities,(unsigned long long)p->mailbox_late_flips,
+        (unsigned long long)p->mailbox_clock.anchors,(unsigned long long)p->mailbox_clock.invalid_anchors,
+        (unsigned long long)p->mailbox_clock.residual_samples,(unsigned long long)p->mailbox_clock.residual_sum_us,
+        (unsigned long long)p->mailbox_clock.residual_max_us,(unsigned long long)p->mailbox_clock.period_us,
+        (unsigned long long)p->mailbox_clock.margin_us,(unsigned long long)p->mailbox_clock.warmup_submissions);
     fprintf(f,",\"cpu\":{\"policy_version\":2,\"variant\":%u,\"partially_applied\":%s,\"status_es\":\"%s\",\"native_decoder\":{\"adapter_start_attempted\":%s,\"start_attempted\":%s,\"priority\":%d,\"affinity\":%llu,\"application_result_scope\":\"start_attempted means the same config reached native Query; Query/Create returns are under decoder_start, early adapter rejection is separate\"},\"decode_caller\":",
         (unsigned)p->request.cpu_variant,cpu_partial(p)?"true":"false",cpu_partial(p)?"parcialmente aplicada":"sin fallos de ajuste observados",p->native_start_attempted?"true":"false",
         p->native_start_attempted&&p->native_info.decoder_cpu_priority!=0&&p->native_info.query_result!=INT32_MIN?"true":"false",
@@ -1397,8 +2229,15 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
     fprintf(f, "\"inbound_rtp\":[");
     for (unsigned i = 0; i < summary.stream_count; ++i) {
         if (i) fputc(',', f);
-        fprintf(f, "{\"ssrc\":%u,\"payload_type\":%u,\"packets\":%llu,\"first_us\":%llu,\"last_us\":%llu}",
-            summary.streams[i].ssrc, summary.streams[i].payload_type,
+        fprintf(f, "{"
+#if !X4_PUBLIC
+            "\"ssrc\":%u,"
+#endif
+            "\"payload_type\":%u,\"packets\":%llu,\"first_us\":%llu,\"last_us\":%llu}",
+#if !X4_PUBLIC
+            summary.streams[i].ssrc,
+#endif
+            summary.streams[i].payload_type,
             (unsigned long long)summary.streams[i].packets,
             (unsigned long long)summary.streams[i].first_us,
             (unsigned long long)summary.streams[i].last_us);
@@ -1410,8 +2249,15 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
     fprintf(f, "\"post_halt_video_packets\":%llu,\"first_post_halt_video_us\":%llu,",
         (unsigned long long)atomic_load_explicit(&p->post_halt_video_packets, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&p->first_post_halt_video_us, memory_order_relaxed));
-    fprintf(f, "\"sdp_video\":{\"ssrc\":%u,\"payload_type\":%u,\"mid\":\"%s\"},",
-        summary.sdp_video_ssrc, summary.sdp_video_pt, summary.sdp_video_mid[0] ? summary.sdp_video_mid : "");
+    fprintf(f, "\"sdp_video\":{"
+#if !X4_PUBLIC
+        "\"ssrc\":%u,"
+#endif
+        "\"payload_type\":%u,\"mid\":\"%s\"},",
+#if !X4_PUBLIC
+        summary.sdp_video_ssrc,
+#endif
+        summary.sdp_video_pt, summary.sdp_video_mid[0] ? summary.sdp_video_mid : "");
     uint64_t alias_sent = x4_stream_startup_alias_sent_us(&p->startup);
     uint64_t first_rtp = atomic_load_explicit(&p->first_video_rtp_us, memory_order_acquire);
     uint64_t initial_delay = (first_rtp && alias_sent && first_rtp >= alias_sent) ? (first_rtp - alias_sent) : 0;
@@ -1431,6 +2277,12 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
     x4_server_settings_write_json(f);
     x4_rtc_diag_write_ice_json(f);
     x4_rtc_diag_write_rtt_json(f);
+#if defined(X4_OPENORBIS) && X4_PUBLIC
+    x4_rtc_diag_write_udp_json(f);
+#endif
+#if X4_PUBLIC && !X4_VIDEO_PROBE && (defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST))
+    write_remb(f,&remb);
+#endif
     fprintf(f,"\"requested\":{\"width\":%u,\"height\":%u,\"fps\":%u,\"bitrate_kbps\":%u,\"os_name\":\"%s\",\"display_info\":%s},",
         p->request.width,p->request.height,p->request.fps,p->request.bitrate_kbps,p->request.os_name,p->request.display_info?"true":"false");
     fprintf(f,"\"request_profile\":{\"id\":%u,\"label\":\"%s\",\"color_preference\":%u},",
@@ -1449,6 +2301,7 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
     fprintf(f,"\"color\":{\"active\":%s,\"received_matrix_coefficients\":%u,\"matrix_coefficients\":%u,\"preference\":%u,\"selected_matrix\":\"%s\",\"full_range\":%s,\"full_range_implemented\":true},\"dequeued_AU\":%llu,\"geometry_warnings\":%llu,",
         p->view.native_ready?"true":"false",p->view.received_matrix,p->color.matrix_coefficients,p->request.color_preference,p->color.matrix_coefficients==1?"BT709":"BT601",p->color.full_range?"true":"false",(unsigned long long)atomic_load(&p->dequeued),(unsigned long long)v->geometry_warnings);
     fprintf(f,"\"conversion_path\":{\"observed\":%s,\"last\":\"%s\",\"scalar_outputs\":%llu},",p->conversion_path_seen?"true":"false",p->conversion_path==X4_PIPELINE_CONVERT_SSE2?"SSE2":"scalar",(unsigned long long)p->scalar_outputs);
+    fputs("\"gpu_conversion\":",f);(void)x4_stream_diagnostics_write_gpu(f,&p->gpu_metrics);fputc(',',f);
     uint64_t conv_p50=0, conv_p95=0, conv_max=0;
     const char *sharp_names[]={"No","Baja","Media"};
     (void)x4_stream_diagnostics_stage_percentile(p->diagnostics,X4_STREAM_CONVERSION,50,&conv_p50,&conv_max);
@@ -1465,8 +2318,8 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
         (unsigned long long)v->native_budget_bytes,(unsigned long long)v->budget_auxiliary_bytes,v->held_output_mask,v->live_input_count,v->active_depth==2?3:1);
     fprintf(f,"\"native\":{\"attempted\":%s,\"planned_bytes\":%llu,\"queried_compute\":%llu,\"queried_cpu\":%llu,\"queried_gpu\":%llu,\"queried_shared\":%llu,\"queried_frame\":%llu,\"compute_query\":%d,\"allocate_queue\":%d,\"query\":%d,\"create\":%d,\"last_decode\":%d,\"delete\":%d,\"release_queue\":%d,\"close\":%d,\"retained\":%s,\"creation_uncertain\":%s},",
         p->native_start_attempted?"true":"false",(unsigned long long)v->planned_native_bytes,(unsigned long long)v->queried_compute_bytes,(unsigned long long)v->queried_cpu_bytes,(unsigned long long)v->queried_gpu_bytes,(unsigned long long)v->queried_shared_bytes,(unsigned long long)v->queried_frame_bytes,v->compute_query_result,v->allocate_queue_result,v->query_result,v->create_result,p->native_decode_result,v->delete_decoder_result,v->release_queue_result,v->close_result,v->retained?"true":"false",v->creation_uncertain?"true":"false");
-    fprintf(f,"\"ring\":{\"discarded_latency\":%llu,\"discarded_ring_full\":%llu,\"cancelled_leases\":%llu,\"rejected\":%llu,\"peak_occupied\":%u,\"peak_ready\":%u,\"final_occupied\":%u},\"scanout\":{\"peak_occupied\":%u,\"peak_in_flight\":%u,\"allocate\":%d,\"map\":%d,\"register\":%d,\"rate\":%d,\"close\":%d,\"unmap\":%d,\"release\":%d},",
-        (unsigned long long)p->ring.discarded_latency,(unsigned long long)p->ring.discarded_ready,(unsigned long long)p->ring.cancelled,(unsigned long long)p->ring.rejected,p->ring.peak_occupied,p->ring.peak_ready,p->ring.occupied,p->display.peak_occupied,p->display.peak_in_flight,p->display_allocate,p->display_map,p->display_register,p->display_rate,p->display_close,p->display_unmap,p->display_release);
+    fprintf(f,"\"ring\":{\"discarded_latency\":%llu,\"discarded_ring_full\":%llu,\"cancelled_leases\":%llu,\"rejected\":%llu,\"peak_occupied\":%u,\"peak_ready\":%u,\"final_occupied\":%u},\"scanout\":{\"peak_occupied\":%u,\"peak_in_flight\":%u,\"allocate\":%d,\"map\":%d,\"register\":%d,\"rate\":%d,\"close\":%d,\"unmap\":%d,\"release\":%d,\"gpu_ready_discarded_verification\":%llu},",
+        (unsigned long long)p->ring.discarded_latency,(unsigned long long)p->ring.discarded_ready,(unsigned long long)p->ring.cancelled,(unsigned long long)p->ring.rejected,p->ring.peak_occupied,p->ring.peak_ready,p->ring.occupied,p->display.peak_occupied,p->display.peak_in_flight,p->display_allocate,p->display_map,p->display_register,p->display_rate,p->display_close,p->display_unmap,p->display_release,(unsigned long long)p->gpu_ready_discarded_verification);
     fprintf(f,"\"diagnostic_record_cost\":{\"calls\":%llu,\"total_us\":%llu,\"max_observed_lower_bound_us\":%llu,\"scope\":\"histogram updates only; excludes export, Trace and callback counters; maximum CAS may omit contention\"},\"stacks\":[",
         (unsigned long long)atomic_load(&p->diagnostic_calls),(unsigned long long)atomic_load(&p->diagnostic_us),(unsigned long long)atomic_load(&p->diagnostic_max_us));
     write_stack(f,ingress_thread);fputc(',',f);write_stack(f,&p->decoder_thread.report);for(unsigned i=0;i<2;++i){fputc(',',f);write_stack(f,&p->converters[i].thread.report);}fputs("],\"metrics\":",f);
@@ -1481,6 +2334,13 @@ int x4_stream_pipeline_export(X4StreamPipeline *p,const X4ProbeStackReport *ingr
         if(sync_result&&!first)first=((uint32_t)sync_result&0xffff0000u)==0x80020000u?(int)((uint32_t)sync_result&0xffffu):EIO;
     }
     errno=0;if(fclose(f)&&!first)first=errno?errno:EIO;
+#if X4_PUBLIC
+    /* Same-directory POSIX rename replaces only the last public report.
+     * A failed write keeps the previous complete report; old /data reports
+     * from earlier versions are deliberately not touched. */
+    if(!first){errno=0;if(rename(temporary,path))first=errno?errno:EIO;}
+    if(first)(void)remove(temporary);
+#endif
     p->exported=true;printf("XCloud4 stream: export path=%s result=%d errno=%d native_fsync=%d\n",path,first?-1:0,first,sync_result);
     return first?(first<0?first:-first):0;
 }
@@ -1488,6 +2348,23 @@ int x4_stream_pipeline_free(X4StreamPipeline *p)
 {
     if(!p)return 0;
     if(!p->closed||p->retained)return X4_PIPELINE_STATE;
+    if(p->gpu){
+        gpu_status(p);
+        if(!x4_gpu_convert_close(&p->gpu,now_us())){gpu_status(p);return retain(p,X4_PROBE_STACK_RETAINED);}
+        /* Successful close proves every owned native map/allocation retired.
+         * Keep NOT_RUN for resources that were never acquired or mapped. */
+        X4StreamGpuDiagnostics *g=&p->gpu_metrics;
+        if(g->quality_arena_bytes){
+            if(!g->quality_map_result)g->quality_unmap_result=0;
+            if(!g->quality_reserve_result)g->quality_release_result=0;
+        }
+        if(g->quality_intermediate_bytes){
+            if(!g->intermediate_map_result)g->intermediate_unmap_result=0;
+            if(!g->intermediate_reserve_result)g->intermediate_release_result=0;
+        }
+    }
+    free(p->notice_backing);p->notice_backing=NULL;
+    free(p->verification_scratch);p->verification_scratch=NULL;
     x4_stream_au_queue_stop(p->au_queue);
     if(!x4_stream_au_queue_destroy(p->au_queue)){
         int rc=retain(p,X4_STREAM_AU_FATAL);(void)fail_named(p,rc,"AU queue retained during free");
@@ -1495,7 +2372,8 @@ int x4_stream_pipeline_free(X4StreamPipeline *p)
     }
     p->au_queue=NULL;
     for(unsigned i=0;i<2;++i){int destroyed=x4_stream_wait_destroy(&p->converters[i].work_wait);if(destroyed)return retain(p,destroyed);}
-    int destroyed=x4_stream_wait_destroy(&p->decode_wait);if(destroyed)return retain(p,destroyed);
+    int destroyed=x4_stream_wait_destroy(&p->verification_wait);if(destroyed)return retain(p,destroyed);
+    destroyed=x4_stream_wait_destroy(&p->decode_wait);if(destroyed)return retain(p,destroyed);
     destroyed=x4_stream_wait_destroy(&p->present_wait);if(destroyed)return retain(p,destroyed);
     /* Keep the status gate alive while any preceding destroy may need to
      * publish retention. A failed native destroy leaves its object owned. */

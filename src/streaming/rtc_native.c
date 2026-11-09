@@ -5,16 +5,38 @@
 #include <orbis/libkernel.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 
 static int32_t (*native_random)(void *, size_t);
 static int32_t (*native_exit)(const char *, const char *const *);
+
+#if !X4_PUBLIC
+void x4_rtc_lab_native_transport_state(int source, int state);
+#endif
 
 /* Dependency diagnostics accept only numeric events and status values.
  * No exception text, offer, ICE credential or provider response is logged. */
 void x4_native_rtc_diagnostic(int event,int value)
 {
     int saved_errno = errno;
+#if !X4_PUBLIC
+    if ((event == 80 || event == 87) && (value == 0 || value == 4))
+        x4_rtc_lab_native_transport_state(event, value);
+#endif
+    if (event >= 65 && event <= 68) {
+        static _Atomic unsigned successful_so_nbio;
+        bool success = event <= 66 ? value == 0 :
+                       event == 67 ? value != 0 : value == (int)sizeof(int);
+        if (success) {
+            unsigned bit = 1u << (event - 65);
+            if (atomic_load_explicit(&successful_so_nbio, memory_order_relaxed) & bit)
+                return;
+            if (atomic_fetch_or_explicit(&successful_so_nbio, bit, memory_order_relaxed) & bit)
+                return;
+        }
+    }
     const char *label;
     switch(event) {
     case 1: label="invalid_argument"; break;

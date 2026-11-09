@@ -720,4 +720,8 @@ from prepare_receiver_nack import apply as apply_receiver_nack
 apply_receiver_nack(base)
 from prepare_rtt_api import apply as apply_rtt_api
 apply_rtt_api(base)
+from prepare_rr43b import apply as apply_video_rr
+apply_video_rr(base)
+from prepare_udp_buffer46c import apply as apply_udp_buffers
+apply_udp_buffers(base)
 print('OpenOrbis dependency overlay prepared:', overlay)

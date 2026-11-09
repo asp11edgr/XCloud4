@@ -9,7 +9,11 @@
 #include "../streaming/stream_profile.h"
 #include "../streaming/stream_startup.h"
 #include "stream_wait.h"
+#include "stream_diagnostics.h"
 #include "stream_cpu.h"
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#include "probe_t26_pipeline.h"
+#endif
 
 typedef struct X4StreamPipeline X4StreamPipeline;
 typedef struct X4KeyframeLimiter X4KeyframeLimiter;
@@ -71,6 +75,9 @@ uint64_t x4_stream_pipeline_ingress_stall_recoveries(const X4StreamPipeline *);
  * after conversion, before SubmitFlip, on a buffer not SCREEN or PENDING. */
 int x4_stream_pipeline_display_open(X4StreamPipeline *);
 int x4_stream_pipeline_present(X4StreamPipeline *, X4StreamOverlay, void *context);
+/* Main-only punctual frozen-picture UI update:0 applied, WAIT retry, <0 error.
+ * Reads SCREEN, writes only an acquired FREE slot. Not a new media image. */
+int x4_stream_pipeline_redraw_notice(X4StreamPipeline *,X4StreamOverlay,void *context);
 enum { X4_STREAM_MAIN_CONVERTING=1, X4_STREAM_MAIN_FLIP_PENDING=2 };
 /* Main owner only: these fields are written by the same owner, so this
  * observation adds no lock, and is not a cross-thread status snapshot. */
@@ -110,3 +117,13 @@ int x4_stream_pipeline_export(X4StreamPipeline *, const X4ProbeStackReport *ingr
 /* Free only after close and all producers join. Failure retains the context
  * and its borrowed owners; the caller must not free their parent storage. */
 int x4_stream_pipeline_free(X4StreamPipeline *);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+/* Probe controls are cold-only, before start and before opening VideoOut.
+ * Legacy t26_create remains Always/Cola. No decoder configuration is changed. */
+int x4_stream_pipeline_t26_set_present_policy(X4StreamPipeline *,unsigned mode,bool mailbox);
+int x4_stream_pipeline_t26_set_measure_window(X4StreamPipeline *,
+    uint64_t first_output_id,uint64_t last_output_id);
+/* Cold summary only after all observers have joined, before free. */
+bool x4_stream_pipeline_t26_presentation_summary(const X4StreamPipeline *,
+    X4PipelinePresentationSummary *);
+#endif

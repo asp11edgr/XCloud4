@@ -8,6 +8,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#include <stdbool.h>
+#include "probe_t26_samples.h"
+#endif
 #ifdef X4_OPENORBIS
 #include <orbis/libkernel.h>
 #include "probe_case_catalog.h"
@@ -269,6 +273,32 @@ FILE *x4_probe_files_report_open(const char *path, X4ProbeFileStatus *out)
 }
 FILE *x4_probe_files_sample_open(const char *path, X4ProbeFileStatus *out)
 {
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    /* Only the new bank's ten compiled sample paths may use this subfolder.
+     * Keep legacy probe/public path validation and manifests unchanged. */
+    char t26_root[X4_PROBE_FILE_PATH_MAX];
+    int t26_n=snprintf(t26_root,sizeof(t26_root),"%s/xcloud4-probe/t26",data_root());
+    const char *t26_leaf=t26_n>0&&(size_t)t26_n<sizeof(t26_root)?fixed_leaf(path,t26_root):NULL;
+    if(t26_leaf){
+        uint64_t expected=0;
+        bool found=false;
+        for(unsigned i=0;i<X4_T26_SAMPLE_COUNT;++i){
+            const X4T26GeneratedSample *sample=&x4_t26_generated_samples[i];
+            const char *clip=strrchr(sample->clip_path,'/');
+            const char *index=strrchr(sample->index_path,'/');
+            if(clip&&!strcmp(t26_leaf,clip+1)){expected=sample->clip_bytes;found=true;break;}
+            if(index&&!strcmp(t26_leaf,index+1)){expected=sample->index_bytes;found=true;break;}
+        }
+#if defined(X4_PROBE_FILES_TESTING) && !defined(X4_OPENORBIS)
+        if(!fixture_manifest_required)found=true;
+#endif
+        if(!found){policy(out,"T26 clip fuera del manifiesto compilado",EINVAL);return NULL;}
+        errno=0;int fd=open(path,O_RDONLY),saved=errno;
+        X4ProbeFileCall opened=observe("open(T26 sample read)",fd,saved,0);
+        if(fd<0){failed(out,"Abrir muestra T26",opened);return NULL;}
+        return descriptor_stream(fd,0,t26_leaf,expected,out,opened);
+    }
+#endif
     char root[X4_PROBE_FILE_PATH_MAX];
     errno = 0; int n = snprintf(root, sizeof(root), "%s/xcloud4-probe", data_root()), saved = errno;
     (void)observe("snprintf(sample root)", n, saved, 0);

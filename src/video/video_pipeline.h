@@ -8,6 +8,7 @@
  * objects, threads, transport or allocator; the caller supplies synchronization. */
 
 enum { X4_PIPELINE_OUTPUTS = 4, X4_PIPELINE_SCANOUTS = 3,
+    X4_PIPELINE_SCANOUT_CAPACITY = 4,
     X4_PIPELINE_WIDTH = 1920, X4_PIPELINE_HEIGHT = 1080,
     X4_PIPELINE_OK = 0, X4_PIPELINE_WAIT = 1,
     X4_PIPELINE_INVALID = -7601, X4_PIPELINE_STALE = -7602,
@@ -79,35 +80,78 @@ unsigned x4_video_pipeline_cancel_ready(X4VideoPipelineRing *);
 bool x4_video_pipeline_ring_idle(const X4VideoPipelineRing *);
 
 typedef enum { X4_SCANOUT_FREE, X4_SCANOUT_WRITING, X4_SCANOUT_READY,
-    X4_SCANOUT_PENDING, X4_SCANOUT_SCREEN } X4VideoPipelineScanoutState;
+    X4_SCANOUT_PENDING, X4_SCANOUT_SCREEN, X4_SCANOUT_QUARANTINED
+} X4VideoPipelineScanoutState;
 typedef struct {
     X4VideoPipelineScanoutState state;
     uint64_t lease_generation, output_id, decode_end_us, ready_order;
     uint64_t converted_us, flip_arg, submitted_us, observed_us;
+    uint64_t target_vblank_us;
+    unsigned presentation_mode; /* 0=HSYNC, 1=VSYNC Cola, 2=VSYNC Mailbox */
 } X4VideoPipelineScanout;
 typedef struct {
-    X4VideoPipelineScanout slots[X4_PIPELINE_SCANOUTS];
+    X4VideoPipelineScanout slots[X4_PIPELINE_SCANOUT_CAPACITY];
     uint64_t epoch, next_generation, next_ready_order, last_submitted_arg;
     uint64_t submitted, observed, rejected;
+    uint64_t last_submitted_output_id, mailbox_replaced, mailbox_discarded_old;
+    uint64_t ready_since_us;
     unsigned peak_occupied, peak_in_flight;
+    unsigned scanout_count;
+    bool mailbox_capable, mailbox_admission;
+    /* Occupies the existing bool padding, preserving display/scanout ABI. */
+    bool synced;
     int pending, screen;
 } X4VideoPipelineDisplay;
+/* Display-owner-only history stored separately from the embedded ring so
+ * decoder/GPU fields keep the exact same offsets in the production owner. */
+typedef struct {
+    uint8_t synced_history[30];
+    unsigned synced_history_count, synced_history_next;
+    uint64_t synced_last_observed_us, synced_recovery_drops;
+    uint64_t synced_last_dropped_output;
+} X4VideoPipelineSyncHistory;
 typedef struct {
     unsigned free, writing, ready, pending, screen, occupied, in_flight;
+    unsigned quarantined; /* excluded from the one displayable frame in flight */
 } X4VideoPipelineDisplayOccupancy;
 int x4_video_pipeline_display_init(X4VideoPipelineDisplay *, uint64_t epoch);
+/* Cold initialization only. Legacy init is exactly three/Cola. Mailbox can
+ * be exercised with three or four slots; production selects four so SCREEN,
+ * PENDING, READY and WRITING can coexist without reusing any owner. */
+int x4_video_pipeline_display_init_mode(X4VideoPipelineDisplay *,uint64_t epoch,
+    unsigned scanouts,bool mailbox_capable);
+/* Cold-only initialization. Uses the existing four scanouts, oldest READY
+ * selection and bounded latency recovery after about 500 ms of backlog. */
+int x4_video_pipeline_display_init_synced(X4VideoPipelineDisplay *,uint64_t epoch);
+void x4_video_pipeline_sync_history_init(X4VideoPipelineSyncHistory *);
+/* Call only after an exact observe_flip succeeds, before submitting another
+ * frame. UI-only refreshes are excluded by the owner. Never touches a native
+ * pending, writing or currently displayed slot. */
+int x4_video_pipeline_synced_observed(X4VideoPipelineDisplay *,X4VideoPipelineSyncHistory *,uint64_t observed_us);
+/* Admission changes only. Already-owned work drains under its original
+ * safety contract; this never releases or rewrites an owned slot. */
+int x4_video_pipeline_display_mailbox_admission(X4VideoPipelineDisplay *,bool enabled);
 /* Pure snapshot under the same owner lock. SCREEN counts as occupied but is
- * not in flight. WRITING + READY + PENDING must never exceed one. */
+ * not in flight. Cola permits one WRITING/READY/PENDING total; Mailbox permits
+ * one of each, and never two native pending flips. */
 int x4_video_pipeline_display_occupancy(const X4VideoPipelineDisplay *,
     X4VideoPipelineDisplayOccupancy *);
-/* One frame in flight: WAIT while any conversion, ready scanout or submitted
- * flip owns a slot. Acquire this BEFORE taking the latest native READY. */
+/* Cola: WAIT while any conversion, READY or PENDING owns a slot. Mailbox:
+ * acquire one FREE writer alongside at most one READY and one PENDING.
+ * Always acquire BEFORE taking latest native READY; SCREEN is never writable. */
 int x4_video_pipeline_acquire_scanout(X4VideoPipelineDisplay *, X4VideoPipelineLease *);
 int x4_video_pipeline_finish_scanout(X4VideoPipelineDisplay *, X4VideoPipelineLease,
     uint64_t output_id, uint64_t decode_end_us, uint64_t converted_us);
 int x4_video_pipeline_abort_scanout(X4VideoPipelineDisplay *, X4VideoPipelineLease);
+/* A CPU timeout does not revoke GPU ownership. A quarantined slot cannot be
+ * acquired, flipped, cancelled or closed. Retire it ONLY after its exact EOP. */
+int x4_video_pipeline_quarantine_scanout(X4VideoPipelineDisplay *, X4VideoPipelineLease);
+int x4_video_pipeline_retire_quarantine(X4VideoPipelineDisplay *, X4VideoPipelineLease);
 /* Cancel only unsubmitted READY. Never releases WRITING, PENDING or SCREEN. */
 unsigned x4_video_pipeline_cancel_ready_scanout(X4VideoPipelineDisplay *);
+/* Cancel only this unsubmitted READY lease. Other READY/WRITING/native-owned
+ * slots remain owned. Used when a verification result invalidates one image. */
+int x4_video_pipeline_cancel_ready_lease(X4VideoPipelineDisplay *,X4VideoPipelineLease);
 /* Call only AFTER VideoOutClose succeeds and all converters have joined.
  * Retires display references while preserving generations and statistics. */
 int x4_video_pipeline_display_closed(X4VideoPipelineDisplay *);
@@ -120,6 +164,24 @@ int x4_video_pipeline_mark_submitted(X4VideoPipelineDisplay *, X4VideoPipelineLe
  * only the previous SCREEN. Unrelated/stale observations never free buffers. */
 int x4_video_pipeline_observe_flip(X4VideoPipelineDisplay *, uint64_t flip_arg,
     uint64_t observed_us, X4VideoPipelineLease *presented);
+
+/* No untyped Vblank ABI is invented. The caller supplies only validated
+ * VSYNC FlipStatus.ptime anchors in process-time microseconds. This estimates
+ * refresh phase; it is not a physical scanout timestamp or a hard RT bound. */
+typedef struct {
+    uint64_t anchor_us,period_us,margin_us,target_us;
+    uint64_t anchors,invalid_anchors,residual_samples,residual_sum_us,residual_max_us;
+    uint64_t missed_opportunities,warmup_submissions;
+    bool valid;
+} X4VideoPipelineMailboxClock;
+void x4_video_pipeline_mailbox_clock_init(X4VideoPipelineMailboxClock *);
+bool x4_video_pipeline_mailbox_anchor(X4VideoPipelineMailboxClock *,
+    uint64_t ptime,uint64_t submitted_us,uint64_t observed_us,bool vsync);
+/* WAIT preserves READY for replacement. Without a valid anchor one VSYNC
+ * warm-up submission is admitted immediately. Late opportunities advance to
+ * a later refresh; they never submit HSYNC or rewrite PENDING/SCREEN. */
+int x4_video_pipeline_mailbox_due(X4VideoPipelineMailboxClock *,uint64_t now_us,
+    uint64_t ready_since_us,uint64_t *target_us);
 
 typedef struct { unsigned first_row, end_row; } X4VideoPipelineStripe;
 int x4_video_pipeline_stripe(unsigned height, unsigned workers, unsigned index,
@@ -192,3 +254,23 @@ int x4_video_pipeline_convert_stripe_color(const X4VideoNv12Layout *,
 int x4_video_pipeline_convert_reference_color(const X4VideoNv12Layout *,
     const uint8_t *source, size_t source_bytes, uint32_t *destination,
     size_t destination_bytes, const X4VideoPipelineColor *);
+/* Lab verification: copy up to 16 visible WC scanout rows to cached memory.
+ * Source must be 16-byte aligned, its row pitch a multiple of four pixels.
+ * This is a readback helper only; it does not select a conversion backend. */
+int x4_video_pipeline_gpu_copy_rows(const uint32_t *source, size_t source_bytes,
+    unsigned source_pitch, uint32_t *destination, size_t destination_bytes,
+    unsigned first_row, unsigned rows);
+/* GPU verification only: an admitted 1080p row slice into a compact CPU
+ * scratch surface. Reuses the unchanged CPU row converters and color math. */
+int x4_video_pipeline_gpu_reference_rows(const X4VideoNv12Layout *,
+    const uint8_t *source, size_t source_bytes, uint32_t *destination,
+    size_t destination_bytes, unsigned first_row, unsigned rows,
+    const X4VideoPipelineColor *);
+/* Lab streaming's two converters reserve scratch slots 0/1. This main-owner
+ * reference reserves production slot 2; the probe's three-converter program
+ * is mutually exclusive. Destination addresses a full 1920x1080 image, but
+ * only [first_row,first_row+rows) is written (at most 16 rows). */
+int x4_video_pipeline_gpu_reference_720_rows(const X4VideoNv12Layout *,
+    const uint8_t *source, size_t source_bytes, uint32_t *destination,
+    size_t destination_bytes, unsigned first_row, unsigned rows,
+    const X4VideoPipelineColor *);

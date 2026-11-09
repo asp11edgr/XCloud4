@@ -27,12 +27,24 @@ int x4_release_parse_tag(const char *json_body, size_t length, bool is_public,
 /* Background update check lifecycle. Runs once at startup with a 10s total timeout. */
 void x4_release_check_start(void);
 void x4_release_check_stop(void);
+/* Main thread only. Reaps a completed check and starts another. Returns false
+ * if a check is already running or its worker could not be started. */
+bool x4_release_check_restart(void);
 enum X4UpdateStatus x4_release_check_status(char *version_out, size_t cap);
 
 /* Main-thread public copy of the release tag, never a remote URL. Available
  * only for AVAILABLE and a complete 1..63 byte ASCII [A-Za-z0-9._-] tag.
  * Returns false and clears out when absent/invalid or capacity is too small. */
 bool x4_release_check_tag(char *out, size_t capacity);
+
+#define X4_UPDATE_PUBLIC_MANIFEST "xcloud4-update-public.json"
+#define X4_UPDATE_LAB_MANIFEST "xcloud4-update-lab.json"
+#define X4_UPDATE_PUBLIC_SIGNATURE X4_UPDATE_PUBLIC_MANIFEST ".sig"
+#define X4_UPDATE_LAB_SIGNATURE X4_UPDATE_LAB_MANIFEST ".sig"
+/* Main-thread presence check for the active edition's signed metadata names.
+ * Assets are hints from GitHub. They convey neither an authenticated path nor
+ * authorization to install anything. */
+bool x4_release_check_asset(const char *asset_name);
 
 /* Testing/rendering override helper */
 void x4_release_check_set_mock(enum X4UpdateStatus status, const char *version);

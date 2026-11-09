@@ -44,7 +44,7 @@ int main(void)
 {
     X4StreamRequestConfig original=x4_stream_settings_get();
     assert(original.profile==X4_REQUEST_1080P_G&&original.color_preference==X4_COLOR_AUTO_709);
-    assert(original.cpu_variant==X4_CPU_0&&original.decoder_depth==X4_DEPTH_AUTO&&original.interaction_modes==X4_INTERACTION_VSYNC_OFF);
+    assert(original.cpu_variant==X4_CPU_0&&original.decoder_depth==X4_DEPTH_AUTO&&original.interaction_modes==0);
     assert(!x4_stream_settings_set((X4StreamRequestProfile)X4_REQUEST_PROFILE_COUNT,X4_COLOR_AUTO_709));
     assert(!x4_stream_settings_set(X4_REQUEST_720P60,(X4StreamColorPreference)-1));
     assert(x4_stream_settings_get().profile==X4_REQUEST_1080P_G);

@@ -40,6 +40,9 @@ void x4_xbox_work_free(X4XboxWork *work);
  * MRU failures are reported separately and do not invalidate that catalog. */
 const X4CatalogSnapshot *x4_xbox_catalog(X4XboxWork *work, const char *microsoft_token,
     const _Atomic int *cancel, X4XboxProgress progress, void *context);
+/* UI-thread snapshot of the optional Xbox Live display name. Signing out
+ * invalidates the result and cancels the previous account's request. */
+void x4_xbox_gamertag(bool signed_in, char name[32]);
 /* Queries only /v2/titles on the chosen server, searching specifically for Fortnite.
  * Does not query Store details, MRU, or covers. Returns READY (count=1) or ERROR
  * with X4_AUTH_E_FORTNITE_NOT_FOUND. */

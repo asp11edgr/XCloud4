@@ -31,6 +31,13 @@ void x4_secure_clear(void *p,size_t n){volatile unsigned char *b=p;while(n--)*b+
 struct X4Http{int unused;};
 X4Http *x4_http_open(int *error){if(error)*error=0;return calloc(1,sizeof(X4Http));}
 void x4_http_close(X4Http *h){free(h);}
+int x4_xbox_cloud_time_query(X4Http *http, const char *token, const char *market,
+    const _Atomic int *cancel, X4CloudTime *result, X4CloudTimeShape *shape, int *status)
+{(void)http;(void)token;(void)market;(void)cancel;(void)result;(void)shape;(void)status;return X4_HTTP_PROTOCOL;}
+#if !X4_PUBLIC
+const char *x4_cloud_time_source_name(enum X4CloudTimeSource source)
+{(void)source;return "sin_dato";}
+#endif
 const char *x4_http_stage(const X4Http *h){(void)h;return "host controlled transport";}
 int x4_http_request(X4Http *h,const char *url,const char *form,char *body,size_t cap,size_t *length,int *status,const _Atomic int *cancel)
 {(void)h;(void)url;(void)form;(void)cancel;if(body&&cap)body[0]=0;*length=0;*status=0;return X4_HTTP_PROTOCOL;}

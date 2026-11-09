@@ -38,6 +38,17 @@ static void queue_ui(const char *dir,const X4CoverRaster *game,const char *backg
     x4_loading_screen_update(&s,182000000);assert(x4_loading_screen_draw(pixels,182000000));
     x4_loading_screen_snapshot(&view);assert(view.queue_elapsed_seconds==181&&view.queue_eta_seconds==119&&view.percent==20);
     capture(dir,"elapsed_3_01_eta_1_59",language,background);
+    /* While the elapsed estimate changes, the rail and progress regions
+     * keep their cached generations. Reuse the same animation tick too. */
+    const size_t rail=(size_t)746*W+700;
+    const size_t bar=(size_t)842*W+700;
+    uint32_t rail_before=pixels[rail],bar_before=pixels[bar];
+    pixels[rail]=pixels[bar]=0xff273849u;
+    ++s.queue_elapsed_seconds;
+    x4_loading_screen_update(&s,182000001);
+    assert(x4_loading_screen_draw(pixels,182000001));
+    assert(pixels[rail]==0xff273849u&&pixels[bar]==0xff273849u);
+    pixels[rail]=rail_before;pixels[bar]=bar_before;
     s.queue_elapsed_seconds=500;s.queue_eta_available=0;
     x4_loading_screen_update(&s,501000000);assert(x4_loading_screen_draw(pixels,501000000));
     x4_loading_screen_snapshot(&view);assert(!view.queue_eta_available&&view.percent==20);

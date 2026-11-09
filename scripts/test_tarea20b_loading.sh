@@ -10,7 +10,7 @@ includes=(-isystem "${OO_PS4_TOOLCHAIN:-$HOME/.local/share/xcloud4/OpenOrbis/PS4
 # Intentional word splitting for caller-provided compiler/sanitizer switches.
 # shellcheck disable=SC2086
 "$cc" "${flags[@]}" ${X4_UI_TEST_FLAGS:-} "${includes[@]}" \
-    tests/test_tarea20b_loading.c src/ui/loading_screen.c src/ui/apple_ui.c \
+    tests/test_tarea20b_loading.c src/ui/loading_screen.c src/ui/ui2_theme.c src/ui/apple_ui.c \
     src/ui/font.c src/ui/lang.c src/auth/public_image_policy.c \
     third_party/qrcodegen/qrcodegen.c -pthread -lm -o "$build_dir/loading"
 if [[ -n ${1:-} ]]; then mkdir -p "$1";"$build_dir/loading" "$1";else "$build_dir/loading";fi

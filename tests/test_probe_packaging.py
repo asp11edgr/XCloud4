@@ -40,12 +40,12 @@ class Packaging(unittest.TestCase):
         self.assertEqual(m["title"], "XCloud4 Lab")
         self.assertEqual(m["title_id"], "XCLD00001")
         self.assertEqual(m["content_id"], "IV0000-XCLD00001_00-XCLOUD4APP000000")
-        self.assertEqual(m["version"], "01.26")
-        self.assertEqual(m["product_version"], "0.7.58-lab")
-        self.assertEqual(m["package_name"], "XCloud4-0.7.58-lab.pkg")
+        self.assertEqual(m["version"], "01.31")
+        self.assertEqual(m["product_version"], "0.7.63-lab")
+        self.assertEqual(m["package_name"], "XCloud4-0.7.63-lab-27.pkg")
         self.assertTrue(m["include_demo"])
         for suffix in policy.NORMAL_SUFFIXES:
-            self.assertEqual(policy.metadata(suffix=suffix)["package_name"], "XCloud4-0.7.58-lab" + suffix + ".pkg")
+            self.assertEqual(policy.metadata(suffix=suffix)["package_name"], "XCloud4-0.7.63-lab" + (suffix or "-27") + ".pkg")
         with self.assertRaises(ValueError): policy.metadata(suffix="-probe")
         with self.assertRaises(ValueError): policy.metadata(variant="off")
 
@@ -75,7 +75,7 @@ class Packaging(unittest.TestCase):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 self.assertEqual(policy.main(["metadata", "--suffix=" + suffix]), 0)
-            self.assertIn('"package_name": "XCloud4-0.7.58-lab' + suffix + '.pkg"', output.getvalue())
+            self.assertIn('"package_name": "XCloud4-0.7.63-lab' + (suffix or '-27') + '.pkg"', output.getvalue())
 
     def test_stream_profiles_require_exact_flags_and_suffix(self):
         for profile, suffix in ((1, "-720p60"), (2, "-1080p60")):
@@ -100,17 +100,39 @@ class Packaging(unittest.TestCase):
             wrong_suffix = "-1080p60" if profile == 1 else "-720p60"
             with self.assertRaises(ValueError): policy.check_flags(policy.metadata(suffix=wrong_suffix), values)
             with self.assertRaises(ValueError): policy.check_flags(policy.metadata("probe", "on"), values)
-            header = '#define X4_SOURCE_ID "' + 'a' * 40 + '"\n#define X4_PRODUCT_VERSION "0.7.58-lab"\n'
+            header = '#define X4_SOURCE_ID "' + 'a' * 40 + '"\n#define X4_PRODUCT_VERSION "0.7.63-lab"\n'
             self.assertTrue(policy.build_identity(header, values).endswith("-sp" + str(profile)))
 
     def test_public_task22_identity(self):
         m = policy.metadata("public")
         self.assertEqual(m["title"], "XCloud4")
         self.assertEqual(m["title_id"], "XCLD00003")
-        self.assertEqual(m["version"], "01.07")
-        self.assertEqual(m["product_version"], "1.2.1-beta")
-        self.assertEqual(m["package_name"], "XCloud4-1.2.1-beta-publico.pkg")
+        self.assertEqual(m["version"], "01.08")
+        self.assertEqual(m["product_version"], "1.3.0-beta")
+        self.assertEqual(m["package_name"], "XCloud4-1.3.0-beta-publico-27.pkg")
         self.assertFalse(m["include_demo"])
+
+    def test_real_edition_header_selects_exact_source_and_product(self):
+        header = (ROOT / "src/core/build_identity.h").read_text()
+        values = flags(probe=0, cap=1)
+        values.update(X4_RUMBLE=1, X4_STREAM_PROFILE=1)
+        for public, source, product in (
+            (0, "b32fd83f01ef28194db445ea73ce4fdd81a2cf78", "0.7.63-lab"),
+            (1, "a7ddc68b9cc346e0d9a91d8459060b6d127c03fa", "1.3.0-beta")):
+            selected = dict(values, X4_PUBLIC=public)
+            expected = source + "-n1-g45-r1-vc1-p0-im-sp1"
+            self.assertEqual(policy.build_identity(header, selected, product), expected)
+            self.assertEqual(policy.build_identity(header.replace("\n", "\r\n"), selected, product), expected)
+            wrong_product = "0.7.63-lab" if public else "1.3.0-beta"
+            with self.assertRaises(ValueError):
+                policy.build_identity(header, selected, wrong_product)
+            for duplicate in ('#define X4_SOURCE_ID "' + 'a' * 40 + '"\n',
+                              '#define X4_PRODUCT_VERSION "' + product + '"\n'):
+                with self.assertRaises(ValueError):
+                    policy.build_identity(header + "\n" + duplicate, selected, product)
+        # Preserve the historical single-definition fixture/Probe policy.
+        single = '#define X4_SOURCE_ID "' + 'a' * 40 + '"\n#define X4_PRODUCT_VERSION "0.7.63-lab"\n'
+        self.assertTrue(policy.build_identity(single, flags()).startswith('a' * 40))
 
     def test_identity_components_not_just_length(self):
         policy.validate_ids("XCLD00002", policy.PROBE_CONTENT_ID)
@@ -136,19 +158,19 @@ class Packaging(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="x4-package-policy-") as directory:
             d = Path(directory); cfg = d / "config.h"; header = d / "identity.h"; elf = d / "fixture.elf"; self_file = d / "fixture.self"
             source = "a" * 40
-            header.write_bytes(f'#define X4_SOURCE_ID "{source}"\r\n#define X4_PRODUCT_VERSION "0.7.58-lab"\r\n'.encode())
+            header.write_bytes(f'#define X4_SOURCE_ID "{source}"\r\n#define X4_PRODUCT_VERSION "0.7.63-lab"\r\n'.encode())
             for cap, variant in ((0, "off"), (1, "on")):
                 values = flags(cap=cap); cfg.write_text(config(values)); identity = policy.metadata("probe", variant)
                 build_id = policy.build_identity(header.read_bytes().decode(), values)
                 # Deliberately synthetic format/identity fixture, NOT a valid ELF/SELF.
-                elf.write_bytes(b"\x7fELF OFFLINE FIXTURE " + build_id.encode() + b" 0.7.58-lab")
-                self_file.write_bytes(bytes.fromhex("4f153d1d") + b" OFFLINE FIXTURE " + build_id.encode() + b" 0.7.58-lab")
+                elf.write_bytes(b"\x7fELF OFFLINE FIXTURE " + build_id.encode() + b" 0.7.63-lab")
+                self_file.write_bytes(bytes.fromhex("4f153d1d") + b" OFFLINE FIXTURE " + build_id.encode() + b" 0.7.63-lab")
                 result = policy.preflight(identity, cfg, header, elf, self_file)
                 self.assertNotEqual(result["elf"]["sha256"], result["self"]["sha256"])
                 self.assertEqual(result["flags"], values)
-                self_file.write_bytes(b"\x7fELF" + build_id.encode() + b" 0.7.58-lab")
+                self_file.write_bytes(b"\x7fELF" + build_id.encode() + b" 0.7.63-lab")
                 with self.assertRaises(ValueError): policy.preflight(identity, cfg, header, elf, self_file)
-                self_file.write_bytes(bytes.fromhex("4f153d1d") + b"wrong-source 0.7.58-lab")
+                self_file.write_bytes(bytes.fromhex("4f153d1d") + b"wrong-source 0.7.63-lab")
                 with self.assertRaises(ValueError): policy.preflight(identity, cfg, header, elf, self_file)
 
     def test_sfo_semantics_and_corruption(self):
@@ -201,10 +223,10 @@ class Packaging(unittest.TestCase):
             copied_self, copied_sfo = d / "eboot.bin", d / "param.sfo"
             values = flags()
             cfg.write_text(config(values))
-            header.write_text('#define X4_SOURCE_ID "' + 'a' * 40 + '"\n#define X4_PRODUCT_VERSION "0.7.58-lab"\n')
+            header.write_text('#define X4_SOURCE_ID "' + 'a' * 40 + '"\n#define X4_PRODUCT_VERSION "0.7.63-lab"\n')
             build_id = policy.build_identity(header.read_text(), values)
-            elf.write_bytes(b"\x7fELF OFFLINE FIXTURE " + build_id.encode() + b" 0.7.58-lab")
-            copied_self.write_bytes(bytes.fromhex("4f153d1d") + b" OFFLINE FIXTURE " + build_id.encode() + b" 0.7.58-lab")
+            elf.write_bytes(b"\x7fELF OFFLINE FIXTURE " + build_id.encode() + b" 0.7.63-lab")
+            copied_self.write_bytes(bytes.fromhex("4f153d1d") + b" OFFLINE FIXTURE " + build_id.encode() + b" 0.7.63-lab")
             copied_sfo.write_bytes(sfo(policy.metadata("probe", "off")["sfo"]))
             verify = ["verify", "--mode", "probe", "--variant", "off", "--config", str(cfg),
                 "--source-header", str(header), "--elf", str(elf), "--self", str(copied_self)]

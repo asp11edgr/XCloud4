@@ -1,32 +1,32 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #include "http_client.h"
-#include "ca_bundle.h"
-#include "../core/module.h"
+#include "http_wire.h"
+#include "tls_conn.h"
 #include "../ui/lang.h"
+#include "../ui/home_rows.h"
 #include "../ui/access_country.h"
 #include "../core/build_identity.h"
-#include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <orbis/libkernel.h>
+#ifdef X4_OPENORBIS
+#include "../core/module.h"
+#include "../streaming/rtc_native.h"
+#endif
 
 #define X4_NET_POOL_SIZE (256 * 1024)
-#define X4_SSL_POOL_SIZE (512 * 1024)
-#define X4_HTTP_POOL_SIZE (512 * 1024)
 #define X4_HTTP_DEADLINE_USEC (30ull * 1000 * 1000)
 #define X4_HTTP_TIMEOUT_USEC (5u * 1000 * 1000)
 #define X4_HTTP_CHUNK 4096u
 #define X4_HTTP_URL_MAX 256
-#define X4_HTTP_VERSION_1_1 2
 #define X4_HTTP_METHOD_GET 0
 #define X4_HTTP_METHOD_POST 1
 #define X4_HTTP_METHOD_DELETE 5
-#define X4_HTTP_HEADER_OVERWRITE 0u
-/* SERVER_VERIFY | CN_CHECK | NOT_AFTER | NOT_BEFORE | KNOWN_CA | SNI */
-#define X4_HTTPS_VERIFY_ALL 0xBDu
+/* Header names/values remain bounded by the unchanged request policy. */
+#define X4_HTTP_WIRE_REQUEST_MAX (X4_HTTP_HEADERS_MAX * (X4_HTTP_HEADER_VALUE_MAX + 128u) + 2048u)
 
 static const char allowed_prefix[] = "https://login.microsoftonline.com/consumers/";
 /* The only destination of x4_http_passport_request. */
@@ -54,252 +54,144 @@ static const char header_client[] = "x-gssv-client";
 static const char header_device[] = "X-MS-Device-Info";
 static const char header_authorization[] = "Authorization";
 static const char header_forwarded_for[] = "X-Forwarded-For";
+static const char header_ms_cv[] = "MS-CV";
 static const char sessions_path[] = "/v5/sessions/cloud/";
 #define X4_HTTP_SESSION_ID_MAX 128u
 #define X4_HTTP_SESSION_HEADERS 3u
 
 /* DEST_SESSION is produced only by classify_session, never by classify. */
-enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE, DEST_SESSION };
+enum Destination { DEST_NONE, DEST_XBOX_USER, DEST_XSTS, DEST_LOGIN, DEST_REGION, DEST_STORE,
+    DEST_SESSION, DEST_CLOUD_TIME };
 enum SessionRoute { ROUTE_NONE, ROUTE_WAITTIME, ROUTE_PLAY, ROUTE_STATE, ROUTE_KEEPALIVE, ROUTE_CONNECT, ROUTE_SDP, ROUTE_ICE, ROUTE_RESOURCE };
 
-/* Request inputs copied into one block. It must outlive the native request,
- * connection and template, so it is freed only after they were deleted. */
 typedef struct {
     int method; /* native GET 0, POST 1, DELETE 5 */
     const char *url, *payload, *content_type;
     const char *accept;
     const char *user_agent;
     uint64_t deadline_us;
+    bool short_state; /* Explicitly selected only by diagnostic GET /state. */
+    uint64_t absolute_deadline_us; /* Scoped reconnect request, never mutable context state. */
     size_t payload_size, header_count, size;
     X4HttpHeader headers[X4_HTTP_HEADERS_MAX];
     char text[];
 } Owned;
-/* A native connection may retain the URL passed to CreateConnectionWithURL.
- * Its public-only anchor therefore outlives every request and is freed only
- * after the connection and template have both been deleted. */
-typedef struct {
-    int32_t tmpl, conn;
-    Owned *anchor;
-} PublicConnection;
-/* Real typed ABI in pinned OpenOrbis libkernel.h. */
-int sceKernelUsleep(unsigned int microseconds);
 
-enum {
-    X4_NET_INIT_UNSET = 0,
-    X4_NET_INIT_BUSY  = 1,
-    X4_NET_INIT_READY = 2,
-};
-static _Atomic int net_init_state = X4_NET_INIT_UNSET;
+typedef struct {
+    X4TlsConn *conn;
+    Owned *anchor;
+    bool reopen_due_close;
+} PublicConnection;
+
+typedef struct {
+    X4TlsConn *conn;
+    char host[254], id[X4_HTTP_SESSION_ID_MAX + 1u];
+    bool reopen_due_close;
+} SessionConnection;
 
 struct X4Http {
-    int net_module, ssl_module, http_module;
-    int32_t pool, ssl, http;
-    bool unusable, quarantined;
+    X4TlsHttp *tls;
+    bool unusable, quarantined, update_only;
     atomic_bool busy;
-    PublicConnection public_connection[2]; /* Store, cover host; never auth */
+    PublicConnection public_connection[2];
+    SessionConnection session_connection;
+    bool session_persistent;
     uint64_t public_retry_after_ms;
-    /* Written by the worker, read by the UI; always a string literal. */
     _Atomic(const char *) stage;
+#ifdef X4_OPENORBIS
+    int net_module;
+    int32_t pool;
     struct {
         int32_t (*net_init)(void);
-        int32_t (*pool_create)(const char *, int32_t, int32_t);
+        int32_t (*pool_create)(const char *,int32_t,int32_t);
         int32_t (*pool_destroy)(int32_t);
-        int32_t (*ssl_init)(size_t);
-        int32_t (*ssl_term)(int32_t);
-        int32_t (*http_init)(int32_t, int32_t, size_t);
-        int32_t (*http_term)(int32_t);
-        int32_t (*create_template)(int32_t, const char *, int32_t, int32_t);
-        int32_t (*create_connection)(int32_t, const char *, bool);
-        int32_t (*create_request)(int32_t, int32_t, const char *, uint64_t);
-        int32_t (*delete_template)(int32_t);
-        int32_t (*delete_connection)(int32_t);
-        int32_t (*delete_request)(int32_t);
-        int32_t (*resolve_timeout)(int32_t, uint32_t);
-        int32_t (*connect_timeout)(int32_t, uint32_t);
-        int32_t (*send_timeout)(int32_t, uint32_t);
-        int32_t (*recv_timeout)(int32_t, uint32_t);
-        int32_t (*auto_redirect)(int32_t, int32_t);
-        int32_t (*cookie_enabled)(int32_t, int32_t);
-        int32_t (*add_header)(int32_t, const char *, const char *, uint32_t);
-        int32_t (*https_enable)(int32_t, uint32_t);
-        int32_t (*send)(int32_t, const void *, size_t);
-        int32_t (*read)(int32_t, void *, size_t);
-        int32_t (*status)(int32_t, int32_t *);
-        int32_t (*all_response_headers)(int32_t, char **, size_t *);
-        int32_t (*https_load_cert)(int32_t, int32_t, void *, void *, void *);
     } fn;
+#endif
 };
+#ifdef X4_OPENORBIS
+enum { X4_NET_INIT_UNSET, X4_NET_INIT_BUSY, X4_NET_INIT_READY };
+static _Atomic int net_init_state=X4_NET_INIT_UNSET;
+#endif
 
-void x4_secure_clear(void *data, size_t size)
+void x4_secure_clear(void *data,size_t size)
 {
-    volatile unsigned char *p = data;
-    if (!p) return;
-    while (size--) *p++ = 0;
+    volatile unsigned char *p=data;
+    if(!p)return;
+    while(size--)*p++=0;
     atomic_signal_fence(memory_order_seq_cst);
 }
-
 const char *x4_http_stage(const X4Http *h)
 {
-    return h ? h->stage : "sin contexto HTTPS";
+    return h?atomic_load_explicit(&h->stage,memory_order_acquire):"sin contexto HTTPS";
 }
 
-/* Children before parents; stop at the first failure so nothing still
- * referenced by a live child is released. Never calls NetTerm. */
-static void terminate_contexts(X4Http *h)
+/* TLS children close before their CA/DRBG and the existing Net pool. A
+ * failed close retains the entire owner; no live child can use freed state. */
+static bool terminate_contexts(X4Http *h)
 {
-    int rc;
-    if (h->http >= 0) {
-        rc = h->fn.http_term(h->http);
-        if (rc != 0) { printf("XCloud4: HttpTerm 0x%08x; Ssl/Net retenidos\n", (unsigned)rc); return; }
-        h->http = -1;
+    if(h->tls){
+        int rc=x4_tls_http_close(h->tls);
+        if(rc){h->unusable=h->quarantined=true;return false;}
+        h->tls=NULL;
     }
-    if (h->ssl >= 0) {
-        rc = h->fn.ssl_term(h->ssl);
-        if (rc != 0) { printf("XCloud4: SslTerm 0x%08x; pool Net retenido\n", (unsigned)rc); return; }
-        h->ssl = -1;
+#ifdef X4_OPENORBIS
+    if(h->pool>=0){
+        int rc=h->fn.pool_destroy(h->pool);
+        if(rc){printf("XCloud4: HTTPS NetPoolDestroy codigo=0x%08x\n",(unsigned)rc);h->quarantined=true;return false;}
+        h->pool=-1;
     }
-    if (h->pool >= 0) {
-        rc = h->fn.pool_destroy(h->pool);
-        if (rc != 0) { printf("XCloud4: NetPoolDestroy 0x%08x\n", (unsigned)rc); return; }
-        h->pool = -1;
-    }
+#endif
+    return true;
 }
-
 X4Http *x4_http_open(int *error)
 {
-    X4Http *h = malloc(sizeof(*h));
-    if (!h) {
-        printf("XCloud4: HTTPS sin memoria\n");
-        if (error) *error = X4_HTTP_ALLOCATION;
-        return NULL;
-    }
-    /* Compound literal: every function pointer starts as a real NULL. */
-    *h = (X4Http){
-        .net_module = -1, .ssl_module = -1, .http_module = -1,
-        .pool = -1, .ssl = -1, .http = -1, .stage = "modulos de red",
-        .public_connection = {{.tmpl = -1, .conn = -1}, {.tmpl = -1, .conn = -1}},
-    };
-    atomic_init(&h->busy, false);
-    int rc;
-#define RESOLVE(module, name, field) do { \
-        void *address_ = NULL; \
-        rc = x4_module_symbol(module, name, &address_); \
-        if (rc < 0) goto fail; \
-        h->fn.field = (typeof(h->fn.field))address_; \
-    } while (0)
-    rc = h->net_module = x4_module_open("libSceNet");
-    if (rc < 0) goto fail;
-    RESOLVE(h->net_module, "sceNetInit", net_init);
-    RESOLVE(h->net_module, "sceNetPoolCreate", pool_create);
-    RESOLVE(h->net_module, "sceNetPoolDestroy", pool_destroy);
-    rc = h->ssl_module = x4_module_open("libSceSsl");
-    if (rc < 0) goto fail;
-    RESOLVE(h->ssl_module, "sceSslInit", ssl_init);
-    RESOLVE(h->ssl_module, "sceSslTerm", ssl_term);
-    rc = h->http_module = x4_module_open("libSceHttp");
-    if (rc < 0) goto fail;
-    RESOLVE(h->http_module, "sceHttpInit", http_init);
-    RESOLVE(h->http_module, "sceHttpTerm", http_term);
-    RESOLVE(h->http_module, "sceHttpCreateTemplate", create_template);
-    RESOLVE(h->http_module, "sceHttpCreateConnectionWithURL", create_connection);
-    RESOLVE(h->http_module, "sceHttpCreateRequestWithURL", create_request);
-    RESOLVE(h->http_module, "sceHttpDeleteTemplate", delete_template);
-    RESOLVE(h->http_module, "sceHttpDeleteConnection", delete_connection);
-    RESOLVE(h->http_module, "sceHttpDeleteRequest", delete_request);
-    RESOLVE(h->http_module, "sceHttpSetResolveTimeOut", resolve_timeout);
-    RESOLVE(h->http_module, "sceHttpSetConnectTimeOut", connect_timeout);
-    RESOLVE(h->http_module, "sceHttpSetSendTimeOut", send_timeout);
-    RESOLVE(h->http_module, "sceHttpSetRecvTimeOut", recv_timeout);
-    RESOLVE(h->http_module, "sceHttpSetAutoRedirect", auto_redirect);
-    RESOLVE(h->http_module, "sceHttpSetCookieEnabled", cookie_enabled);
-    RESOLVE(h->http_module, "sceHttpAddRequestHeader", add_header);
-    RESOLVE(h->http_module, "sceHttpsEnableOption", https_enable);
-    RESOLVE(h->http_module, "sceHttpSendRequest", send);
-    RESOLVE(h->http_module, "sceHttpReadData", read);
-    RESOLVE(h->http_module, "sceHttpGetStatusCode", status);
+    int rc=X4_HTTP_ALLOCATION;
+    X4Http *h=calloc(1,sizeof(*h));
+    if(!h){if(error)*error=rc;return NULL;}
+    atomic_init(&h->busy,false);atomic_init(&h->stage,"modulos de red");
+#ifdef X4_OPENORBIS
+    h->pool=-1;h->net_module=-1;
+    rc=h->net_module=x4_module_open("libSceNet");if(rc<0)goto fail;
+#define RESOLVE(name,field) do {void *address=NULL;rc=x4_module_symbol(h->net_module,name,&address); \
+    if(rc<0)goto fail;h->fn.field=(typeof(h->fn.field))address;} while(0)
+    RESOLVE("sceNetInit",net_init);
+    RESOLVE("sceNetPoolCreate",pool_create);
+    RESOLVE("sceNetPoolDestroy",pool_destroy);
 #undef RESOLVE
-    /* Real typed ABI in pinned OpenOrbis Http.h. Optional: absence cannot
-     * make existing authentication fail; only Retry-After becomes unknown. */
-    void *headers_address = NULL;
-    if (x4_module_symbol(h->http_module, "sceHttpGetAllResponseHeaders", &headers_address) >= 0)
-        h->fn.all_response_headers = (typeof(h->fn.all_response_headers))headers_address;
-    void *load_cert_address = NULL;
-    if (x4_module_symbol(h->http_module, "sceHttpsLoadCert", &load_cert_address) >= 0)
-        h->fn.https_load_cert = (typeof(h->fn.https_load_cert))load_cert_address;
-
-    h->stage = "NetInit";
-    for (;;) {
-        int expected = X4_NET_INIT_UNSET;
-        if (atomic_compare_exchange_strong(&net_init_state, &expected, X4_NET_INIT_BUSY)) {
-            rc = h->fn.net_init();
-            printf("XCloud4: NetInit -> 0x%08x\n", (unsigned)rc);
-            if (rc < 0 && (unsigned)rc != 0x80410103u) {
-                atomic_store(&net_init_state, X4_NET_INIT_UNSET);
-                goto fail;
-            }
-            atomic_store(&net_init_state, X4_NET_INIT_READY);
-            break;
-        } else if (expected == X4_NET_INIT_READY) {
-            break;
-        } else {
-            sceKernelUsleep(1000);
+    h->stage="NetInit";
+    for(;;){
+        int expected=X4_NET_INIT_UNSET;
+        if(atomic_compare_exchange_strong(&net_init_state,&expected,X4_NET_INIT_BUSY)){
+            rc=h->fn.net_init();
+            if(rc<0&&(unsigned)rc!=0x80410103u){atomic_store(&net_init_state,X4_NET_INIT_UNSET);goto fail;}
+            /* Serialize the legacy resolver preparation before publishing
+             * readiness; no HTTP request enters its preparation spin. */
+            if(x4_native_net_prepare()<0){rc=X4_HTTP_UNUSABLE;atomic_store(&net_init_state,X4_NET_INIT_UNSET);goto fail;}
+            atomic_store(&net_init_state,X4_NET_INIT_READY);break;
         }
+        if(expected==X4_NET_INIT_READY)break;
+        sceKernelUsleep(1000);
     }
-    h->stage = "pool de red";
-    rc = h->fn.pool_create("x4-http-net", X4_NET_POOL_SIZE, 0);
-    if (rc < 0) goto fail;
-    h->pool = rc;
-    h->stage = "SslInit";
-    rc = h->fn.ssl_init(X4_SSL_POOL_SIZE);
-    if (rc < 0) goto fail;
-    h->ssl = rc;
-    h->stage = "HttpInit";
-    rc = h->fn.http_init(h->pool, h->ssl, X4_HTTP_POOL_SIZE);
-    if (rc < 0) goto fail;
-    h->http = rc;
-    if (h->fn.https_load_cert) {
-        static _Atomic int ca_log_once = 0;
-        size_t ca_count = 0;
-        const SslPem * const *pem_ptrs = x4_ca_bundle_get_ssl_pem_ptrs(&ca_count);
-        int cert_rc = h->fn.https_load_cert(h->http, (int32_t)ca_count, (void *)pem_ptrs, NULL, NULL);
-        const char *ca_mode = "todas";
-        if (cert_rc < 0) {
-            pem_ptrs = x4_ca_bundle_get_ssl_pem_ptrs_rsa(&ca_count);
-            cert_rc = h->fn.https_load_cert(h->http, (int32_t)ca_count, (void *)pem_ptrs, NULL, NULL);
-            if (cert_rc >= 0) {
-                ca_mode = "solo RSA";
-            } else {
-                ca_mode = "ninguna";
-                ca_count = 0;
-            }
-        }
-        int expected_log = 0;
-        if (atomic_compare_exchange_strong(&ca_log_once, &expected_log, 1)) {
-            printf("XCloud4: CA propias: %u cargadas (%s) rc=0x%08x\n",
-                   (unsigned)ca_count, ca_mode, (unsigned)cert_rc);
-        }
-    }
-    h->stage = "HTTPS listo";
-    printf("XCloud4: HTTPS listo (Net/Ssl/Http)\n");
-    if (error) *error = 0;
-    return h;
+    h->stage="pool de red";
+    rc=h->fn.pool_create("x4-http-net",X4_NET_POOL_SIZE,0);if(rc<0)goto fail;h->pool=rc;
+#endif
+    h->stage="inicio HTTPS (red/TLS)";
+    h->tls=x4_tls_http_open(&rc);if(!h->tls)goto fail;
+    h->stage="HTTPS listo";if(error)*error=0;return h;
 fail:
-    printf("XCloud4: HTTPS %s fallo 0x%08x\n", h->stage, (unsigned)rc);
-    terminate_contexts(h);
-    x4_secure_clear(h, sizeof(*h));
-    free(h);
-    if (error) *error = rc;
-    return NULL;
+    printf("XCloud4: HTTPS etapa=%s codigo=0x%08x\n",x4_http_stage(h),(unsigned)rc);
+    if(terminate_contexts(h)){x4_secure_clear(h,sizeof(*h));free(h);}
+    if(error)*error=rc;return NULL;
 }
-
 void x4_http_close(X4Http *h)
 {
-    if (!h) return;
-    if (!h->quarantined) (void)x4_http_public_reset(h);
-    if (h->quarantined) printf("XCloud4: HTTPS cierre omitido; recursos en cuarentena\n");
-    else terminate_contexts(h);
-    x4_secure_clear(h, sizeof(*h));
-    free(h);
+    if(!h)return;
+    if(!h->quarantined)(void)x4_http_session_persistence(h,false);
+    if(!h->quarantined)(void)x4_http_public_reset(h);
+    if(h->quarantined||!terminate_contexts(h)){
+        printf("XCloud4: HTTPS recursos retenidos tras fallo de cierre\n");return;
+    }
+    x4_secure_clear(h,sizeof(*h));free(h);
 }
 
 /* strnlen is POSIX and hidden under strict -std=c23. */
@@ -394,6 +286,31 @@ static bool store_url(const char *url, size_t n)
         } else return false;
     }
     return true;
+}
+
+static bool public_sigl_url(const char *url, size_t length)
+{
+    static const char prefix[] = X4_SIGL_URL_PREFIX;
+    static const char *const allowed[] = {
+        X4_SIGL_GUID_FREE, X4_SIGL_GUID_NEW, X4_SIGL_GUID_POPULAR, X4_SIGL_GUID_LEAVING
+    };
+    enum { GUID_LENGTH = sizeof(X4_SIGL_GUID_FREE) - 1 };
+    const size_t prefix_length = sizeof(prefix) - 1;
+    if (length <= prefix_length + GUID_LENGTH || memcmp(url, prefix, prefix_length))
+        return false;
+    const char *guid = url + prefix_length;
+    bool known = false;
+    for (size_t i = 0; i < sizeof(allowed) / sizeof(*allowed); ++i) {
+        if (!memcmp(guid, allowed[i], GUID_LENGTH)) {
+            known = true;
+            break;
+        }
+    }
+    const char *market = x4_lang_market(), *locale = x4_lang_locale();
+    if (!known || !x4_sigl_locale_valid(market, locale)) return false;
+    char suffix[32];
+    int count = snprintf(suffix, sizeof(suffix), X4_SIGL_LOCALE_FORMAT, market, locale);
+    return count > 0 && (size_t)count < sizeof(suffix) && !strcmp(guid + GUID_LENGTH, suffix);
 }
 
 static enum Destination classify(const char *url)
@@ -492,6 +409,38 @@ static bool token68(const char *t)
     return t[i] == 0;
 }
 
+static bool cloud_time_url(const char *url)
+{
+    static const char prefix[] = X4_HTTP_CLOUD_TIME_PREFIX;
+    static const char suffix[] = X4_HTTP_CLOUD_TIME_SUFFIX;
+    size_t prefix_length = sizeof(prefix) - 1;
+    size_t length = sizeof(prefix) + sizeof(suffix);
+    if (!url || bounded_length(url, length + 1) != length ||
+        memcmp(url, prefix, prefix_length)) return false;
+    const char *market = url + prefix_length;
+    return market[0] >= 'A' && market[0] <= 'Z' && market[1] >= 'A' && market[1] <= 'Z' &&
+        !strcmp(market + 2, suffix);
+}
+
+static bool cloud_time_authorization(const char *value)
+{
+    static const char prefix[] = "XBL3.0 x=";
+    if (strncmp(value, prefix, sizeof(prefix) - 1)) return false;
+    const char *hash = value + sizeof(prefix) - 1;
+    size_t n = 0;
+    while (hash[n] >= '0' && hash[n] <= '9') ++n;
+    return n > 0 && n <= 20 && hash[n] == ';' && token68(hash + n + 1);
+}
+
+static bool cloud_time_cv(const char *value, size_t length)
+{
+    if (length != 18 || value[16] != '.' || value[17] != '0') return false;
+    for (size_t i = 0; i < 16; ++i)
+        if (!alphanumeric((unsigned char)value[i]) && value[i] != '+' && value[i] != '/')
+            return false;
+    return true;
+}
+
 /* Bounded printable values without control bytes, then a per-destination
  * allowlist; a name may appear once. */
 static int check_headers(enum Destination d, const X4HttpHeader *headers, size_t count)
@@ -513,8 +462,11 @@ static int check_headers(enum Destination d, const X4HttpHeader *headers, size_t
         else if (!strcmp(name, header_client) || !strcmp(name, header_device))
             allowed = d == DEST_LOGIN || d == DEST_REGION || d == DEST_SESSION;
         else if (!strcmp(name, header_authorization))
-            allowed = (d == DEST_REGION || d == DEST_SESSION) && !strncmp(value, "Bearer ", 7) &&
-                token68(value + 7);
+            allowed = d == DEST_CLOUD_TIME ? cloud_time_authorization(value) :
+                (d == DEST_REGION || d == DEST_SESSION) && !strncmp(value, "Bearer ", 7) &&
+                    token68(value + 7);
+        else if (!strcmp(name, header_ms_cv))
+            allowed = d == DEST_CLOUD_TIME && cloud_time_cv(value, n);
         else if (!strcmp(name, header_forwarded_for))
             allowed = d == DEST_LOGIN && x4_access_country_valid_ip(value);
         if (!allowed) return X4_HTTP_ARGUMENT;
@@ -574,140 +526,175 @@ static Owned *own(int method, const char *url, const char *payload, size_t paylo
     return o;
 }
 
-static int checkpoint(const _Atomic int *cancel, uint64_t deadline)
+static int checkpoint(const _Atomic int *cancel,uint64_t deadline)
 {
-    if (cancel && atomic_load(cancel)) return X4_HTTP_CANCELLED;
-    if (sceKernelGetProcessTime() >= deadline) return X4_HTTP_DEADLINE;
+    if(cancel&&atomic_load(cancel))return X4_HTTP_CANCELLED;
+    if(sceKernelGetProcessTime()>=deadline)return X4_HTTP_DEADLINE;
+    return 0;
+}
+static void free_owned(Owned **owned)
+{
+    if(!*owned)return;
+    x4_secure_clear(*owned,sizeof(**owned)+(*owned)->size);free(*owned);*owned=NULL;
+}
+static bool release_connection(X4Http *h,X4TlsConn **conn)
+{
+    if(!*conn)return true;
+    int rc=x4_tls_conn_close(*conn);
+    if(rc){
+        h->unusable=h->quarantined=true;
+        printf("XCloud4: HTTPS cierre codigo=0x%08x; recursos retenidos\n",(unsigned)rc);return false;
+    }
+    *conn=NULL;return true;
+}
+static X4TlsBudget budget(X4Http *h,uint64_t deadline,const _Atomic int *cancel)
+{return (X4TlsBudget){.deadline_us=deadline,.cancel=cancel,.stage=&h->stage};}
+static int request_host(const Owned *o,char host[254],const char **target)
+{
+    const char *start=o->url+sizeof(https_scheme)-1,*slash=strchr(start,'/');
+    if(!slash||slash==start||(size_t)(slash-start)>=254)return X4_HTTP_URL;
+    memcpy(host,start,(size_t)(slash-start));host[slash-start]=0;*target=slash;return 0;
+}
+typedef struct {unsigned char *data;size_t size,capacity;} RequestBuffer;
+static int collect_header(void *context,const void *data,size_t size)
+{
+    RequestBuffer *b=context;
+    if(size>b->capacity-b->size)return X4_HTTP_BOUND;
+    memcpy(b->data+b->size,data,size);b->size+=size;return 0;
+}
+/* One header write avoids a TLS record per serializer fragment. No socket
+ * option or pacing change is needed; payload follows with the same budget. */
+static int exchange(X4Http *h,Owned *o,X4TlsConn *conn,const char *host,const char *target,
+    uint64_t deadline,const _Atomic int *cancel,bool keepalive,char *body,size_t capacity,
+    size_t *length,int *status,bool *started,bool *reusable,uint64_t *retry_after)
+{
+    *started=*reusable=false;
+    X4TlsBudget b=budget(h,deadline,cancel);
+    const char *method=o->method==X4_HTTP_METHOD_POST?"POST":o->method==X4_HTTP_METHOD_DELETE?"DELETE":"GET";
+    X4HttpWireRequest request={.method=method,.host=host,.target=target,.accept=o->accept,
+        .content_type=o->content_type,.user_agent=o->user_agent,.headers=o->headers,
+        .header_count=o->header_count,.payload_size=o->payload_size,.keepalive=keepalive};
+    RequestBuffer header={.data=malloc(X4_HTTP_WIRE_REQUEST_MAX),.capacity=X4_HTTP_WIRE_REQUEST_MAX};
+    if(!header.data)return X4_HTTP_ALLOCATION;
+    int rc=x4_http_wire_write_request(&request,collect_header,&header);
+    if(!rc)rc=checkpoint(cancel,deadline);
+    b.phase_deadline_us=sceKernelGetProcessTime()+X4_HTTP_TIMEOUT_USEC;
+    if(!rc)rc=x4_tls_conn_write(conn,header.data,header.size,&b);
+    x4_secure_clear(header.data,header.capacity);free(header.data);
+    if(!rc&&o->payload_size)rc=x4_tls_conn_write(conn,o->payload,o->payload_size,&b);
+    if(rc)return rc;
+    X4HttpWire parser;x4_http_wire_init(&parser,body,capacity,(int64_t)time(NULL));
+    unsigned char data[X4_HTTP_CHUNK];
+    for(;;){
+        rc=checkpoint(cancel,deadline);if(rc)break;
+        size_t got=0,used=0;b=budget(h,deadline,cancel);
+        rc=x4_tls_conn_read(conn,data,sizeof(data),&got,&b);
+        if(rc)break;
+        rc=checkpoint(cancel,deadline);if(rc)break;
+        if(got>sizeof(data)){rc=X4_HTTP_PROTOCOL;break;}
+        if(!got)rc=x4_http_wire_eof(&parser);
+        else rc=x4_http_wire_feed(&parser,data,got,&used);
+        if(got&&used!=got&&rc>=0){rc=X4_HTTP_PROTOCOL;break;}
+        if(rc==X4_HTTP_WIRE_DONE){
+            X4HttpWireResult result=x4_http_wire_result(&parser);
+            *length=result.body_bytes;*status=result.status;*reusable=result.reusable;
+            if(retry_after)*retry_after=result.retry_after_ms;
+            rc=0;break;
+        }
+        if(rc<0)break;
+    }
+    *started=x4_http_wire_result(&parser).response_started;
+    x4_secure_clear(data,sizeof(data));
+    return rc;
+}
+/* Private requests never retry, including an ambiguous POST /play. */
+static int transfer(X4Http *h,Owned *o,char *body,size_t capacity,size_t *length,int *status,
+    const _Atomic int *cancel)
+{
+    uint64_t deadline=o->absolute_deadline_us?o->absolute_deadline_us:
+        sceKernelGetProcessTime()+(o->deadline_us?o->deadline_us:X4_HTTP_DEADLINE_USEC);
+    char host[254];const char *target=NULL;X4TlsConn *conn=NULL;bool started=false,reusable=false;
+    int rc=checkpoint(cancel,deadline);
+    if(!rc)rc=request_host(o,host,&target);
+    X4TlsBudget b=budget(h,deadline,cancel);
+    if(!rc)rc=x4_tls_conn_connect(h->tls,host,&b,&conn);
+    if(!rc)rc=exchange(h,o,conn,host,target,deadline,cancel,false,body,capacity,length,status,&started,&reusable,NULL);
+    bool released=release_connection(h,&conn);
+    if(released)free_owned(&o);
+    if(rc==X4_HTTP_CANCELLED)h->stage="cancelado";
+    else if(rc==X4_HTTP_DEADLINE)h->stage="plazo agotado";
+    if(rc){x4_secure_clear(body,capacity);*length=0;*status=0;}
+    else h->stage=released?"respuesta recibida":"recursos HTTP en cuarentena";
+    return rc;
+}
+
+static int reset_session_connection(X4Http *h)
+{
+    if(!release_connection(h,&h->session_connection.conn))return X4_HTTP_UNUSABLE;
+    x4_secure_clear(&h->session_connection,sizeof(h->session_connection));
     return 0;
 }
 
-/* Delete request, connection, template. If one delete fails its parents stay
- * alive (quarantined) and the context refuses further requests. */
-static bool release_request(X4Http *h, int32_t *tmpl, int32_t *conn, int32_t *req)
+int x4_http_session_persistence(X4Http *h,bool enabled)
 {
-    int rc = 0;
-    if (*req >= 0) {
-        rc = h->fn.delete_request(*req);
-        if (rc != 0) goto quarantine;
-        *req = -1;
-    }
-    if (*conn >= 0) {
-        rc = h->fn.delete_connection(*conn);
-        if (rc != 0) goto quarantine;
-        *conn = -1;
-    }
-    if (*tmpl >= 0) {
-        rc = h->fn.delete_template(*tmpl);
-        if (rc != 0) goto quarantine;
-        *tmpl = -1;
-    }
-    return true;
-quarantine:
-    printf("XCloud4: HTTP liberar 0x%08x; cuarentena plantilla=%d conexion=%d solicitud=%d\n",
-        (unsigned)rc, (int)*tmpl, (int)*conn, (int)*req);
-    h->unusable = true;
-    h->quarantined = true;
-    return false;
+    if(!h)return X4_HTTP_ARGUMENT;
+    if(atomic_exchange(&h->busy,true))return X4_HTTP_BUSY;
+    int rc=enabled?(h->unusable?X4_HTTP_UNUSABLE:0):reset_session_connection(h);
+    h->session_persistent=enabled&&!rc;
+    atomic_store(&h->busy,false);
+    return rc;
 }
 
-/* Runs one validated exchange from owned inputs, which it releases. */
-static int transfer(X4Http *h, Owned *o, char *body, size_t capacity, size_t *length, int *status,
+static int transfer_session(X4Http *h,Owned *o,char *body,size_t capacity,size_t *length,int *status,
     const _Atomic int *cancel)
 {
-    const char *url = o->url, *form = o->payload;
-    size_t form_size = o->payload_size;
-    int rc;
-    uint64_t deadline = sceKernelGetProcessTime() + (o->deadline_us ? o->deadline_us : X4_HTTP_DEADLINE_USEC);
-    int32_t tmpl = -1, conn = -1, req = -1, code = 0;
-    size_t total = 0;
-#define CHECKPOINT() do { rc = checkpoint(cancel, deadline); if (rc) goto done; } while (0)
-#define CREATE(text, target, expr) do { \
-        h->stage = text; CHECKPOINT(); \
-        rc = (expr); if (rc < 0) goto done; \
-        target = rc; \
-    } while (0)
-#define OPTION(text, expr) do { \
-        h->stage = text; rc = (expr); \
-        if (rc != 0) { if (rc > 0) rc = X4_HTTP_PROTOCOL; goto done; } \
-    } while (0)
-    CREATE("plantilla HTTPS", tmpl, h->fn.create_template(h->http, "XCloud4", X4_HTTP_VERSION_1_1, 0));
-    OPTION("tiempo de resolucion", h->fn.resolve_timeout(tmpl, X4_HTTP_TIMEOUT_USEC));
-    OPTION("tiempo de conexion", h->fn.connect_timeout(tmpl, X4_HTTP_TIMEOUT_USEC));
-    OPTION("tiempo de envio", h->fn.send_timeout(tmpl, X4_HTTP_TIMEOUT_USEC));
-    OPTION("tiempo de recepcion", h->fn.recv_timeout(tmpl, X4_HTTP_TIMEOUT_USEC));
-    /* Redirects off: codes and tokens must never follow a Location header. */
-    OPTION("redirecciones", h->fn.auto_redirect(tmpl, 0));
-    OPTION("cookies", h->fn.cookie_enabled(tmpl, 0));
-    /* Full certificate verification; failures surface, never bypassed. */
-    OPTION("verificacion TLS", h->fn.https_enable(tmpl, X4_HTTPS_VERIFY_ALL));
-    CREATE("conexion HTTPS", conn, h->fn.create_connection(tmpl, url, false));
-    /* Method chosen explicitly by the caller and copied with the inputs. */
-    CREATE("solicitud HTTPS", req, h->fn.create_request(conn, o->method, url, (uint64_t)form_size));
-    OPTION("cabeceras", h->fn.add_header(req, "Accept", o->accept, X4_HTTP_HEADER_OVERWRITE));
-    OPTION("cabeceras", h->fn.add_header(req, "Accept-Encoding", "identity", X4_HTTP_HEADER_OVERWRITE));
-    if (o->user_agent)
-        OPTION("cabeceras", h->fn.add_header(req, "User-Agent", o->user_agent, X4_HTTP_HEADER_OVERWRITE));
-    if (o->content_type) OPTION("cabeceras", h->fn.add_header(req, "Content-Type",
-        o->content_type, X4_HTTP_HEADER_OVERWRITE));
-    for (size_t i = 0; i < o->header_count; ++i)
-        OPTION("cabeceras", h->fn.add_header(req, o->headers[i].name, o->headers[i].value,
-            X4_HTTP_HEADER_OVERWRITE));
-
-    h->stage = "envio HTTPS/TLS";
-    CHECKPOINT();
-    rc = h->fn.send(req, form, form_size);
-    if (rc != 0) { if (rc > 0) rc = X4_HTTP_PROTOCOL; goto done; }
-    CHECKPOINT();
-    OPTION("codigo de estado", h->fn.status(req, &code));
-    if (code < 100 || code > 599) { rc = X4_HTTP_PROTOCOL; goto done; }
-
-    h->stage = "lectura de respuesta";
-    for (;;) {
-        CHECKPOINT();
-        size_t room = capacity - 1 - total;
-        unsigned char probe = 0;
-        /* A full buffer is accepted only if one more read proves EOF. */
-        void *target = room ? (void *)(body + total) : (void *)&probe;
-        uint32_t ask = room == 0 ? 1u : room < X4_HTTP_CHUNK ? (uint32_t)room : X4_HTTP_CHUNK;
-        rc = h->fn.read(req, target, ask);
-        x4_secure_clear(&probe, sizeof(probe));
-        if (rc < 0) goto done;
-        int got = rc;
-        /* EOF counts only if cancel and deadline still hold afterwards. */
-        CHECKPOINT();
-        if (got == 0) break;
-        if ((uint32_t)got > ask) { rc = X4_HTTP_PROTOCOL; goto done; }
-        if (room == 0) { h->stage = "respuesta excede bufer"; rc = X4_HTTP_BOUND; goto done; }
-        total += (size_t)got;
+    SessionConnection *slot=&h->session_connection;
+    uint64_t deadline=sceKernelGetProcessTime()+X4_HTTP_DEADLINE_USEC;
+    char host[254];const char *target=NULL;
+    int rc=checkpoint(cancel,deadline);
+    if(!rc)rc=request_host(o,host,&target);
+    if(!rc){
+        /* perform_session has already validated the exact resource and suffix. */
+        const char *id=target+sizeof(sessions_path)-1;
+        size_t id_len=(size_t)(strrchr(target,'/')-id);
+        bool same=!strcmp(host,slot->host)&&strlen(slot->id)==id_len&&!memcmp(id,slot->id,id_len);
+        if(!same)rc=reset_session_connection(h);
+        if(!rc&&slot->conn&&!x4_tls_conn_idle_clean(slot->conn)){
+            if(!release_connection(h,&slot->conn))rc=X4_HTTP_UNUSABLE;
+            else slot->reopen_due_close=true;
+        }
+        if(!rc)rc=checkpoint(cancel,deadline);
+        if(!rc&&slot->conn)x4_tls_conn_mark_reused(slot->conn);
+        else if(!rc){
+            X4TlsBudget b=budget(h,deadline,cancel);
+            rc=x4_tls_conn_connect(h->tls,host,&b,&slot->conn);
+            if(!rc){
+                if(slot->reopen_due_close)x4_tls_count_reopen();
+                slot->reopen_due_close=false;
+                memcpy(slot->host,host,strlen(host)+1);
+                memcpy(slot->id,id,id_len);
+                slot->id[id_len]=0;
+            }
+        }
     }
-    rc = 0;
-#undef OPTION
-#undef CREATE
-#undef CHECKPOINT
-done:
-    if (rc == X4_HTTP_CANCELLED) h->stage = "cancelado";
-    else if (rc == X4_HTTP_DEADLINE) h->stage = "plazo agotado";
-    if (rc != 0) {
-        printf("XCloud4: HTTPS %s -> 0x%08x\n", h->stage, (unsigned)rc);
-        x4_secure_clear(body, capacity);
-    } else {
-        body[total] = 0;
-        *length = total;
-        *status = code;
-        h->stage = "respuesta recibida";
-        printf("XCloud4: HTTPS estado %d, %zu bytes\n", (int)code, total);
+    bool started=false,reusable=false;
+    /* There is no retry path after entering exchange, even before a reply. */
+    if(!rc)rc=exchange(h,o,slot->conn,host,target,deadline,cancel,true,body,capacity,
+                       length,status,&started,&reusable,NULL);
+    if((rc||!reusable)&&!h->quarantined){
+        if(rc)(void)reset_session_connection(h);
+        else if(release_connection(h,&slot->conn))slot->reopen_due_close=true;
     }
-    /* In quarantine the owned inputs stay allocated until process exit. */
-    if (release_request(h, &tmpl, &conn, &req)) {
-        size_t owned = sizeof(*o) + o->size;
-        x4_secure_clear(o, owned);
-        free(o);
-    } else if (rc == 0) h->stage = "recursos HTTP en cuarentena";
+    free_owned(&o);
+    if(rc){x4_secure_clear(body,capacity);*length=0;*status=0;}
+    if(rc==X4_HTTP_CANCELLED)h->stage="cancelado";
+    else if(rc==X4_HTTP_DEADLINE)h->stage="plazo agotado";
+    else if(!rc)h->stage=h->quarantined?"recursos HTTP en cuarentena":"respuesta recibida";
     return rc;
 }
 
 static int perform(X4Http *h, const char *url, const char *form, char *body, size_t capacity,
-    size_t *length, int *status, const _Atomic int *cancel)
+    size_t *length, int *status, const _Atomic int *cancel, uint64_t reconnect_deadline)
 {
     h->stage = "argumentos HTTPS";
     if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
@@ -716,6 +703,7 @@ static int perform(X4Http *h, const char *url, const char *form, char *body, siz
     *status = 0;
     if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
     h->stage = "URL rechazada";
+    if (reconnect_deadline && (!form || strcmp(url, "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"))) return X4_HTTP_URL;
     int rc = check_url(url);
     if (rc) return rc;
     size_t form_size = 0;
@@ -727,6 +715,7 @@ static int perform(X4Http *h, const char *url, const char *form, char *body, siz
     Owned *o = own(form ? X4_HTTP_METHOD_POST : X4_HTTP_METHOD_GET, url, form, form_size,
         form ? "application/x-www-form-urlencoded" : NULL, NULL, 0);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    o->absolute_deadline_us = reconnect_deadline;
     return transfer(h, o, body, capacity, length, status, cancel);
 }
 
@@ -764,7 +753,7 @@ static int perform_json(X4Http *h, const char *url, const X4HttpHeader *headers,
 
 static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const char *url,
     const X4HttpHeader *headers, size_t count, const char *json, char *body, size_t capacity,
-    size_t *length, int *status, const _Atomic int *cancel)
+    size_t *length, int *status, const _Atomic int *cancel, bool short_state, uint64_t reconnect_deadline)
 {
     h->stage = "argumentos HTTPS";
     if (!url || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
@@ -775,7 +764,9 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     if (h->unusable) { h->stage = "HTTPS inutilizable"; return X4_HTTP_UNUSABLE; }
     h->stage = "URL rechazada";
     enum SessionRoute route = classify_session(url);
-    if (route == ROUTE_NONE) return X4_HTTP_URL;
+    if (route == ROUTE_NONE || (short_state && route != ROUTE_STATE)) return X4_HTTP_URL;
+    if (reconnect_deadline && route != ROUTE_STATE && route != ROUTE_CONNECT &&
+        route != ROUTE_SDP && route != ROUTE_ICE && route != ROUTE_KEEPALIVE) return X4_HTTP_URL;
     /* The method and body rule are both part of the route allowlist. */
     h->stage = "metodo rechazado";
     bool allowed = false;
@@ -827,12 +818,22 @@ static int perform_session(X4Http *h, enum X4HttpSessionMethod method, const cha
     /* The empty keepalive POST still declares application/json. */
     Owned *o = own(native, url, json, json_size, json ? "application/json" : NULL, headers, count);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    o->short_state = short_state;
+    if (short_state) o->deadline_us = 2000000;
+    o->absolute_deadline_us = reconnect_deadline;
+    if (reconnect_deadline && route == ROUTE_STATE) {
+        uint64_t state_deadline = sceKernelGetProcessTime() + 2000000;
+        if (state_deadline < o->absolute_deadline_us) o->absolute_deadline_us = state_deadline;
+    }
+    if(h->session_persistent&&!short_state&&!reconnect_deadline&&
+       (route==ROUTE_STATE||route==ROUTE_KEEPALIVE))
+        return transfer_session(h,o,body,capacity,length,status,cancel);
     return transfer(h, o, body, capacity, length, status, cancel);
 }
 
 /* Fixed destination: only the form comes from the caller. */
 static int perform_passport(X4Http *h, const char *form, char *body, size_t capacity, size_t *length,
-    int *status, const _Atomic int *cancel)
+    int *status, const _Atomic int *cancel, uint64_t reconnect_deadline)
 {
     h->stage = "argumentos HTTPS";
     if (!form || !body || capacity == 0 || !length || !status) return X4_HTTP_ARGUMENT;
@@ -849,6 +850,7 @@ static int perform_passport(X4Http *h, const char *form, char *body, size_t capa
     Owned *o = own(X4_HTTP_METHOD_POST, passport_url, form, form_size, "application/x-www-form-urlencoded",
         NULL, 0);
     if (!o) { h->stage = "memoria de solicitud"; return X4_HTTP_ALLOCATION; }
+    o->absolute_deadline_us = reconnect_deadline;
     return transfer(h, o, body, capacity, length, status, cancel);
 }
 
@@ -863,7 +865,7 @@ int x4_http_request(X4Http *h, const char *url, const char *form, char *body, si
     }
     /* Single owner: a concurrent call is refused without touching state. */
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
-    int rc = perform(h, url, form, body, capacity, length, status, cancel);
+    int rc = perform(h, url, form, body, capacity, length, status, cancel, 0);
     atomic_store(&h->busy, false);
     return rc;
 }
@@ -878,7 +880,7 @@ int x4_http_passport_request(X4Http *h, const char *form, char *body, size_t cap
         return X4_HTTP_ARGUMENT;
     }
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
-    int rc = perform_passport(h, form, body, capacity, length, status, cancel);
+    int rc = perform_passport(h, form, body, capacity, length, status, cancel, 0);
     atomic_store(&h->busy, false);
     return rc;
 }
@@ -894,6 +896,33 @@ int x4_http_json_request(X4Http *h, const char *url, const X4HttpHeader *headers
     }
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform_json(h, url, headers, header_count, json, body, capacity, length, status, cancel);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_cloud_time_request(X4Http *h, const char *url, const X4HttpHeader *headers,
+    size_t header_count, char *body, size_t capacity, size_t *length, int *status,
+    const _Atomic int *cancel)
+{
+    if (length) *length = 0;
+    if (status) *status = 0;
+    if (body && capacity) body[0] = 0;
+    if (!h || !body || !capacity || capacity > X4_HTTP_RESPONSE_MAX + 1 || !length || !status)
+        return X4_HTTP_ARGUMENT;
+    if (!cloud_time_url(url)) return X4_HTTP_URL;
+    if (header_count != 2) return X4_HTTP_ARGUMENT;
+    int rc = check_headers(DEST_CLOUD_TIME, headers, header_count);
+    if (rc) return rc;
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    if (h->unusable) rc = X4_HTTP_UNUSABLE;
+    else {
+        Owned *o = own(X4_HTTP_METHOD_GET, url, NULL, 0, NULL, headers, header_count);
+        if (!o) rc = X4_HTTP_ALLOCATION;
+        else {
+            o->accept = "application/x-protobuf, application/json";
+            rc = transfer(h, o, body, capacity, length, status, cancel);
+        }
+    }
     atomic_store(&h->busy, false);
     return rc;
 }
@@ -950,254 +979,117 @@ int x4_http_session_request(X4Http *h, enum X4HttpSessionMethod method, const ch
     }
     if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
     int rc = perform_session(h, method, url, headers, header_count, json, body, capacity, length, status,
-        cancel);
+        cancel, false, 0);
     atomic_store(&h->busy, false);
     return rc;
 }
 
-static void free_public_owned(Owned **owned)
-{
-    if (!*owned) return;
-    x4_secure_clear(*owned, sizeof(**owned) + (*owned)->size);
-    free(*owned);
-    *owned = NULL;
-}
-
-/* The caller has the sole worker gate and has already deleted its request. */
-static int public_connection_reset(X4Http *h, PublicConnection *slot)
-{
-    int32_t no_request = -1;
-    if (!release_request(h, &slot->tmpl, &slot->conn, &no_request)) return X4_HTTP_UNUSABLE;
-    free_public_owned(&slot->anchor);
-    return 0;
-}
-
-int x4_http_public_reset(X4Http *h)
-{
-    if (!h) return X4_HTTP_ARGUMENT;
-    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
-    int rc = h->unusable ? X4_HTTP_UNUSABLE : 0;
-    for (size_t i = 0; !rc && i < 2; ++i) rc = public_connection_reset(h, &h->public_connection[i]);
-    h->public_retry_after_ms = 0;
-    atomic_store(&h->busy, false);
-    return rc;
-}
-
-uint64_t x4_http_public_retry_after_ms(const X4Http *h)
-{
-    return h ? h->public_retry_after_ms : 0;
-}
-
-static unsigned date_digits(const char *p, size_t n)
-{
-    unsigned value = 0;
-    for (size_t i = 0; i < n; ++i) {
-        if (p[i] < '0' || p[i] > '9') return UINT32_MAX;
-        value = value * 10 + (unsigned)(p[i] - '0');
-    }
-    return value;
-}
-
-/* Parse the standard, current HTTP date representation without timegm or
- * locale-dependent strptime. time() is used only for the HTTP-date delta;
- * deadlines and the worker retry schedule remain monotonic. */
-static uint64_t retry_after_value(const char *p, size_t n, int64_t now_seconds)
-{
-    if (!n) return 0;
-    uint64_t seconds = 0;
-    bool digits = true;
-    for (size_t i = 0; i < n; ++i) if (p[i] < '0' || p[i] > '9') { digits = false; break; }
-    if (digits) {
-        for (size_t i = 0; i < n; ++i) {
-            unsigned digit = (unsigned)(p[i] - '0');
-            if (seconds > (UINT64_MAX - digit) / 10) return UINT64_MAX;
-            seconds = seconds * 10 + digit;
-        }
-        return seconds > UINT64_MAX / 1000 ? UINT64_MAX : seconds * 1000;
-    }
-    if (n != 29 || p[3] != ',' || p[4] != ' ' || p[7] != ' ' || p[11] != ' ' ||
-        p[16] != ' ' || p[19] != ':' || p[22] != ':' || memcmp(p + 25, " GMT", 4) || now_seconds < 0)
-        return 0;
-    static const char weekdays[] = "MonTueWedThuFriSatSun", months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-    bool weekday = false;
-    for (size_t i = 0; i < 7; ++i) if (!memcmp(p, weekdays + 3 * i, 3)) weekday = true;
-    if (!weekday) return 0;
-    unsigned month = 0;
-    for (unsigned i = 0; i < 12; ++i) if (!memcmp(p + 8, months + 3 * i, 3)) month = i + 1;
-    unsigned day = date_digits(p + 5, 2), year = date_digits(p + 12, 4);
-    unsigned hour = date_digits(p + 17, 2), minute = date_digits(p + 20, 2), second = date_digits(p + 23, 2);
-    if (!month || year < 1970 || year > 9999 || hour > 23 || minute > 59 || second > 59) return 0;
-    static const unsigned month_days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
-    bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    if (!day || day > month_days[month - 1] + (month == 2 && leap ? 1u : 0u)) return 0;
-    /* Gregorian civil date to days since 1970, with only bounded arithmetic. */
-    unsigned adjusted_year = year - (month <= 2), era = adjusted_year / 400;
-    unsigned yoe = adjusted_year - era * 400;
-    unsigned mp = month > 2 ? month - 3 : month + 9;
-    unsigned doy = (153 * mp + 2) / 5 + day - 1;
-    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    int64_t days = (int64_t)era * 146097 + doe - 719468;
-    int64_t target = days * 86400 + hour * 3600 + minute * 60 + second;
-    return target > now_seconds ? (uint64_t)(target - now_seconds) * 1000 : 0;
-}
-
-static bool ascii_header_equal(const char *p, size_t n, const char *expected)
-{
-    if (n != strlen(expected)) return false;
-    for (size_t i = 0; i < n; ++i) {
-        unsigned char c = (unsigned char)p[i];
-        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + ('a' - 'A'));
-        if (c != (unsigned char)expected[i]) return false;
-    }
-    return true;
-}
-
-/* Borrowed native memory is inspected before DeleteRequest, never retained
- * or logged. Size and each value are bounded; duplicates are rejected. */
-static uint64_t retry_after_headers(const char *headers, size_t size, int64_t now_seconds)
-{
-    if (!headers || !size || size > 64u * 1024) return 0;
-    if (!headers[size - 1]) --size;
-    bool found = false;
-    uint64_t result = 0;
-    size_t start = 0;
-    while (start < size) {
-        size_t end = start;
-        while (end < size && headers[end] != '\n') ++end;
-        size_t length = end - start;
-        if (length && headers[start + length - 1] == '\r') --length;
-        const char *line = headers + start;
-        const char *colon = memchr(line, ':', length);
-        if (colon && ascii_header_equal(line, (size_t)(colon - line), "retry-after")) {
-            if (found) return 0;
-            found = true;
-            const char *value = colon + 1, *limit = line + length;
-            while (value < limit && (*value == ' ' || *value == '\t')) ++value;
-            while (limit > value && (limit[-1] == ' ' || limit[-1] == '\t')) --limit;
-            size_t n = (size_t)(limit - value);
-            if (n > 64) return 0;
-            result = retry_after_value(value, n, now_seconds);
-        }
-        start = end < size ? end + 1 : size;
-    }
-    return result;
-}
-
-/* Only public GETs enter here. Connections are never shared with credential
- * exchanges, even when those use the same X4Http owner. At most one fresh
- * connection retry is made after a native error on an already reused slot. */
-static int transfer_public(X4Http *h, Owned *o, unsigned which, char *body, size_t capacity,
+int x4_http_session_state_request(X4Http *h, const char *url,
+    const X4HttpHeader *headers, size_t header_count, char *body, size_t capacity,
     size_t *length, int *status, const _Atomic int *cancel)
 {
-    PublicConnection *slot = &h->public_connection[which];
-    uint64_t deadline = sceKernelGetProcessTime() + (o->deadline_us ? o->deadline_us : X4_HTTP_DEADLINE_USEC);
-    h->public_retry_after_ms = 0;
-    int rc = 0;
-    for (unsigned attempt = 0; attempt < 2; ++attempt) {
-        bool reused = slot->conn >= 0;
-        int32_t req = -1, code = 0;
-        size_t total = 0;
-#define PUBLIC_CHECKPOINT() do { rc = checkpoint(cancel, deadline); if (rc) goto public_done; } while (0)
-#define PUBLIC_CREATE(text, target, expr) do { h->stage = text; PUBLIC_CHECKPOINT(); \
-        rc = (expr); if (rc < 0) goto public_done; target = rc; } while (0)
-#define PUBLIC_OPTION(text, expr) do { h->stage = text; rc = (expr); \
-        if (rc != 0) { if (rc > 0) rc = X4_HTTP_PROTOCOL; goto public_done; } } while (0)
-        PUBLIC_CHECKPOINT();
-        if (!reused) {
-            slot->anchor = own(X4_HTTP_METHOD_GET, o->url, NULL, 0, NULL, NULL, 0);
-            if (!slot->anchor) { rc = X4_HTTP_ALLOCATION; goto public_done; }
-            PUBLIC_CREATE("plantilla publica HTTPS", slot->tmpl,
-                h->fn.create_template(h->http, "XCloud4", X4_HTTP_VERSION_1_1, 0));
-            PUBLIC_OPTION("tiempo de resolucion", h->fn.resolve_timeout(slot->tmpl, X4_HTTP_TIMEOUT_USEC));
-            PUBLIC_OPTION("tiempo de conexion", h->fn.connect_timeout(slot->tmpl, X4_HTTP_TIMEOUT_USEC));
-            PUBLIC_OPTION("tiempo de envio", h->fn.send_timeout(slot->tmpl, X4_HTTP_TIMEOUT_USEC));
-            PUBLIC_OPTION("tiempo de recepcion", h->fn.recv_timeout(slot->tmpl, X4_HTTP_TIMEOUT_USEC));
-            PUBLIC_OPTION("redirecciones publicas", h->fn.auto_redirect(slot->tmpl, 0));
-            PUBLIC_OPTION("cookies publicas", h->fn.cookie_enabled(slot->tmpl, 0));
-            PUBLIC_OPTION("verificacion TLS publica", h->fn.https_enable(slot->tmpl, X4_HTTPS_VERIFY_ALL));
-            PUBLIC_CREATE("conexion publica HTTPS", slot->conn,
-                h->fn.create_connection(slot->tmpl, slot->anchor->url, true));
-        }
-        PUBLIC_CREATE("solicitud publica HTTPS", req,
-            h->fn.create_request(slot->conn, X4_HTTP_METHOD_GET, o->url, 0));
-        PUBLIC_OPTION("cabeceras publicas", h->fn.add_header(req, "Accept", o->accept, X4_HTTP_HEADER_OVERWRITE));
-        PUBLIC_OPTION("cabeceras publicas", h->fn.add_header(req, "Accept-Encoding", "identity", X4_HTTP_HEADER_OVERWRITE));
-        h->stage = "envio publico HTTPS/TLS";
-        PUBLIC_CHECKPOINT();
-        rc = h->fn.send(req, NULL, 0);
-        if (rc != 0) { if (rc > 0) rc = X4_HTTP_PROTOCOL; goto public_done; }
-        PUBLIC_CHECKPOINT();
-        PUBLIC_OPTION("codigo publico de estado", h->fn.status(req, &code));
-        if (code < 100 || code > 599) { rc = X4_HTTP_PROTOCOL; goto public_done; }
-        if (h->fn.all_response_headers) {
-            char *headers = NULL;
-            size_t headers_size = 0;
-            if (!h->fn.all_response_headers(req, &headers, &headers_size))
-                h->public_retry_after_ms = retry_after_headers(headers, headers_size, (int64_t)time(NULL));
-        }
-        h->stage = "lectura publica de respuesta";
-        for (;;) {
-            PUBLIC_CHECKPOINT();
-            size_t room = capacity - 1 - total;
-            unsigned char probe = 0;
-            void *target = room ? (void *)(body + total) : (void *)&probe;
-            uint32_t ask = !room ? 1u : room < X4_HTTP_CHUNK ? (uint32_t)room : X4_HTTP_CHUNK;
-            rc = h->fn.read(req, target, ask);
-            x4_secure_clear(&probe, sizeof(probe));
-            if (rc < 0) goto public_done;
-            int got = rc;
-            PUBLIC_CHECKPOINT();
-            if (!got) break;
-            if ((uint32_t)got > ask) { rc = X4_HTTP_PROTOCOL; goto public_done; }
-            if (!room) { rc = X4_HTTP_BOUND; goto public_done; }
-            total += (size_t)got;
-        }
-        rc = 0;
-public_done:
-#undef PUBLIC_OPTION
-#undef PUBLIC_CREATE
-#undef PUBLIC_CHECKPOINT
-        /* Delete only the request after success. Its copied URL may then be
-         * released; the slot anchor remains until public_reset/close. */
-        bool released = true;
-        if (req >= 0) {
-            int delete_rc = h->fn.delete_request(req);
-            if (delete_rc != 0) {
-                printf("XCloud4: HTTP publico liberar solicitud 0x%08x; cuarentena\n", (unsigned)delete_rc);
-                h->unusable = h->quarantined = true;
-                released = false;
-                rc = X4_HTTP_UNUSABLE;
-            }
-        }
-        if (!released) break; /* retain o and anchor while native may use them */
-        bool reconnect = rc < 0 && reused && attempt == 0 && rc != X4_HTTP_CANCELLED &&
-            rc != X4_HTTP_DEADLINE && rc != X4_HTTP_BOUND && rc != X4_HTTP_PROTOCOL &&
-            rc != X4_HTTP_ALLOCATION && rc != X4_HTTP_UNUSABLE;
-        if (rc && public_connection_reset(h, slot)) rc = X4_HTTP_UNUSABLE;
-        if (rc == X4_HTTP_UNUSABLE) break;
-        if (reconnect) {
-            int stop = checkpoint(cancel, deadline);
-            if (!stop) {
-                x4_secure_clear(body, capacity);
-                h->public_retry_after_ms = 0;
-                continue;
-            }
-            rc = stop;
-        }
-        if (!rc) {
-            body[total] = 0;
-            *length = total;
-            *status = code;
-            h->stage = "respuesta publica recibida";
-        } else {
-            x4_secure_clear(body, capacity);
-            h->public_retry_after_ms = 0;
-        }
-        free_public_owned(&o);
-        return rc;
+    if (!h) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
     }
-    x4_secure_clear(body, capacity);
-    h->public_retry_after_ms = 0;
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_session(h, X4_SESSION_HTTP_GET, url, headers, header_count,
+        NULL, body, capacity, length, status, cancel, true, 0);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_session_reconnect_request(X4Http *h, enum X4HttpSessionMethod method, const char *url,
+    const X4HttpHeader *headers, size_t header_count, const char *json, char *body, size_t capacity,
+    size_t *length, int *status, const _Atomic int *cancel, uint64_t absolute_deadline_us)
+{
+    if (!h || !absolute_deadline_us) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = perform_session(h, method, url, headers, header_count, json, body, capacity,
+        length, status, cancel, false, absolute_deadline_us);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+int x4_http_auth_reconnect_request(X4Http *h, bool passport, const char *form, char *body,
+    size_t capacity, size_t *length, int *status, const _Atomic int *cancel,
+    uint64_t absolute_deadline_us)
+{
+    if (!h || !absolute_deadline_us) {
+        if (length) *length = 0;
+        if (status) *status = 0;
+        if (body && capacity) body[0] = 0;
+        return X4_HTTP_ARGUMENT;
+    }
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = passport ? perform_passport(h, form, body, capacity, length, status, cancel, absolute_deadline_us) :
+        perform(h, "https://login.microsoftonline.com/consumers/oauth2/v2.0/token", form,
+            body, capacity, length, status, cancel, absolute_deadline_us);
+    atomic_store(&h->busy, false);
+    return rc;
+}
+
+static int public_connection_reset(X4Http *h,PublicConnection *slot)
+{
+    if(!release_connection(h,&slot->conn))return X4_HTTP_UNUSABLE;
+    free_owned(&slot->anchor);slot->reopen_due_close=false;return 0;
+}
+int x4_http_public_reset(X4Http *h)
+{
+    if(!h)return X4_HTTP_ARGUMENT;
+    if(atomic_exchange(&h->busy,true))return X4_HTTP_BUSY;
+    int rc=h->unusable?X4_HTTP_UNUSABLE:0;
+    for(size_t i=0;!rc&&i<2;++i)rc=public_connection_reset(h,&h->public_connection[i]);
+    h->public_retry_after_ms=0;atomic_store(&h->busy,false);return rc;
+}
+uint64_t x4_http_public_retry_after_ms(const X4Http *h)
+{return h?h->public_retry_after_ms:0;}
+static int transfer_public(X4Http *h,Owned *o,unsigned which,char *body,size_t capacity,
+    size_t *length,int *status,const _Atomic int *cancel)
+{
+    PublicConnection *slot=&h->public_connection[which];
+    uint64_t deadline=sceKernelGetProcessTime()+(o->deadline_us?o->deadline_us:X4_HTTP_DEADLINE_USEC);
+    h->public_retry_after_ms=0;
+    char host[254];const char *target=NULL;
+    int rc=request_host(o,host,&target);
+    for(unsigned attempt=0;!rc&&attempt<2;++attempt){
+        bool reused=slot->conn!=NULL,started=false,reusable=false;
+        rc=checkpoint(cancel,deadline);
+        if(!rc&&!reused){
+            slot->anchor=own(X4_HTTP_METHOD_GET,o->url,NULL,0,NULL,NULL,0);
+            if(!slot->anchor)rc=X4_HTTP_ALLOCATION;
+            X4TlsBudget b=budget(h,deadline,cancel);
+            if(!rc)rc=x4_tls_conn_connect(h->tls,host,&b,&slot->conn);
+            if(!rc&&slot->reopen_due_close){x4_tls_count_reopen();slot->reopen_due_close=false;}
+        }else if(!rc)x4_tls_conn_mark_reused(slot->conn);
+        if(!rc)rc=exchange(h,o,slot->conn,host,target,deadline,cancel,true,body,capacity,length,status,&started,&reusable,
+                               &h->public_retry_after_ms);
+        bool retry=rc < -1099&&reused&&!attempt&&!started;
+        if(rc||!reusable){
+            bool closed=slot->conn&&(!rc||rc < -1099);
+            if(public_connection_reset(h,slot))rc=X4_HTTP_UNUSABLE;
+            else slot->reopen_due_close=closed;
+        }
+        if(rc==X4_HTTP_UNUSABLE||h->quarantined)break;
+        if(retry){
+            int stop=checkpoint(cancel,deadline);
+            if(!stop){x4_secure_clear(body,capacity);*length=0;*status=0;h->public_retry_after_ms=0;rc=0;continue;}
+            rc=stop;
+        }
+        break;
+    }
+    if(!h->quarantined)free_owned(&o);
+    if(rc){x4_secure_clear(body,capacity);*length=0;*status=0;h->public_retry_after_ms=0;}
+    if(rc==X4_HTTP_CANCELLED)h->stage="cancelado";
+    else if(rc==X4_HTTP_DEADLINE)h->stage="plazo agotado";
+    else if(!rc)h->stage="respuesta publica recibida";
     return rc;
 }
 
@@ -1212,7 +1104,9 @@ static int public_request(X4Http *h, const char *url, char *body, size_t capacit
     h->public_retry_after_ms = 0;
     size_t n = bounded_length(url, X4_HTTP_JSON_URL_MAX + 1);
     int rc = X4_HTTP_URL;
-    bool valid = image ? x4_http_public_image_url(url) != 0 : n <= X4_HTTP_JSON_URL_MAX && store_url(url, n);
+    bool sigl = !image && n <= X4_HTTP_JSON_URL_MAX && public_sigl_url(url, n);
+    bool valid = image ? x4_http_public_image_url(url) != 0 :
+        n <= X4_HTTP_JSON_URL_MAX && (sigl || store_url(url, n));
     if (valid) {
         rc = X4_HTTP_UNUSABLE;
         if (!h->unusable) {
@@ -1220,7 +1114,10 @@ static int public_request(X4Http *h, const char *url, char *body, size_t capacit
             if (!o) rc = X4_HTTP_ALLOCATION;
             else {
                 if (image) o->accept = "image/jpeg,image/png";
-                rc = transfer_public(h, o, image ? 1u : 0u, body, capacity, length, status, cancel);
+                /* SIGLs are one-shot GETs on their own verified connection.
+                 * The Store/cover pools retain their existing retry policy. */
+                rc = sigl ? transfer(h, o, body, capacity, length, status, cancel) :
+                    transfer_public(h, o, image ? 1u : 0u, body, capacity, length, status, cancel);
             }
         }
     }
@@ -1238,4 +1135,282 @@ int x4_http_public_image_request(X4Http *h, const char *url, unsigned char *body
     size_t *length, int *status, const _Atomic int *cancel)
 {
     return public_request(h, url, (char *)body, capacity, length, status, cancel, true);
+}
+
+/* Separate from the existing Xbox, Store and release-check request paths.
+ * The existing framing parser proves each complete decoded entity. Between
+ * feeds only its caller-owned scratch output offset is reset. */
+enum { UPDATE_URL_CAP = 4096, UPDATE_MAX_REDIRECTS = 3, UPDATE_FOLLOW = 1 };
+typedef struct {
+    unsigned char header[X4_HTTP_WIRE_HEADERS_MAX];
+    unsigned char input[X4_HTTP_CHUNK], output[X4_HTTP_CHUNK + 1];
+    char url[UPDATE_URL_CAP];
+} UpdateWire;
+
+static bool update_segment(const char *s, size_t limit)
+{
+    if (!s) return false;
+    const size_t n = bounded_length(s, limit + 1);
+    if (!n || n > limit || !strcmp(s, ".") || !strcmp(s, "..")) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const unsigned char c = (unsigned char)s[i];
+        if (!alphanumeric(c) && c != '.' && c != '_' && c != '-') return false;
+    }
+    return true;
+}
+
+static int update_hex(unsigned char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+static bool update_target(const char *s)
+{
+    bool query = false;
+    size_t segment = 0, dots = 0;
+    if (s[1] == '/') return false;
+    for (size_t i = 1; ; ++i) {
+        unsigned char c = (unsigned char)s[i];
+        if (!c || (!query && (c == '/' || c == '?'))) {
+            if ((segment == 1 || segment == 2) && segment == dots) return false;
+            if (!c) return true;
+            query = c == '?';
+            segment = dots = 0;
+            continue;
+        }
+        if (c <= 32 || c >= 127 || c == '#' || c == '\\') return false;
+        if (c == '%') {
+            if (!s[i + 1] || !s[i + 2]) return false;
+            const int high = update_hex((unsigned char)s[i + 1]);
+            const int low = update_hex((unsigned char)s[i + 2]);
+            if (high < 0 || low < 0) return false;
+            c = (unsigned char)(high * 16 + low);
+            if (!query && (c <= 32 || c >= 127 || c == '/' || c == '\\' || c == '?' || c == '#' || c == '%'))
+                return false;
+            i += 2;
+        }
+        if (!query) {
+            ++segment;
+            if (c == '.') ++dots;
+        }
+    }
+}
+
+static const char *update_host(const char *url, const char **target)
+{
+    static const char *const hosts[] = {
+        "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"
+    };
+    if (strncmp(url, https_scheme, sizeof(https_scheme) - 1)) return NULL;
+    const char *host = url + sizeof(https_scheme) - 1;
+    const char *slash = strchr(host, '/');
+    if (!slash || !update_target(slash)) return NULL;
+    for (size_t i = 0; i < sizeof(hosts) / sizeof(*hosts); ++i) {
+        if (same_word(host, (size_t)(slash - host), hosts[i])) {
+            *target = slash;
+            return hosts[i];
+        }
+    }
+    return NULL;
+}
+
+static bool update_redirect_status(int status)
+{
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+}
+
+static int update_read(X4Http *h, X4TlsConn *conn, UpdateWire *wire,
+    uint64_t deadline, const _Atomic int *cancel, size_t *count)
+{
+    *count = 0;
+    int rc = checkpoint(cancel, deadline);
+    if (rc) return rc;
+    const X4TlsBudget b = budget(h, deadline, cancel);
+    rc = x4_tls_conn_read(conn, wire->input, sizeof(wire->input), count, &b);
+    if (rc) return rc;
+    if (*count > sizeof(wire->input)) return X4_HTTP_PROTOCOL;
+    return checkpoint(cancel, deadline);
+}
+
+/* The temporary header copy locates Location in the final block while
+ * retaining coalesced body bytes. http_wire validates all interim blocks. */
+static int update_headers(X4Http *h, X4TlsConn *conn, UpdateWire *wire, X4HttpWire *parser,
+    uint64_t deadline, const _Atomic int *cancel, size_t *header_size, size_t *begin, size_t *end)
+{
+    size_t saved = 0;
+    *begin = *end = 0;
+    for (;;) {
+        if (*begin == *end) {
+            int rc = update_read(h, conn, wire, deadline, cancel, end);
+            if (rc) return rc;
+            if (!*end) return X4_HTTP_PROTOCOL;
+            *begin = 0;
+        }
+        if (saved == sizeof(wire->header)) return X4_HTTP_BOUND;
+        wire->header[saved++] = wire->input[(*begin)++];
+        if (saved < 4 || memcmp(wire->header + saved - 4, "\r\n\r\n", 4)) continue;
+        size_t used = 0;
+        int rc = x4_http_wire_feed(parser, wire->header, saved, &used);
+        if (rc < 0) return rc;
+        if (used != saved) return X4_HTTP_PROTOCOL;
+        if (x4_http_wire_result(parser).status >= 200) {
+            *header_size = saved;
+            return 0;
+        }
+        saved = 0;
+    }
+}
+
+static int update_location(UpdateWire *wire, size_t header_size)
+{
+    const char *line = (const char *)wire->header;
+    const char *end = line + header_size;
+    const char *value = NULL;
+    size_t length = 0;
+    while (line < end) {
+        const char *cr = memchr(line, '\r', (size_t)(end - line));
+        if (!cr || cr + 1 == end || cr[1] != '\n') return X4_HTTP_PROTOCOL;
+        const char *colon = memchr(line, ':', (size_t)(cr - line));
+        if (colon && same_word(line, (size_t)(colon - line), "location")) {
+            if (value) return X4_HTTP_UPDATE_REDIRECT;
+            value = colon + 1;
+            while (value < cr && (*value == ' ' || *value == '\t')) ++value;
+            const char *last = cr;
+            while (last > value && (last[-1] == ' ' || last[-1] == '\t')) --last;
+            length = (size_t)(last - value);
+        }
+        line = cr + 2;
+    }
+    if (!length || length >= sizeof(wire->url)) return X4_HTTP_UPDATE_REDIRECT;
+    memcpy(wire->url, value, length);
+    wire->url[length] = 0;
+    const char *target = NULL;
+    return update_host(wire->url, &target) ? UPDATE_FOLLOW : X4_HTTP_UPDATE_REDIRECT;
+}
+
+static int update_body(X4Http *h, X4TlsConn *conn, UpdateWire *wire, X4HttpWire *parser,
+    size_t begin, size_t end, size_t maximum, X4HttpUpdateSink sink, void *context,
+    uint64_t deadline, const _Atomic int *cancel, size_t *total)
+{
+    if (parser->cl_seen && parser->content_length > maximum) return X4_HTTP_BOUND;
+    for (;;) {
+        if (parser->complete && begin == end) return checkpoint(cancel, deadline);
+        if (begin == end) {
+            int rc = update_read(h, conn, wire, deadline, cancel, &end);
+            if (rc) return rc;
+            begin = 0;
+        }
+        size_t used = 0;
+        const size_t available = end - begin;
+        const int rc = available ? x4_http_wire_feed(parser, wire->input + begin, available, &used)
+                                 : x4_http_wire_eof(parser);
+        if (rc < 0) return rc;
+        if (used != available) return X4_HTTP_PROTOCOL;
+        const size_t bytes = parser->body_bytes;
+        if (bytes > maximum - *total) return X4_HTTP_BOUND;
+        if (bytes) {
+            const int write_rc = sink(context, wire->output, bytes);
+            if (write_rc) return write_rc < 0 ? write_rc : X4_HTTP_ARGUMENT;
+            *total += bytes;
+            parser->body_bytes = 0;
+        }
+        if (rc == X4_HTTP_WIRE_DONE) return checkpoint(cancel, deadline);
+        begin = end;
+    }
+}
+
+static int update_hop(X4Http *h, UpdateWire *wire, size_t maximum, X4HttpUpdateSink sink,
+    void *context, uint64_t deadline, const _Atomic int *cancel, size_t *total)
+{
+    const char *target = NULL;
+    const char *host = update_host(wire->url, &target);
+    if (!host) return X4_HTTP_UPDATE_REDIRECT;
+    X4TlsConn *conn = NULL;
+    X4TlsBudget b = budget(h, deadline, cancel);
+    int rc = checkpoint(cancel, deadline);
+    if (!rc) rc = x4_tls_conn_connect(h->tls, host, &b, &conn);
+    if (!rc) {
+        const X4HttpWireRequest request = {.method = "GET", .host = host, .target = target,
+            .accept = "application/octet-stream", .user_agent = "XCloud4"};
+        RequestBuffer header = {.data = wire->header, .capacity = sizeof(wire->header)};
+        rc = x4_http_wire_write_request(&request, collect_header, &header);
+        if (!rc) rc = x4_tls_conn_write(conn, header.data, header.size, &b);
+    }
+    if (!rc) {
+        X4HttpWire parser;
+        size_t header_size = 0, begin = 0, end = 0;
+        x4_http_wire_init(&parser, wire->output, sizeof(wire->output), 0);
+        rc = update_headers(h, conn, wire, &parser, deadline, cancel, &header_size, &begin, &end);
+        if (!rc) {
+            const int status = x4_http_wire_result(&parser).status;
+            if (status == 200)
+                rc = update_body(h, conn, wire, &parser, begin, end, maximum, sink, context,
+                    deadline, cancel, total);
+            else if (update_redirect_status(status))
+                rc = update_location(wire, header_size);
+            else rc = X4_HTTP_UPDATE_STATUS;
+        }
+    }
+    if (!release_connection(h, &conn)) return X4_HTTP_UNUSABLE;
+    return rc;
+}
+
+X4Http *x4_http_update_open(int *error)
+{
+    X4Http *h = x4_http_open(error);
+    if (!h) return NULL;
+    const int rc = x4_tls_http_enable_update_ca(h->tls);
+    if (rc) {
+        x4_http_close(h);
+        if (error) *error = rc;
+        return NULL;
+    }
+    h->update_only = true;
+    return h;
+}
+
+int x4_http_update_asset(X4Http *h, const char *tag, const char *asset_name,
+    size_t maximum, X4HttpUpdateSink sink, void *context, size_t *received,
+    const _Atomic int *cancel)
+{
+    if (received) *received = 0;
+    if (!h || !h->update_only || !sink || !received || !maximum || maximum > X4_HTTP_UPDATE_BODY_MAX)
+        return X4_HTTP_ARGUMENT;
+    if (!update_segment(tag, 63) || !update_segment(asset_name, 128)) return X4_HTTP_URL;
+    if (atomic_exchange(&h->busy, true)) return X4_HTTP_BUSY;
+    int rc = h->unusable ? X4_HTTP_UNUSABLE : 0;
+    UpdateWire *wire = NULL;
+    if (!rc) {
+        wire = malloc(sizeof(*wire));
+        if (!wire) rc = X4_HTTP_ALLOCATION;
+    }
+    if (!rc) {
+        const int size = snprintf(wire->url, sizeof(wire->url),
+            "https://github.com/asp11edgr/XCloud4/releases/download/%s/%s", tag, asset_name);
+        if (size < 0 || (size_t)size >= sizeof(wire->url)) rc = X4_HTTP_URL;
+    }
+    if (!rc) {
+        const uint64_t interval = UINT64_C(15) * 60 * 1000000;
+        const uint64_t now = sceKernelGetProcessTime();
+        const uint64_t deadline = now > UINT64_MAX - interval ? UINT64_MAX : now + interval;
+        size_t total = 0;
+        for (unsigned hop = 0; ; ++hop) {
+            rc = update_hop(h, wire, maximum, sink, context, deadline, cancel, &total);
+            if (rc != UPDATE_FOLLOW) break;
+            if (hop == UPDATE_MAX_REDIRECTS) {
+                rc = X4_HTTP_UPDATE_REDIRECT;
+                break;
+            }
+        }
+        if (!rc) *received = total;
+    }
+    if (wire) {
+        x4_secure_clear(wire, sizeof(*wire));
+        free(wire);
+    }
+    atomic_store(&h->busy, false);
+    return rc;
 }

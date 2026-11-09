@@ -644,6 +644,11 @@ void exact_baseline_wrap_gate_reproduces_five_stale_offers(bool dirtyByPoll)
 }
 extern "C" uint64_t x4_pipeline_clock(void){return clockNow.load();}
 extern "C" void x4_pipeline_set_clock(uint64_t value){now(value);}
+extern "C" bool x4_rtc_diag_startup_active(uint64_t) { return false; }
+extern "C" uint64_t x4_rtc_diag_startup_release_count(void) { return 0; }
+extern "C" void x4_rtc_diag_startup_range(unsigned, uint64_t, uint64_t, uint64_t) {}
+extern "C" int x4_rtc_diag_rtt_p50_ms(void) { return 26; }
+extern "C" void x4_rtc_diag_first_return_publish(uint32_t, unsigned) {}
 extern "C" uint64_t x4_rtc_receive_clock(void){return clockNow.load();}
 extern "C" void x4_native_random_or_exit(void *p,size_t n){std::memset(p,0x5a,n);}
 extern "C" void x4_rtc_nack_event(unsigned event,unsigned flags,uint64_t id,uint64_t source,uint64_t a,uint64_t b,uint64_t c)

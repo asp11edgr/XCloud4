@@ -9,8 +9,14 @@ enum X4CatalogState {
 };
 typedef struct {
     char id[96], product_id[32], name[128];
-    int entitled; /* Only service-supplied entitlement/subscription matches. */
+    /* Keep all three boolean flags in the original entitlement word: changing
+     * the size of this title would move the input state in the owning auth
+     * structure, even though the input source itself is untouched. */
+    unsigned entitled : 1; /* Only service-supplied entitlement/subscription matches. */
+    unsigned is_free_in_store : 1;
+    unsigned f2p_only : 1;
 } X4CatalogTitle;
+_Static_assert(sizeof(X4CatalogTitle) == 260, "Preserve the T31 title layout");
 /* Public view has no access tokens, user hashes or request/response bodies. */
 typedef struct {
     enum X4CatalogState state;

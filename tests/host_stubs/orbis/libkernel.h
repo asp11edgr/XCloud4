@@ -15,6 +15,7 @@ OrbisPthread scePthreadSelf(void);
 int32_t scePthreadSetprio(OrbisPthread,int);
 int32_t scePthreadGetprio(OrbisPthread,int32_t*);
 int32_t scePthreadAttrInit(OrbisPthreadAttr*);
+int32_t scePthreadAttrSetstacksize(OrbisPthreadAttr*,size_t);
 int32_t scePthreadAttrGet(OrbisPthread,OrbisPthreadAttr*);
 int32_t scePthreadAttrGetaffinity(const OrbisPthreadAttr*,void*);
 int32_t scePthreadAttrDestroy(OrbisPthreadAttr*);

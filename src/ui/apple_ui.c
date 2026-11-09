@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "apple_ui.h"
 #include "font.h"
-#include "../core/build_identity.h"
+#include "../core/app_identity.h"
 #include "../../third_party/qrcodegen/qrcodegen.h"
 #include <math.h>
 #include <stdio.h>
@@ -31,6 +31,20 @@ static bool update_tag_valid(const char *tag)
     return i>0 && i<64 && strcmp(tag,".") && strcmp(tag,"..");
 }
 
+bool x4_apple_update_is_current(const char *version)
+{
+#if !X4_PUBLIC && !X4_VIDEO_PROBE
+    /* The pinned release worker can offer the current Lab version using its
+     * prior build identity. Compare the numeric prefix of its normalized tag. */
+    const size_t prefix = sizeof(X4_PRODUCT_VERSION) - sizeof("-lab");
+    if (version && !strncmp(version, X4_PRODUCT_VERSION, prefix))
+        return version[prefix] < '0' || version[prefix] > '9';
+#else
+    (void)version;
+#endif
+    return false;
+}
+
 bool x4_apple_update_notice_offer(X4UpdateNotice *notice,const char *version,
     const char *tag,bool eligible,bool is_test)
 {
@@ -41,11 +55,14 @@ bool x4_apple_update_notice_offer(X4UpdateNotice *notice,const char *version,
         if (c<0x20 || c>0x7e) return false;
         ++size;
     }
-    if (!size || size>=sizeof(notice->version)) return false;
+    if (!size || size>=sizeof(notice->version) || (!is_test && x4_apple_update_is_current(version))) return false;
     memcpy(notice->version,version,size+1);
-    if (update_tag_valid(tag))
+    notice->local = notice->can_install = notice->install_focused = false;
+    notice->tag[0] = 0;
+    if (update_tag_valid(tag)) {
+        (void)snprintf(notice->tag, sizeof(notice->tag), "%s", tag);
         snprintf(notice->url,sizeof(notice->url),"https://github.com/asp11edgr/XCloud4/releases/tag/%s",tag);
-    else
+    } else
         snprintf(notice->url,sizeof(notice->url),"https://github.com/asp11edgr/XCloud4/releases");
     notice->open=true;
     if (!is_test) notice->shown=true;
@@ -59,21 +76,43 @@ bool x4_apple_update_notice_handle(X4UpdateNotice *notice,bool circle)
     return true;
 }
 
-static void update_notice_qr(uint32_t *pixels,int x,int y,const char *url)
+static bool draw_qr(uint32_t *pixels, int x, int y, int edge, int radius, const char *url)
 {
-    static uint8_t qr[qrcodegen_BUFFER_LEN_MAX],temp[qrcodegen_BUFFER_LEN_MAX];
-    if (!qrcodegen_encodeText(url,temp,qr,qrcodegen_Ecc_MEDIUM,qrcodegen_VERSION_MIN,
-        10,qrcodegen_Mask_AUTO,true)) return;
-    int size=qrcodegen_getSize(qr),scale=330/(size+8),box=(size+8)*scale;
-    int left=x+(330-box)/2,top=y+(330-box)/2;
-    x4_apple_fill_round_rect(pixels,x,y,330,330,18,X4_RGB(255,255,255));
-    const uint32_t black=X4_RGB(9,15,25);
-    for(int row=0;row<size;++row)for(int col=0;col<size;++col){
-        if(!qrcodegen_getModule(qr,col,row))continue;
-        int dx=left+(col+4)*scale,dy=top+(row+4)*scale;
-        for(int yy=0;yy<scale;++yy)for(int xx=0;xx<scale;++xx)
-            pixels[(size_t)(dy+yy)*X4_WIDTH+dx+xx]=black;
+    if (!pixels || !url || edge <= 0 || x < 0 || y < 0 ||
+        edge > X4_WIDTH - x || edge > X4_HEIGHT - y) return false;
+    static uint8_t qr[qrcodegen_BUFFER_LEN_MAX], temp[qrcodegen_BUFFER_LEN_MAX];
+    if (!qrcodegen_encodeText(url, temp, qr, qrcodegen_Ecc_MEDIUM, qrcodegen_VERSION_MIN,
+        10, qrcodegen_Mask_AUTO, true)) return false;
+    int size = qrcodegen_getSize(qr), scale = edge / (size + 8), box = (size + 8) * scale;
+    if (!scale) return false;
+    int left = x + (edge - box) / 2, top = y + (edge - box) / 2;
+    x4_apple_fill_round_rect(pixels, x, y, edge, edge, radius, X4_RGB(255, 255, 255));
+    const uint32_t black = X4_RGB(9, 15, 25);
+    for (int row = 0; row < size; ++row) {
+        for (int col = 0; col < size; ++col) {
+            if (!qrcodegen_getModule(qr, col, row)) continue;
+            int dx = left + (col + 4) * scale, dy = top + (row + 4) * scale;
+            for (int yy = 0; yy < scale; ++yy) {
+                uint32_t *line = pixels + (size_t)(dy + yy) * X4_WIDTH + dx;
+                for (int xx = 0; xx < scale; ++xx) line[xx] = black;
+            }
+        }
     }
+    return true;
+}
+
+bool x4_apple_draw_public_qr(uint32_t *pixels, int center_x, int center_y,
+    int max_edge, const char *validated_url)
+{
+    if (center_x < 0 || center_x >= X4_WIDTH || center_y < 0 || center_y >= X4_HEIGHT ||
+        max_edge <= 0 || max_edge > X4_HEIGHT) return false;
+    return draw_qr(pixels, center_x - max_edge / 2, center_y - max_edge / 2,
+        max_edge, 0, validated_url);
+}
+
+static void update_notice_qr(uint32_t *pixels, int x, int y, const char *url)
+{
+    (void)draw_qr(pixels, x, y, 330, 18, url);
 }
 
 void x4_apple_update_notice_draw(const X4UpdateNotice *notice,uint32_t *p)
@@ -172,8 +211,16 @@ void x4_apple_draw_access_controls(uint32_t *p, int x, int y, int w, int h,
     }
 }
 
+static bool access_card_use_overlay;
+
+void x4_apple_access_card_use_overlay(bool enabled)
+{
+    access_card_use_overlay = enabled;
+}
+
 void x4_apple_draw_access_card(uint32_t *p,int x,int y,int w,int h)
 {
+    if (access_card_use_overlay) return;
     X4AccessCountryUi ui; X4AccessCountryCardPhase phase;
     x4_access_country_card_get(&ui,&phase);
     x4_apple_draw_access_controls(p,x,y,w,h,&ui,phase,false);
@@ -255,6 +302,42 @@ void x4_apple_blend_pixel(uint32_t *dst, uint32_t src_rgba)
 {
     if (!dst) return;
     *dst = blend_val(*dst, src_rgba);
+}
+
+static inline uint32_t shade_black(uint32_t pixel, unsigned alpha)
+{
+    unsigned keep = alpha == 255 ? 0 : 256 - alpha;
+    unsigned rb = ((pixel & 0x00ff00ffu) * keep + 0x00800080u) >> 8;
+    unsigned g = (((pixel >> 8) & 255u) * keep + 128u) & 0xff00u;
+    return 0xff000000u | (rb & 0x00ff00ffu) | g;
+}
+
+void x4_apple_shade_text_zone(uint32_t *pixels, int x, int y, int opaque_w,
+    int opaque_h, int fade_top, int fade_right, int fade_bottom, unsigned alpha)
+{
+    if (!pixels || x < 0 || x >= X4_WIDTH || y < 0 || y >= X4_HEIGHT ||
+        opaque_w <= 0 || opaque_w > X4_WIDTH - x || opaque_h <= 0 || opaque_h > X4_HEIGHT - y ||
+        fade_top < 0 || fade_top > opaque_h ||
+        fade_right < 0 || fade_right > X4_WIDTH - x - opaque_w ||
+        fade_bottom < 0 || fade_bottom > X4_HEIGHT - y - opaque_h || !alpha || alpha > 255)
+        return;
+
+    for (int row = 0; row < opaque_h + fade_bottom; ++row) {
+        uint32_t *line = pixels + (size_t)(y + row) * X4_WIDTH + x;
+        unsigned strength = alpha;
+        if (row < fade_top) strength = strength * (unsigned)(row + 1) / (unsigned)fade_top;
+        if (row >= opaque_h)
+            strength = strength * (unsigned)(opaque_h + fade_bottom - row - 1) / (unsigned)fade_bottom;
+        int left = opaque_w < 10 ? opaque_w : 10;
+        for (int col = 0; col < left; ++col)
+            line[col] = shade_black(line[col], strength * (unsigned)(col + 1) / 10u);
+        for (int col = left; col < opaque_w; ++col)
+            line[col] = shade_black(line[col], strength);
+        for (int col = 0; col < fade_right; ++col) {
+            unsigned side = strength * (unsigned)(fade_right - col - 1) / (unsigned)fade_right;
+            line[opaque_w + col] = shade_black(line[opaque_w + col], side);
+        }
+    }
 }
 
 static inline uint32_t lerp_rgb(uint32_t c0, uint32_t c1, unsigned t256)
@@ -386,6 +469,22 @@ void x4_apple_bg_draw(uint32_t *pixels)
             uint32_t c = s_bg_blur_q[(y >> 2) * 480];
             uint32_t *row = pixels + (size_t)y * X4_WIDTH;
             for (int x = 0; x < X4_WIDTH; ++x) row[x] = c;
+        }
+    }
+}
+
+void x4_apple_bg_restore(uint32_t *pixels, int x, int y, int w, int h)
+{
+    if (!pixels || x < 0 || y < 0 || w <= 0 || h <= 0 ||
+        x > X4_WIDTH - w || y > X4_HEIGHT - h) return;
+    init_background_once();
+    for (int row = y; row < y + h; ++row) {
+        size_t offset = (size_t)row * X4_WIDTH + x;
+        if (s_bg_full) {
+            memcpy(pixels + offset, s_bg_full + offset, (size_t)w * sizeof(*pixels));
+        } else {
+            uint32_t color = s_bg_blur_q[(row >> 2) * 480];
+            for (int col = 0; col < w; ++col) pixels[offset + col] = color;
         }
     }
 }
@@ -986,6 +1085,41 @@ static void blit_image_policy(uint32_t *pixels, int dst_x, int dst_y, int dst_w,
 void x4_apple_blit_image_rounded(uint32_t *p,int x,int y,int w,int h,int radius,
     const X4CoverRaster *r,enum X4ImageGradientMode g)
 { blit_image_policy(p,x,y,w,h,radius,r,g,0.05f); }
+
+bool x4_apple_blit_image_exact(uint32_t *p,int x,int y,int w,int h,int radius,
+    int right,const X4CoverRaster *r)
+{
+    if (!p || !r || !r->rgba || w <= 0 || h <= 0 || x < 0 || y < 0 ||
+        right > X4_WIDTH || right <= x || y > X4_HEIGHT - h ||
+        r->width != (unsigned)w || r->height != (unsigned)h) return false;
+    int visible = right - x < w ? right - x : w;
+    if (radius > h / 2) radius = h / 2;
+    if (radius > w / 2) radius = w / 2;
+    for (int row = 0; row < h; ++row) {
+        uint32_t *dst = p + (size_t)(y + row) * X4_WIDTH + x;
+        const uint32_t *src = r->rgba + (size_t)row * w;
+        if (row >= radius && row < h - radius) {
+            memcpy(dst, src, (size_t)visible * sizeof(*dst));
+            continue;
+        }
+        int middle_end = visible < w - radius ? visible : w - radius;
+        if (middle_end > radius)
+            memcpy(dst + radius, src + radius, (size_t)(middle_end - radius) * sizeof(*dst));
+        for (int col = 0; col < visible; ++col) {
+            if (col == radius && middle_end > radius) col = middle_end;
+            if (col == visible) break;
+            float d = sd_round_rect(col + 0.5f - w * 0.5f, row + 0.5f - h * 0.5f,
+                w * 0.5f, h * 0.5f, (float)radius);
+            if (d <= -0.5f) dst[col] = src[col];
+            else if (d < 0.5f) {
+                unsigned alpha = (unsigned)((0.5f - d) * 255.0f + 0.5f);
+                dst[col] = blend_val(dst[col], (src[col] & 0xffffffu) | (alpha << 24));
+            }
+        }
+    }
+    return true;
+}
+
 void x4_apple_blit_card_rounded(uint32_t *p,int x,int y,int w,int h,int radius,
     const X4CoverRaster *r,enum X4ImageGradientMode g)
 { blit_image_policy(p,x,y,w,h,radius,r,g,0.10f); }
@@ -1240,10 +1374,19 @@ int x4_apple_draw_pad_glyph(uint32_t *pixels, int x, int y,
 int x4_apple_draw_footer_hint(uint32_t *pixels, int x, int y,
                               enum X4PadGlyph glyph, const char *label)
 {
+    int tw = x4_text_width_px(22, X4_FONT_REGULAR, label ? label : "");
+#ifdef X4_UI46_CAPTURE
+    const char *const pads[] = {"OPTIONS", "L1", "R1", "L2", "R2"};
+    int measured_gw = glyph <= X4_GLYPH_SQUARE ? 28 :
+        x4_text_width_px(18, X4_FONT_SEMIBOLD, pads[glyph - X4_GLYPH_OPTIONS]) + 20;
+    x4_ui46_capture_footer(pixels, x, y, measured_gw + 10 + tw, 32, false);
+#endif
     int gw = x4_apple_draw_pad_glyph(pixels, x, y, glyph);
     int tx = x + gw + 10;
     x4_text_px(pixels, tx, y + 2, 22, X4_FONT_REGULAR, label ? label : "", X4_RGB(0xC5, 0xD0, 0xE0));
-    int tw = x4_text_width_px(22, X4_FONT_REGULAR, label ? label : "");
+#ifdef X4_UI46_CAPTURE
+    x4_ui46_capture_footer(pixels, x, y, gw + 10 + tw, 32, true);
+#endif
     return gw + 10 + tw;
 }
 
@@ -1288,23 +1431,21 @@ void x4_apple_draw_account_pill(uint32_t *pixels, int x, int y, int h,
 
 const char *x4_region_qr_url(enum X4Lang lang)
 {
-    return (lang == X4_LANG_EN)
+    return (lang != X4_LANG_ES)
         ? "https://github.com/asp11edgr/XCloud4/blob/main/docs/region-en.md"
         : "https://github.com/asp11edgr/XCloud4/blob/main/docs/region-es.md";
 }
 
 const char *x4_region_qr_short_label(enum X4Lang lang)
 {
-    return (lang == X4_LANG_EN)
+    return (lang != X4_LANG_ES)
         ? "github.com/asp11edgr/XCloud4 \xe2\x80\xba docs \xe2\x80\xba region-en.md"
         : "github.com/asp11edgr/XCloud4 \xe2\x80\xba docs \xe2\x80\xba region-es.md";
 }
 
 const char *x4_region_qr_caption(enum X4Lang lang)
 {
-    return (lang == X4_LANG_EN)
-        ? "Scan the QR to see how to play if your country doesn't have Xbox Cloud Gaming."
-        : "Escanea el QR para ver c\xc3\xb3mo jugar si tu pa\xc3\xads no tiene Xbox Cloud Gaming.";
+    return x4_tr_for_lang(lang, X4_TR_50_REGION_QR_CAPTION);
 }
 
 void x4_apple_draw_region_qr_block(uint32_t *pixels, int x, int y, int w, int h,

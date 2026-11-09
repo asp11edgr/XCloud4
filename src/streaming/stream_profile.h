@@ -34,15 +34,25 @@ typedef enum X4StreamCpuVariant {
 typedef enum X4StreamDecoderDepth {
     X4_DEPTH_AUTO = 0, X4_DEPTH_1 = 1, X4_DEPTH_2 = 2
 } X4StreamDecoderDepth;
-/* Local session options; packed into settings bits8..11, independently of
- * profile/color/CPU/depth. Zero selects the defaults, including VSYNC. */
+/* Local session options. The low four bits retain settings bits8..11;
+ * bits4..7 use settings bits17..20, leaving conversion bits12..16 intact.
+ * Zero selects automatic VSYNC, GPU preference and enabled dither. */
 enum {
     X4_INTERACTION_INPUT_60HZ = 1u,
     X4_INTERACTION_RUMBLE_OFF = 2u,
     X4_INTERACTION_AUDIO_PREVIOUS = 4u,
     X4_INTERACTION_VSYNC_OFF = 8u,
-    X4_INTERACTION_MASK = 15u
+    X4_INTERACTION_VSYNC_ALWAYS = 16u,
+    X4_INTERACTION_VSYNC_MASK = 24u,
+    X4_INTERACTION_VSYNC_SYNCED = 24u,
+    X4_INTERACTION_MAILBOX = 32u,
+    X4_INTERACTION_DITHER_OFF = 64u,
+    X4_INTERACTION_GPU_FORCE_CPU = 128u,
+    X4_INTERACTION_MASK = 255u
 };
+typedef enum X4StreamVsyncPolicy {
+    X4_VSYNC_AUTO = 0, X4_VSYNC_ALWAYS = 1, X4_VSYNC_NEVER = 2, X4_VSYNC_SYNCED = 3
+} X4StreamVsyncPolicy;
 #ifndef X4_CONVERT_SMOOTH_DEFAULT
 #define X4_CONVERT_SMOOTH_DEFAULT 1
 #endif
@@ -50,21 +60,40 @@ enum {
 #define X4_SHARPNESS_PUBLIC_DEFAULT 2
 #endif
 
+typedef enum {
+    X4_NACK_POLICY_T43C = 0, X4_NACK_POLICY_T43 = 1, X4_NACK_POLICY_T43B = 2
+} X4StreamNackPolicy;
+typedef enum {
+    X4_RR_ZERO = 0, X4_RR_REPAIRED = 1, X4_RR_EDGE = 2
+} X4StreamRrMode;
+
 typedef struct X4StreamRequestConfig {
     X4StreamRequestProfile profile;
     X4StreamColorPreference color_preference;
     unsigned width, height, fps, bitrate_kbps;
     const char *os_name, *label, *h264_fmtp;
     bool display_info;
-    /* Occupies existing padding: keep the captured config's 64-byte ABI. */
+    /* Occupies existing padding: keep the captured config's 72-byte ABI. */
     unsigned char cpu_variant;
     unsigned char decoder_depth;
     unsigned char interaction_modes;
     unsigned char convert_mode; /* 0 = Original, 1 = Suave */
     unsigned char sharpness;    /* 0 = No, 1 = Baja, 2 = Media */
     unsigned char resolution_request_mode; /* 0 = Cada 300 ms, 1 = Una vez, 2 = Repetir c/5s */
+    /* T43 occupies the final padding byte, not a protocol field. Low 2 bits:
+     * NACK/RTX/RTX+FlexFEC; next 2 bits: simulated loss class 0/1/3 percent;
+     * bits 4..5 select NACK policy; bits 6..7 select RR. Zero selects T43c/Edge. */
+    unsigned char recovery_options;
     unsigned h264_profile, max_fs, max_mbps;
 } X4StreamRequestConfig;
+#if defined(__cplusplus)
+static_assert(sizeof(X4StreamRequestConfig)==72&&
+#else
+_Static_assert(sizeof(X4StreamRequestConfig)==72&&
+#endif
+    offsetof(X4StreamRequestConfig,recovery_options)==55&&
+    offsetof(X4StreamRequestConfig,h264_profile)==56,
+    "T43 retains the captured x86_64 request layout");
 
 /* Invalid enum arguments produce the safe 720p/automatic defaults. No string
  * supplied by a caller is retained; all returned pointers are fixed literals. */
@@ -79,7 +108,24 @@ bool x4_stream_settings_set_extended(X4StreamRequestProfile, X4StreamColorPrefer
 bool x4_stream_settings_set_lab(X4StreamRequestProfile, X4StreamColorPreference,
     X4StreamCpuVariant, X4StreamDecoderDepth, unsigned interaction_modes,
     unsigned char convert_mode, unsigned char sharpness, unsigned char resolution_request_mode);
+bool x4_stream_settings_set_recovery(unsigned mode, unsigned loss_percent);
+bool x4_stream_settings_set_recovery_policy(unsigned mode, unsigned loss_percent,
+    X4StreamNackPolicy policy, X4StreamRrMode rr_mode);
+bool x4_stream_settings_set_lab_recovery(X4StreamRequestProfile, X4StreamColorPreference,
+    X4StreamCpuVariant, X4StreamDecoderDepth, unsigned interaction_modes,
+    unsigned char convert_mode, unsigned char sharpness, unsigned char resolution_request_mode,
+    unsigned recovery_mode, unsigned loss_percent, X4StreamNackPolicy policy, X4StreamRrMode rr_mode);
 X4StreamRequestConfig x4_stream_request_capture(const X4StreamRequestConfig *);
+X4StreamVsyncPolicy x4_stream_request_vsync_policy(const X4StreamRequestConfig *);
+bool x4_stream_request_mailbox(const X4StreamRequestConfig *);
+bool x4_stream_request_dither_enabled(const X4StreamRequestConfig *);
+bool x4_stream_request_gpu_force_cpu(const X4StreamRequestConfig *);
+unsigned x4_stream_request_recovery_mode(const X4StreamRequestConfig *);
+unsigned x4_stream_request_loss_percent(const X4StreamRequestConfig *);
+bool x4_stream_request_legacy_nack(const X4StreamRequestConfig *);
+X4StreamNackPolicy x4_stream_request_nack_policy(const X4StreamRequestConfig *);
+X4StreamRrMode x4_stream_request_rr_mode(const X4StreamRequestConfig *);
+unsigned x4_stream_interaction_with_vsync(unsigned modes, X4StreamVsyncPolicy);
 #if X4_STREAM_PROFILE
 #include <stdio.h>
 /* Owner resets before a new session after the previous sender has joined;
@@ -139,3 +185,40 @@ const char *x4_stream_request_resolution_alias(const X4StreamRequestConfig *);
 #define X4_STREAM_LABEL "legacy"
 #define X4_STREAM_H264_FMTP "level-asymmetry-allowed=0;packetization-mode=1;profile-level-id=42e01f;max-fs=3600;max-mbps=108000"
 #endif
+
+/* Fourth value of the existing two-bit policy field. Keep the captured
+ * enum/type declarations above stable for protected consumer objects. */
+#define X4_NACK_POLICY_T46B ((X4StreamNackPolicy)3)
+
+typedef enum {
+    X4_REMB_OFF = 0,
+    X4_REMB_FIXED = 1,
+    X4_REMB_ADAPTIVE = 2
+} X4RembMode;
+
+typedef struct {
+    X4RembMode mode;
+    unsigned fixed_mbps;
+} X4RembSettings;
+
+#define X4_REMB_DEFAULT_FIXED_MBPS 20u
+
+/* Peer creation snapshots REMB independently of the captured request ABI. */
+#if X4_PUBLIC
+static inline X4RembSettings x4_stream_settings_remb(void)
+{
+    X4RembSettings result = {X4_REMB_ADAPTIVE, X4_REMB_DEFAULT_FIXED_MBPS};
+    return result;
+}
+#else
+X4RembSettings x4_stream_settings_remb(void);
+bool x4_stream_settings_set_remb(X4RembMode mode, unsigned fixed_mbps);
+#endif
+
+/* T46c leaves the captured request layout and the four original policy values
+ * intact. The fifth Lab value travels in a spare bit of resolution_request_mode,
+ * and the wider settings API accepts it alongside the interaction byte. */
+#define X4_VSYNC_AUTO_T27 ((X4StreamVsyncPolicy)4)
+#define X4_INTERACTION_VSYNC_T27 256u
+#define X4_RESOLUTION_REQUEST_VSYNC_T27 128u
+#define X4_RESOLUTION_REQUEST_MODE_MASK 3u

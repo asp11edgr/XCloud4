@@ -1,7 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #include "rtc_receive_diag.h"
+#include "receiver_nack_state.h"
 #include "../media/live_trace.h"
+#if defined(X4_OPENORBIS) || defined(X4_MIC_HOST_TEST)
+#include "../audio/mic_rtp.h"
+#endif
 #include <errno.h>
+#if !X4_PUBLIC
+#include <arpa/inet.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +67,33 @@ static atomic_flag ice_diag_lock = ATOMIC_FLAG_INIT;
 static X4IceConnectionSummary s_ice_summary;
 static unsigned s_rtt_count = 0;
 static int s_rtt_samples[X4_RTT_MAX_SAMPLES];
+/* Recent samples adapt past the capacity of the historical report. The
+ * session worker updates them once per second; media reads only the p50. */
+enum { VIDEO_RTT_SAMPLES = 31 };
+static int video_rtt_samples[VIDEO_RTT_SAMPLES];
+static unsigned video_rtt_count, video_rtt_cursor;
+static atomic_int video_rtt_p50 = -1;
+static atomic_uint video_grace_min[] = { 80, 60 }, video_grace_max[] = { 80, 60 };
+static atomic_uint_fast64_t video_first_returns;
+/* The RTT and NACK owners record a bounded whole-ms grace without locks. */
+static atomic_uint_fast64_t video_grace46b_seen[2];
+static atomic_uint_fast64_t startup_first_video;
+
+#if !X4_PUBLIC
+enum { STARTUP_RANGES = 32, STARTUP_PLIS = 128 };
+typedef struct {
+    uint64_t identity, detected, nack, retry, returned;
+} StartupRange;
+static StartupRange startup_ranges[STARTUP_RANGES];
+static unsigned startup_range_count, startup_range_overflow, startup_pli_count, startup_pli_overflow;
+static uint64_t startup_plis[STARTUP_PLIS];
+static atomic_flag startup_records = ATOMIC_FLAG_INIT;
+static atomic_uint_fast64_t startup_udp_last, startup_udp_max;
+static atomic_uint_fast64_t startup_video_last, startup_video_max;
+static atomic_uint_fast64_t startup_releases[3], startup_record_busy;
+static atomic_bool startup_reported;
+#endif
+static X4ReconnectSummary reconnect_summary;
 
 static inline void lock_ice(void) {
     while (atomic_flag_test_and_set_explicit(&ice_diag_lock, memory_order_acquire)) {}
@@ -139,11 +174,38 @@ static X4Trace *enter(void)
 static void leave(void)
 { atomic_fetch_sub_explicit(&producers, 1, memory_order_seq_cst); }
 
+#if !X4_PUBLIC
+static void startup_spacing(atomic_uint_fast64_t *last, atomic_uint_fast64_t *maximum,
+    uint64_t now)
+{
+    uint_fast64_t previous = atomic_load_explicit(last, memory_order_relaxed);
+    for (unsigned attempt = 0; previous < now && attempt < 3u; ++attempt) {
+        if (!atomic_compare_exchange_weak_explicit(last, &previous, now,
+                memory_order_relaxed, memory_order_relaxed)) continue;
+        if (!previous) return;
+        uint64_t spacing = now - previous;
+        uint_fast64_t max = atomic_load_explicit(maximum, memory_order_relaxed);
+        for (unsigned update = 0; spacing > max && update < 3u; ++update)
+            if (atomic_compare_exchange_weak_explicit(maximum, &max, spacing,
+                    memory_order_relaxed, memory_order_relaxed)) break;
+        return;
+    }
+}
+#endif
+
+#if defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST)
+static void remb_receive_observe(const uint8_t *, size_t, unsigned, uint32_t, uint16_t, uint32_t, uint64_t);
+#endif
+#line 196
 uint64_t x4_rtc_receive_packet(unsigned stage, const void *packet, size_t bytes,
     uint64_t preceding_time, uint32_t flags)
 {
     int saved = errno;
     uint64_t now = x4_rtc_receive_clock();
+#if defined(X4_OPENORBIS) || defined(X4_MIC_HOST_TEST)
+    if (stage == X4_RD_RTCP && (flags & X4_RD_AUTHENTICATED))
+        x4_mic_rr_observe(packet, bytes);
+#endif
     if (stage == X4_RD_UDP || stage == X4_RD_TCP || stage == X4_RD_TRACK_POP) {
         ReceiveThread *slot = thread_slot();
         if (slot) atomic_store_explicit(stage == X4_RD_TRACK_POP ?
@@ -151,6 +213,23 @@ uint64_t x4_rtc_receive_packet(unsigned stage, const void *packet, size_t bytes,
     }
     uint32_t ssrc = 0; uint16_t seq = 0; unsigned pt = 0;
     bool valid = tuple(packet, bytes, &ssrc, &seq, &pt, &flags);
+#if defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST)
+    if (valid && stage == X4_RD_PEER_OUT)
+        remb_receive_observe(packet, bytes, pt, ssrc, seq, flags,
+            preceding_time ? preceding_time : now);
+#endif
+#line 212
+#if !X4_PUBLIC
+    if ((stage == X4_RD_UDP || stage == X4_RD_TRACK) && x4_rtc_diag_startup_active(now)) {
+        if (stage == X4_RD_UDP) {
+            startup_spacing(&startup_udp_last, &startup_udp_max, now);
+        } else if (valid && (flags & X4_RD_AUTHENTICATED)) {
+            unsigned video_pt = atomic_load_explicit(&expected_video_pt, memory_order_relaxed);
+            if (pt == (video_pt ? video_pt : X4_RECEIVER_NACK_VIDEO_PT))
+                startup_spacing(&startup_video_last, &startup_video_max, now);
+        }
+    }
+#endif
     if (stage == X4_RD_SRTP_VALID && valid) {
         uint64_t key = (1ull << 63) | ((uint64_t)ssrc << 32) | pt;
         for (unsigned i = 0; i < INBOUND_STREAM_CAP; ++i) {
@@ -177,8 +256,12 @@ uint64_t x4_rtc_receive_packet(unsigned stage, const void *packet, size_t bytes,
         uint32_t exp_pt = atomic_load_explicit(&expected_video_pt, memory_order_relaxed);
         if (exp_ssrc && (pt == exp_pt || pt == 102) && ssrc != (uint32_t)exp_ssrc) {
             if (!atomic_exchange_explicit(&unexpected_video_logged, true, memory_order_relaxed)) {
+#if X4_PUBLIC
+                printf("XCloud4: RTP video recibido con identificador de flujo no coincidente\n");
+#else
                 printf("XCloud4: RTP video recibido con SSRC no coincidente: recibido=0x%08x pt=%u (esperado=0x%08x pt=%u)\n",
                     ssrc, pt, (uint32_t)exp_ssrc, exp_pt);
+#endif
             }
         }
     }
@@ -215,8 +298,36 @@ void x4_rtc_receive_reject(unsigned stage, unsigned reason, int result,
     errno = saved;
 }
 
+static void reset_video_rtt_locked(void)
+{
+    video_rtt_count = video_rtt_cursor = 0;
+    atomic_store_explicit(&video_rtt_p50, -1, memory_order_release);
+    atomic_store_explicit(&video_first_returns, 0, memory_order_release);
+    atomic_store_explicit(&video_grace46b_seen[0], 1, memory_order_relaxed);
+    atomic_store_explicit(&video_grace46b_seen[1], 0, memory_order_relaxed);
+}
+
 void x4_rtc_receive_diag_reset(void)
 {
+    /* The previous RTC owner has closed before initial session reset. */
+    atomic_store_explicit(&startup_first_video, 0, memory_order_relaxed);
+    for (unsigned i = 0; i < 2; ++i) {
+        unsigned grace = x4_nack_grace_ms(-1, i == 0);
+        atomic_store_explicit(&video_grace_min[i], grace, memory_order_relaxed);
+        atomic_store_explicit(&video_grace_max[i], grace, memory_order_relaxed);
+    }
+#if !X4_PUBLIC
+    memset(startup_ranges, 0, sizeof(startup_ranges));
+    startup_range_count = startup_range_overflow = startup_pli_count = startup_pli_overflow = 0;
+    atomic_store_explicit(&startup_udp_last, 0, memory_order_relaxed);
+    atomic_store_explicit(&startup_udp_max, 0, memory_order_relaxed);
+    atomic_store_explicit(&startup_video_last, 0, memory_order_relaxed);
+    atomic_store_explicit(&startup_video_max, 0, memory_order_relaxed);
+    atomic_store_explicit(&startup_record_busy, 0, memory_order_relaxed);
+    atomic_store_explicit(&startup_reported, false, memory_order_relaxed);
+    for (unsigned i = 0; i < 3; ++i)
+        atomic_store_explicit(&startup_releases[i], 0, memory_order_relaxed);
+#endif
     atomic_store_explicit(&srtp_decrypt_failures, 0, memory_order_relaxed);
     atomic_store_explicit(&unknown_ssrc_packets, 0, memory_order_relaxed);
     atomic_store_explicit(&unknown_pt_packets, 0, memory_order_relaxed);
@@ -234,6 +345,8 @@ void x4_rtc_receive_diag_reset(void)
     memset(&s_ice_summary, 0, sizeof(s_ice_summary));
     s_rtt_count = 0;
     memset(s_rtt_samples, 0, sizeof(s_rtt_samples));
+    reset_video_rtt_locked();
+    memset(&reconnect_summary,0,sizeof(reconnect_summary));
     unlock_ice();
 }
 
@@ -377,94 +490,127 @@ void x4_rtc_receive_detach(X4Trace *trace)
 }
 
 
-static bool parse_candidate_line(const char *cand, char *ip_out, size_t ip_cap, uint16_t *port_out,
-                                char *typ_out, size_t typ_cap, char *trans_out, size_t trans_cap)
+static const char *const ice_types[] = {"host", "srflx", "relay", "prflx", "unknown"};
+enum { ICE_UNKNOWN = 4 };
+typedef struct {
+    char address[48];
+    uint16_t port;
+    unsigned type;
+    const char *protocol;
+} IceEndpoint;
+
+static unsigned ice_type(const char *word)
 {
-    if (!cand || !cand[0]) return false;
-    if (ip_out && ip_cap) ip_out[0] = 0;
-    if (port_out) *port_out = 0;
-    if (typ_out && typ_cap) typ_out[0] = 0;
-    if (trans_out && trans_cap) trans_out[0] = 0;
-
-    const char *p = cand;
-    if (!strncmp(p, "a=", 2)) p += 2;
-    while (*p == ' ') p++;
-    if (!strncmp(p, "candidate:", 10)) p += 10;
-    while (*p == ' ') p++;
-
-    /* Tokenize whitespace-separated words */
-    char tokens[12][64];
-    unsigned num_tokens = 0;
-    while (*p && num_tokens < 12) {
-        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
-        if (!*p) break;
-        const char *tstart = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') p++;
-        size_t tlen = (size_t)(p - tstart);
-        if (tlen >= sizeof(tokens[num_tokens])) tlen = sizeof(tokens[num_tokens]) - 1;
-        memcpy(tokens[num_tokens], tstart, tlen);
-        tokens[num_tokens][tlen] = '\0';
-        num_tokens++;
-    }
-
-    if (num_tokens >= 8) {
-        /* Standard SDP candidate:
-         * tokens[0]=foundation, tokens[1]=component, tokens[2]=transport (UDP),
-         * tokens[3]=priority, tokens[4]=ip, tokens[5]=port, tokens[6]="typ", tokens[7]=type */
-        if (trans_out && trans_cap) {
-            size_t l = strlen(tokens[2]);
-            if (l >= trans_cap) l = trans_cap - 1;
-            memcpy(trans_out, tokens[2], l);
-            trans_out[l] = 0;
-        }
-        if (ip_out && ip_cap) {
-            size_t l = strlen(tokens[4]);
-            if (l >= ip_cap) l = ip_cap - 1;
-            memcpy(ip_out, tokens[4], l);
-            ip_out[l] = 0;
-        }
-        if (port_out) {
-            *port_out = (uint16_t)atoi(tokens[5]);
-        }
-        if (typ_out && typ_cap) {
-            size_t l = strlen(tokens[7]);
-            if (l >= typ_cap) l = typ_cap - 1;
-            memcpy(typ_out, tokens[7], l);
-            typ_out[l] = 0;
-        }
-        return true;
-    }
-
-    /* Fallback: try parsing IP:port */
-    const char *colon = strrchr(cand, ':');
-    if (colon && colon != cand) {
-        size_t ip_len = (size_t)(colon - cand);
-        if (ip_out && ip_cap) {
-            if (ip_len >= ip_cap) ip_len = ip_cap - 1;
-            memcpy(ip_out, cand, ip_len);
-            ip_out[ip_len] = 0;
-        }
-        if (port_out) *port_out = (uint16_t)atoi(colon + 1);
-        if (typ_out && typ_cap) snprintf(typ_out, typ_cap, "host");
-        if (trans_out && trans_cap) snprintf(trans_out, trans_cap, "UDP");
-        return true;
-    }
-
-    return false;
+    for (unsigned i = 0; i < ICE_UNKNOWN; ++i)
+        if (!strcmp(ice_types[i], word)) return i;
+    return ICE_UNKNOWN;
 }
+
+static const char *ice_protocol(const char *word)
+{
+    if (!strcmp(word, "UDP") || !strcmp(word, "udp")) return "udp";
+    if (!strcmp(word, "TCP") || !strcmp(word, "tcp")) return "tcp";
+    return "unknown";
+}
+
+static uint16_t ice_port(const char *word)
+{
+    unsigned port = 0;
+    for (; *word; ++word) {
+        if (*word < '0' || *word > '9') return 0;
+        port = port * 10 + (unsigned)(*word - '0');
+        if (port > UINT16_MAX) return 0;
+    }
+    return (uint16_t)port;
+}
+
+static IceEndpoint parse_candidate_line(const char *cand)
+{
+    IceEndpoint endpoint = {.type = ICE_UNKNOWN, .protocol = "unknown"};
+    if (!cand || !cand[0]) return endpoint;
+    static const char whitespace[] = " \t\r\n";
+    const char *p = cand;
+    p += strspn(p, whitespace);
+    if (!strncmp(p, "a=", 2)) p += 2;
+    p += strspn(p, whitespace);
+    bool has_prefix = !strncmp(p, "candidate:", 10);
+    if (has_prefix || strpbrk(p, whitespace)) {
+        if (has_prefix) p += 10;
+        char tokens[8][64];
+        for (unsigned i = 0; i < 8; ++i) {
+            p += strspn(p, whitespace);
+            size_t length = strcspn(p, whitespace);
+            if (!length || length >= sizeof(tokens[i])) return endpoint;
+            memcpy(tokens[i], p, length);
+            tokens[i][length] = '\0';
+            p += length;
+        }
+        /* Foundation, component, protocol, priority, address, port, typ, type. */
+        if (strcmp(tokens[6], "typ") || strlen(tokens[4]) >= sizeof(endpoint.address))
+            return endpoint;
+        endpoint.port = ice_port(tokens[5]);
+        if (!endpoint.port) return endpoint;
+        memcpy(endpoint.address, tokens[4], strlen(tokens[4]) + 1);
+        endpoint.type = ice_type(tokens[7]);
+        endpoint.protocol = ice_protocol(tokens[2]);
+        return endpoint;
+    }
+
+    /* Some backends supply only an endpoint, with no type or protocol. */
+    const char *colon = strrchr(p, ':');
+    if (colon && colon != p) {
+        size_t length = (size_t)(colon - p);
+        if (length > 2 && p[0] == '[' && p[length - 1] == ']') {
+            ++p;
+            length -= 2;
+        }
+        if (length >= sizeof(endpoint.address)) return endpoint;
+        endpoint.port = ice_port(colon + 1);
+        if (endpoint.port) memcpy(endpoint.address, p, length);
+    }
+    return endpoint;
+}
+
+/* Caller holds the ICE lock. Older RTC backends return just IP:port for the
+ * selected pair. Recover the remote labels from the corresponding candidate. */
+static IceEndpoint selected_remote_locked(const char *candidate)
+{
+    IceEndpoint endpoint = parse_candidate_line(candidate);
+    if (!endpoint.port) return endpoint;
+    for (unsigned i = 0; i < s_ice_summary.remote_candidate_count; ++i) {
+        const X4RemoteIceCandidate *cached = &s_ice_summary.remote_candidates[i];
+        if (endpoint.port != cached->port || strcmp(endpoint.address, cached->ip)) continue;
+        if (endpoint.type == ICE_UNKNOWN) endpoint.type = ice_type(cached->type);
+        if (!strcmp(endpoint.protocol, "unknown")) endpoint.protocol = ice_protocol(cached->transport);
+        break;
+    }
+    return endpoint;
+}
+
+#if !X4_PUBLIC
+static void ice_address_prefix(const char *address, char prefix[24])
+{
+    unsigned char bytes[16];
+    if (inet_pton(AF_INET, address, bytes) == 1) {
+        snprintf(prefix, 24, "%u.%u.x.x", (unsigned)bytes[0], (unsigned)bytes[1]);
+    } else if (inet_pton(AF_INET6, address, bytes) == 1) {
+        snprintf(prefix, 24, "%x:%x::/32", ((unsigned)bytes[0] << 8) | bytes[1],
+            ((unsigned)bytes[2] << 8) | bytes[3]);
+    } else {
+        strcpy(prefix, "-");
+    }
+}
+#endif
 
 void x4_rtc_diag_record_remote_candidate(const char *cand_str, const char *mid)
 {
-    if (!cand_str || !cand_str[0]) return;
-    char ip[48] = {0}, typ[16] = {0}, trans[8] = {0};
-    uint16_t port = 0;
-    if (!parse_candidate_line(cand_str, ip, sizeof(ip), &port, typ, sizeof(typ), trans, sizeof(trans))) return;
-    if (!ip[0] || port == 0) return;
+    IceEndpoint endpoint = parse_candidate_line(cand_str);
+    if (!endpoint.port) return;
 
     lock_ice();
     for (unsigned i = 0; i < s_ice_summary.remote_candidate_count; ++i) {
-        if (!strcmp(s_ice_summary.remote_candidates[i].ip, ip) &&
-            s_ice_summary.remote_candidates[i].port == port) {
+        if (!strcmp(s_ice_summary.remote_candidates[i].ip, endpoint.address) &&
+            s_ice_summary.remote_candidates[i].port == endpoint.port) {
             unlock_ice();
             return; /* already recorded */
         }
@@ -472,40 +618,47 @@ void x4_rtc_diag_record_remote_candidate(const char *cand_str, const char *mid)
 
     if (s_ice_summary.remote_candidate_count < 32) {
         unsigned idx = s_ice_summary.remote_candidate_count++;
-        snprintf(s_ice_summary.remote_candidates[idx].ip, sizeof(s_ice_summary.remote_candidates[idx].ip), "%s", ip);
-        s_ice_summary.remote_candidates[idx].port = port;
-        snprintf(s_ice_summary.remote_candidates[idx].type, sizeof(s_ice_summary.remote_candidates[idx].type), "%s", typ[0] ? typ : "host");
-        snprintf(s_ice_summary.remote_candidates[idx].mid, sizeof(s_ice_summary.remote_candidates[idx].mid), "%s", mid ? mid : "0");
-        snprintf(s_ice_summary.remote_candidates[idx].transport, sizeof(s_ice_summary.remote_candidates[idx].transport), "%s", trans[0] ? trans : "UDP");
+        X4RemoteIceCandidate *cached = &s_ice_summary.remote_candidates[idx];
+        memcpy(cached->ip, endpoint.address, sizeof(cached->ip));
+        cached->port = endpoint.port;
+        snprintf(cached->type, sizeof(cached->type), "%s", ice_types[endpoint.type]);
+        snprintf(cached->mid, sizeof(cached->mid), "%s", mid ? mid : "0");
+        snprintf(cached->transport, sizeof(cached->transport), "%s", endpoint.protocol);
     }
     unlock_ice();
 
-    printf("XCloud4: ICE candidato remoto: %s:%u (tipo=%s mid=%s)\n", ip, port, typ[0] ? typ : "host", mid ? mid : "");
+#if X4_PUBLIC
+    printf("XCloud4: ICE candidato remoto: remote=%s/%s\n", ice_types[endpoint.type], endpoint.protocol);
+#else
+    char prefix[24];
+    ice_address_prefix(endpoint.address, prefix);
+    printf("XCloud4: ICE candidato remoto: remote=%s/%s remote_prefix=%s\n",
+        ice_types[endpoint.type], endpoint.protocol, prefix);
+#endif
 }
 
 void x4_rtc_diag_record_selected_pair(const char *local, const char *remote)
 {
+    IceEndpoint left = parse_candidate_line(local);
     lock_ice();
-    if (local) {
-        snprintf(s_ice_summary.selected_local, sizeof(s_ice_summary.selected_local), "%s", local);
-    }
-    if (remote) {
-        snprintf(s_ice_summary.selected_remote, sizeof(s_ice_summary.selected_remote), "%s", remote);
-        char ip[48] = {0}, typ[16] = {0}, trans[8] = {0};
-        uint16_t port = 0;
-        if (parse_candidate_line(remote, ip, sizeof(ip), &port, typ, sizeof(typ), trans, sizeof(trans))) {
-            snprintf(s_ice_summary.game_server_ip, sizeof(s_ice_summary.game_server_ip), "%s", ip);
-            s_ice_summary.game_server_port = port;
-        }
-    }
+    IceEndpoint right = selected_remote_locked(remote);
+    snprintf(s_ice_summary.selected_local, sizeof(s_ice_summary.selected_local), "%s", local ? local : "");
+    snprintf(s_ice_summary.selected_remote, sizeof(s_ice_summary.selected_remote), "%s", remote ? remote : "");
+    memcpy(s_ice_summary.game_server_ip, right.address, sizeof(s_ice_summary.game_server_ip));
+    s_ice_summary.game_server_port = right.port;
     s_ice_summary.has_selected_pair = true;
     unlock_ice();
 
-    printf("XCloud4: ICE par seleccionado: local=%s remote=%s\n", local ? local : "", remote ? remote : "");
-    if (s_ice_summary.game_server_ip[0]) {
-        printf("XCloud4: Servidor de juego (envia video): %s:%u\n",
-            s_ice_summary.game_server_ip, s_ice_summary.game_server_port);
-    }
+#if X4_PUBLIC
+    printf("XCloud4: ICE par seleccionado: local=%s/%s remote=%s/%s\n",
+        ice_types[left.type], left.protocol, ice_types[right.type], right.protocol);
+#else
+    char local_prefix[24], remote_prefix[24];
+    ice_address_prefix(left.address, local_prefix);
+    ice_address_prefix(right.address, remote_prefix);
+    printf("XCloud4: ICE par seleccionado: local=%s/%s remote=%s/%s local_prefix=%s remote_prefix=%s\n",
+        ice_types[left.type], left.protocol, ice_types[right.type], right.protocol, local_prefix, remote_prefix);
+#endif
 }
 
 void x4_rtc_diag_get_ice_summary(X4IceConnectionSummary *out)
@@ -520,40 +673,51 @@ void x4_rtc_diag_write_ice_json(FILE *f)
 {
     if (!f) return;
     lock_ice();
+#if X4_PUBLIC
+    /* Public diagnostics retain only bounded classifications. Raw ICE
+     * strings, addresses, ports and mids never enter this JSON branch. */
+    unsigned counts[5]={0};
+    for(unsigned i=0;i<s_ice_summary.remote_candidate_count;++i){
+        ++counts[ice_type(s_ice_summary.remote_candidates[i].type)];
+    }
+    fprintf(f,"\"ice\":{\"remote_candidate_counts\":{\"host\":%u,\"srflx\":%u,\"relay\":%u,\"prflx\":%u,\"unknown\":%u},\"selected_pair_classification\":",
+        counts[0],counts[1],counts[2],counts[3],counts[4]);
+    if(s_ice_summary.has_selected_pair) {
+        IceEndpoint selected = selected_remote_locked(s_ice_summary.selected_remote);
+        const char *protocol = !strcmp(selected.protocol, "udp") ? "UDP" :
+            !strcmp(selected.protocol, "tcp") ? "TCP" : "unknown";
+        fprintf(f,"{\"remote_type\":\"%s\",\"transport\":\"%s\"}",ice_types[selected.type],protocol);
+    }
+    else fputs("null",f);
+    fputs("},",f);
+#else
     fprintf(f, "\"ice\":{\"remote_candidates\":[");
     for (unsigned i = 0; i < s_ice_summary.remote_candidate_count; ++i) {
         if (i) fputc(',', f);
-        fprintf(f, "{\"ip\":\"%s\",\"port\":%u,\"type\":\"%s\",\"mid\":\"%s\",\"transport\":\"%s\"}",
-            s_ice_summary.remote_candidates[i].ip,
-            (unsigned)s_ice_summary.remote_candidates[i].port,
-            s_ice_summary.remote_candidates[i].type,
-            s_ice_summary.remote_candidates[i].mid,
-            s_ice_summary.remote_candidates[i].transport);
+        const X4RemoteIceCandidate *candidate = &s_ice_summary.remote_candidates[i];
+        char prefix[24];
+        ice_address_prefix(candidate->ip, prefix);
+        fprintf(f, "{\"ip_prefix\":\"%s\",\"type\":\"%s\",\"transport\":\"%s\"}",
+            prefix, ice_types[ice_type(candidate->type)], ice_protocol(candidate->transport));
     }
     fprintf(f, "],\"selected_candidate_pair\":");
     if (s_ice_summary.has_selected_pair) {
-        fprintf(f, "{\"local\":\"%s\",\"remote\":\"%s\",\"game_server_ip\":\"%s\",\"game_server_port\":%u}",
-            s_ice_summary.selected_local,
-            s_ice_summary.selected_remote,
-            s_ice_summary.game_server_ip,
-            (unsigned)s_ice_summary.game_server_port);
+        IceEndpoint local = parse_candidate_line(s_ice_summary.selected_local);
+        IceEndpoint remote = selected_remote_locked(s_ice_summary.selected_remote);
+        char local_prefix[24], remote_prefix[24];
+        ice_address_prefix(local.address, local_prefix);
+        ice_address_prefix(remote.address, remote_prefix);
+        fprintf(f, "{\"local\":\"%s/%s\",\"remote\":\"%s/%s\",\"local_prefix\":\"%s\",\"remote_prefix\":\"%s\"}",
+            ice_types[local.type], local.protocol, ice_types[remote.type], remote.protocol,
+            local_prefix, remote_prefix);
     } else {
         fprintf(f, "null");
     }
     fprintf(f, "},");
+#endif
     unlock_ice();
 }
 
-
-void x4_rtc_diag_record_rtt_sample(int rtt_ms)
-{
-    if (rtt_ms < 0) return;
-    lock_ice();
-    if (s_rtt_count < X4_RTT_MAX_SAMPLES) {
-        s_rtt_samples[s_rtt_count++] = rtt_ms;
-    }
-    unlock_ice();
-}
 
 static void sort_rtt_samples(int *arr, unsigned n)
 {
@@ -566,6 +730,245 @@ static void sort_rtt_samples(int *arr, unsigned n)
             }
         }
     }
+}
+
+static void update_grace_bounds_locked(int rtt)
+{
+    for (unsigned i = 0; i < 2; ++i) {
+        unsigned grace = x4_nack_grace_ms(rtt, i == 0);
+        if (grace < atomic_load_explicit(&video_grace_min[i], memory_order_relaxed))
+            atomic_store_explicit(&video_grace_min[i], grace, memory_order_relaxed);
+        if (grace > atomic_load_explicit(&video_grace_max[i], memory_order_relaxed))
+            atomic_store_explicit(&video_grace_max[i], grace, memory_order_relaxed);
+    }
+}
+
+static unsigned grace46b_with_returns(int rtt, uint64_t returns)
+{
+    return x4_nack_grace46b_ms(rtt, (uint32_t)returns, (unsigned)(returns >> 32));
+}
+
+static void record_grace46b(unsigned grace)
+{
+    unsigned bit = grace - 80u;
+    atomic_fetch_or_explicit(&video_grace46b_seen[bit / 64u],
+        UINT64_C(1) << (bit % 64u), memory_order_relaxed);
+}
+
+void x4_rtc_diag_record_rtt_sample(int rtt_ms)
+{
+    if (rtt_ms < 0) return;
+    lock_ice();
+    if (s_rtt_count < X4_RTT_MAX_SAMPLES) {
+        s_rtt_samples[s_rtt_count++] = rtt_ms;
+    }
+    video_rtt_samples[video_rtt_cursor] = rtt_ms;
+    video_rtt_cursor = (video_rtt_cursor + 1u) % VIDEO_RTT_SAMPLES;
+    if (video_rtt_count < VIDEO_RTT_SAMPLES) ++video_rtt_count;
+    int sorted[VIDEO_RTT_SAMPLES];
+    memcpy(sorted, video_rtt_samples, video_rtt_count * sizeof(*sorted));
+    sort_rtt_samples(sorted, video_rtt_count);
+    int median = sorted[video_rtt_count / 2u];
+    update_grace_bounds_locked(median);
+    atomic_store_explicit(&video_rtt_p50, median, memory_order_release);
+    record_grace46b(grace46b_with_returns(median,
+        atomic_load_explicit(&video_first_returns, memory_order_acquire)));
+    unlock_ice();
+}
+
+void x4_rtc_diag_reset_video_rtt(void)
+{
+    lock_ice();
+    reset_video_rtt_locked();
+    unlock_ice();
+}
+
+int x4_rtc_diag_rtt_p50_ms(void)
+{
+    return atomic_load_explicit(&video_rtt_p50, memory_order_acquire);
+}
+
+unsigned x4_rtc_diag_video_grace_ms(void)
+{
+    return x4_nack_grace_ms(x4_rtc_diag_rtt_p50_ms(), false);
+}
+
+unsigned x4_rtc_diag_video_grace43c_ms(void)
+{
+    return x4_nack_grace_ms(x4_rtc_diag_rtt_p50_ms(), true);
+}
+
+void x4_rtc_diag_first_return_publish(uint32_t p95_us, unsigned samples)
+{
+    uint64_t returns = ((uint64_t)samples << 32) | p95_us;
+    atomic_store_explicit(&video_first_returns, returns, memory_order_release);
+    record_grace46b(grace46b_with_returns(x4_rtc_diag_rtt_p50_ms(), returns));
+}
+
+unsigned x4_rtc_diag_video_grace46b_ms(void)
+{
+    return grace46b_with_returns(x4_rtc_diag_rtt_p50_ms(),
+        atomic_load_explicit(&video_first_returns, memory_order_acquire));
+}
+
+void x4_rtc_diag_video_presented(uint64_t now)
+{
+    uint_fast64_t unstarted = 0;
+    if (now) (void)atomic_compare_exchange_strong_explicit(&startup_first_video, &unstarted,
+        now, memory_order_release, memory_order_relaxed);
+}
+
+bool x4_rtc_diag_startup_active(uint64_t now)
+{
+    uint64_t first = atomic_load_explicit(&startup_first_video, memory_order_acquire);
+    return first && now >= first && now - first < X4_NACK_STARTUP_WINDOW_US;
+}
+
+void x4_rtc_diag_video_grace_stats(unsigned policy, uint64_t now,
+    unsigned *current, unsigned *min, unsigned *max)
+{
+    if (policy == 1) {
+        *current = *min = *max = 45;
+        return;
+    }
+    if (policy == 3u) {
+        uint64_t low = atomic_load_explicit(&video_grace46b_seen[0], memory_order_relaxed);
+        uint64_t high = atomic_load_explicit(&video_grace46b_seen[1], memory_order_relaxed);
+        *current = x4_rtc_diag_video_grace46b_ms();
+        *min = low ? 80u + (unsigned)__builtin_ctzll(low) : *current;
+        *max = high ? 207u - (unsigned)__builtin_clzll(high) :
+            low ? 143u - (unsigned)__builtin_clzll(low) : *current;
+        if (atomic_load_explicit(&startup_first_video, memory_order_acquire)) {
+            *max = X4_NACK_STARTUP_GRACE_MS;
+            if (x4_rtc_diag_startup_active(now)) *current = X4_NACK_STARTUP_GRACE_MS;
+        }
+        return;
+    }
+    unsigned i = policy == 0 ? 0 : 1;
+    *current = x4_nack_grace_ms(x4_rtc_diag_rtt_p50_ms(), i == 0);
+    *min = atomic_load_explicit(&video_grace_min[i], memory_order_relaxed);
+    *max = atomic_load_explicit(&video_grace_max[i], memory_order_relaxed);
+    if (i == 0 && atomic_load_explicit(&startup_first_video, memory_order_acquire)) {
+        *max = X4_NACK_STARTUP_GRACE_MS;
+        if (x4_rtc_diag_startup_active(now)) *current = X4_NACK_STARTUP_GRACE_MS;
+    }
+}
+
+#if !X4_PUBLIC
+static bool startup_begin_record(uint64_t now)
+{
+    if (!x4_rtc_diag_startup_active(now) ||
+        atomic_load_explicit(&startup_reported, memory_order_relaxed)) return false;
+    if (atomic_flag_test_and_set_explicit(&startup_records, memory_order_acquire)) {
+        atomic_fetch_add_explicit(&startup_record_busy, 1, memory_order_relaxed);
+        return false;
+    }
+    if (!atomic_load_explicit(&startup_reported, memory_order_relaxed)) return true;
+    atomic_flag_clear_explicit(&startup_records, memory_order_release);
+    return false;
+}
+
+static long long startup_delta_ms(uint64_t detected, uint64_t event)
+{
+    return !event || event < detected ? -1 : (long long)((event - detected) / 1000u);
+}
+#endif
+
+void x4_rtc_diag_startup_range(unsigned kind, uint64_t identity,
+    uint64_t detected, uint64_t now)
+{
+#if !X4_PUBLIC
+    if (!startup_begin_record(now)) return;
+    if (kind == X4_STARTUP_DETECT) {
+        if (startup_range_count < STARTUP_RANGES)
+            startup_ranges[startup_range_count++] = (StartupRange){ .identity = identity,
+                .detected = detected };
+        else ++startup_range_overflow;
+    } else {
+        for (unsigned i = 0; i < startup_range_count; ++i) {
+            StartupRange *range = &startup_ranges[i];
+            if (range->identity != identity || range->detected != detected) continue;
+            if (kind == X4_STARTUP_NACK && !range->nack) range->nack = now;
+            else if (kind == X4_STARTUP_RETRY && !range->retry) range->retry = now;
+            else if (kind == X4_STARTUP_RETURN && !range->returned) range->returned = now;
+            break;
+        }
+    }
+    atomic_flag_clear_explicit(&startup_records, memory_order_release);
+#else
+    (void)kind; (void)identity; (void)detected; (void)now;
+#endif
+}
+
+void x4_rtc_diag_startup_release(unsigned reason)
+{
+#if !X4_PUBLIC
+    if (reason < 3)
+        atomic_fetch_add_explicit(&startup_releases[reason], 1, memory_order_relaxed);
+#else
+    (void)reason;
+#endif
+}
+
+uint64_t x4_rtc_diag_startup_release_count(void)
+{
+    uint64_t total = 0;
+#if !X4_PUBLIC
+    for (unsigned i = 0; i < 3; ++i)
+        total += atomic_load_explicit(&startup_releases[i], memory_order_relaxed);
+#endif
+    return total;
+}
+
+void x4_rtc_diag_startup_pli(uint64_t now)
+{
+#if !X4_PUBLIC
+    if (!startup_begin_record(now)) return;
+    if (startup_pli_count < STARTUP_PLIS) startup_plis[startup_pli_count++] = now;
+    else ++startup_pli_overflow;
+    atomic_flag_clear_explicit(&startup_records, memory_order_release);
+#else
+    (void)now;
+#endif
+}
+
+void x4_rtc_diag_startup_report(uint64_t now, bool final)
+{
+#if !X4_PUBLIC
+    uint64_t first = atomic_load_explicit(&startup_first_video, memory_order_acquire);
+    if (!first || (!final && (now < first || now - first < X4_NACK_STARTUP_WINDOW_US)) ||
+        atomic_load_explicit(&startup_reported, memory_order_relaxed) ||
+        atomic_flag_test_and_set_explicit(&startup_records, memory_order_acquire)) return;
+    if (atomic_exchange_explicit(&startup_reported, true, memory_order_relaxed)) {
+        atomic_flag_clear_explicit(&startup_records, memory_order_release);
+        return;
+    }
+    /* The gate is released before logging: producers will see reported=true
+     * and stop mutating the records until the next session reset. */
+    atomic_flag_clear_explicit(&startup_records, memory_order_release);
+    uint64_t window = now > first ? now - first : 0;
+    if (window > X4_NACK_STARTUP_WINDOW_US) window = X4_NACK_STARTUP_WINDOW_US;
+    printf("XCloud4: arranque43c ventana_ms=%llu udp_max_us=%llu video_rtp_max_us=%llu rangos=%u omitidos=%u pli=%u pli_omitidos=%u ocupados=%llu liberados_reparacion=%llu liberados_plazo=%llu liberados_capacidad=%llu\n",
+        (unsigned long long)(window / 1000u),
+        (unsigned long long)atomic_load_explicit(&startup_udp_max, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&startup_video_max, memory_order_relaxed),
+        startup_range_count, startup_range_overflow, startup_pli_count, startup_pli_overflow,
+        (unsigned long long)atomic_load_explicit(&startup_record_busy, memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&startup_releases[0], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&startup_releases[1], memory_order_relaxed),
+        (unsigned long long)atomic_load_explicit(&startup_releases[2], memory_order_relaxed));
+    for (unsigned i = 0; i < startup_range_count; ++i) {
+        const StartupRange *range = &startup_ranges[i];
+        printf("XCloud4: arranque43c rango=%u detectado_ms=%lld nack_ms=%lld reintento_ms=%lld retorno_ms=%lld\n",
+            i + 1, startup_delta_ms(first, range->detected), startup_delta_ms(range->detected, range->nack),
+            startup_delta_ms(range->detected, range->retry), startup_delta_ms(range->detected, range->returned));
+    }
+    for (unsigned i = 0; i < startup_pli_count; ++i)
+        printf("XCloud4: arranque43c pli=%u relativo_ms=%lld\n", i + 1,
+            startup_delta_ms(first, startup_plis[i]));
+#else
+    (void)now; (void)final;
+#endif
 }
 
 void x4_rtc_diag_get_rtt_summary(X4RttSummary *out)
@@ -608,4 +1011,192 @@ void x4_rtc_diag_write_rtt_json(FILE *f)
         fprintf(f, "%d", rtt.samples[i]);
     }
     fprintf(f, "]},");
+    /* Both public last-stream and Lab already call this writer. New fields
+     * contain fixed classifications and timings, never endpoint addresses. */
+    lock_ice();
+    fprintf(f,"\"reconnects\":%llu,\"reconnection\":{\"attempts\":%llu,\"omitted\":%llu,\"records\":[",
+        (unsigned long long)reconnect_summary.reconnects,
+        (unsigned long long)reconnect_summary.attempts,(unsigned long long)reconnect_summary.omitted);
+    static const char *const causes[]={"unknown","failed","disconnected","no_video","manual","keepalive"};
+    for(unsigned i=0;i<reconnect_summary.record_count;++i){
+        const X4ReconnectRecord *r=&reconnect_summary.records[i];
+        fprintf(f,"%s{\"cause\":\"%s\",\"completed\":%s,\"recovered\":%s,\"first_video_ms\":%llu}",i?",":"",
+            causes[r->cause],r->completed?"true":"false",r->recovered?"true":"false",(unsigned long long)r->first_video_ms);
+    }
+    fputs("]},",f);unlock_ice();
 }
+
+void x4_rtc_diag_reconnect_attempt(unsigned cause)
+{
+    if(cause<X4_RECONNECT_FAILED||cause>X4_RECONNECT_KEEPALIVE)return;
+    lock_ice();++reconnect_summary.attempts;
+    if(reconnect_summary.record_count<X4_RECONNECT_DIAG_CAP)
+        reconnect_summary.records[reconnect_summary.record_count++]=(X4ReconnectRecord){.cause=cause};
+    else ++reconnect_summary.omitted;
+    unlock_ice();
+}
+void x4_rtc_diag_reconnect_result(unsigned cause,bool recovered,uint64_t first_video_ms)
+{
+    if(cause<X4_RECONNECT_FAILED||cause>X4_RECONNECT_KEEPALIVE)return;
+    lock_ice();
+    if(recovered)++reconnect_summary.reconnects;
+    /* Results correspond to the immediately preceding single-owner attempt.
+     * Once the bounded list is full, totals continue without overwriting it. */
+    if(!reconnect_summary.omitted&&reconnect_summary.record_count){
+        X4ReconnectRecord *r=&reconnect_summary.records[reconnect_summary.record_count-1];
+        if(!r->completed&&r->cause==cause){r->completed=true;r->recovered=recovered;r->first_video_ms=first_video_ms;}
+    }
+    unlock_ice();
+}
+void x4_rtc_diag_get_reconnect_summary(X4ReconnectSummary *out)
+{if(out){lock_ice();*out=reconnect_summary;unlock_ice();}}
+
+#if defined(X4_OPENORBIS) || defined(X4_REMB_HOST_TEST)
+/* This monitor is separate from RR and NACK. The live peer owns setup and
+ * teardown. Packet observation tries the gate once and never waits. */
+enum { REMB_SEQUENCE_HISTORY = 2048 };
+static atomic_flag remb_receive_gate = ATOMIC_FLAG_INIT;
+static atomic_uint remb_receive_epoch;
+static struct {
+    uint64_t seen[REMB_SEQUENCE_HISTORY];
+    uint64_t high, bytes, packets, first_arrival;
+    uint32_t expected_ssrc, source, first_timestamp, last_timestamp;
+    unsigned payload_type;
+    int32_t filtered_transit;
+    bool have_transit, delay_valid;
+} remb_receive;
+
+static void remb_receive_enter(void)
+{
+    while (atomic_flag_test_and_set_explicit(&remb_receive_gate, memory_order_acquire)) {}
+}
+
+void x4_rtc_diag_remb_begin(unsigned epoch, uint32_t expected_ssrc, unsigned payload_type)
+{
+    if (!epoch || payload_type > 127) return;
+    remb_receive_enter();
+    memset(&remb_receive, 0, sizeof(remb_receive));
+    remb_receive.expected_ssrc = expected_ssrc;
+    remb_receive.payload_type = payload_type;
+    atomic_store_explicit(&remb_receive_epoch, epoch, memory_order_release);
+    atomic_flag_clear_explicit(&remb_receive_gate, memory_order_release);
+}
+
+void x4_rtc_diag_remb_end(unsigned epoch)
+{
+    unsigned current = epoch;
+    (void)atomic_compare_exchange_strong_explicit(&remb_receive_epoch, &current, 0,
+        memory_order_acq_rel, memory_order_relaxed);
+}
+
+static bool remb_count_sequence(uint16_t sequence)
+{
+    /* Leave room below the first sequence for out-of-order packets at wrap. */
+    uint64_t extended = UINT64_C(65536) + sequence;
+    if (remb_receive.high) {
+        const unsigned distance = (uint16_t)(sequence - (uint16_t)remb_receive.high);
+        if (distance >= 32768u) {
+            const unsigned back = 65536u - distance;
+            if (back >= REMB_SEQUENCE_HISTORY) return false;
+            extended = remb_receive.high - back;
+        } else {
+            extended = remb_receive.high + distance;
+        }
+    }
+    uint64_t *slot = &remb_receive.seen[extended % REMB_SEQUENCE_HISTORY];
+    if (*slot == extended) return false;
+    *slot = extended;
+    if (extended > remb_receive.high) remb_receive.high = extended;
+    return true;
+}
+
+static void remb_receive_transit(uint32_t timestamp, uint64_t arrival)
+{
+    if (!remb_receive.have_transit) {
+        remb_receive.have_transit = true;
+        remb_receive.first_timestamp = remb_receive.last_timestamp = timestamp;
+        remb_receive.first_arrival = arrival;
+        return;
+    }
+    const uint32_t advance = timestamp - remb_receive.last_timestamp;
+    const uint32_t ticks = timestamp - remb_receive.first_timestamp;
+    if (!advance || advance >= UINT32_C(0x80000000) ||
+        ticks >= UINT32_C(0x80000000) || arrival < remb_receive.first_arrival) return;
+
+    /* Same RTP frame keeps the earliest arrival. Filter transit differences
+     * at distinct original timestamps, without measuring RTX/FEC delay. */
+    const uint64_t elapsed = arrival - remb_receive.first_arrival;
+    const int64_t media_us = (int64_t)ticks * 1000 / 90;
+    const int64_t transit = (int64_t)(elapsed > INT32_MAX ? INT32_MAX : elapsed) - media_us;
+    const int32_t clipped = transit > 2000000 ? 2000000 :
+        transit < -2000000 ? -2000000 : (int32_t)transit;
+    remb_receive.filtered_transit += (clipped - remb_receive.filtered_transit) / 4;
+    remb_receive.last_timestamp = timestamp;
+    remb_receive.delay_valid = true;
+}
+
+static size_t remb_payload_size(const uint8_t *packet, size_t bytes)
+{
+    size_t header = 12u + (packet[0] & 15u) * 4u;
+    if (header > bytes) return 0;
+    if (packet[0] & 16u) {
+        if (bytes - header < 4u) return 0;
+        const size_t words = (size_t)packet[header + 2] << 8 | packet[header + 3];
+        const size_t extension = 4u + words * 4u;
+        if (extension > bytes - header) return 0;
+        header += extension;
+    }
+    if (packet[0] & 32u) {
+        const unsigned padding = packet[bytes - 1];
+        if (!padding || padding > bytes - header) return 0;
+        bytes -= padding;
+    }
+    return bytes - header;
+}
+
+static void remb_receive_observe(const uint8_t *packet, size_t bytes, unsigned pt,
+    uint32_t ssrc, uint16_t sequence, uint32_t flags, uint64_t now)
+{
+    const unsigned epoch = atomic_load_explicit(&remb_receive_epoch, memory_order_acquire);
+    if (!epoch || !ssrc || !(flags & X4_RD_AUTHENTICATED) || (flags & X4_RD_RETRANSMISSION)) return;
+    const size_t payload = remb_payload_size(packet, bytes);
+    if (!payload ||
+        atomic_flag_test_and_set_explicit(&remb_receive_gate, memory_order_acquire)) return;
+    if (atomic_load_explicit(&remb_receive_epoch, memory_order_relaxed) == epoch &&
+        pt == remb_receive.payload_type &&
+        (!remb_receive.expected_ssrc || ssrc == remb_receive.expected_ssrc)) {
+        const bool original = !(flags & (X4_RD_RTX_NORMALIZED | X4_RD_FEC_RECOVERED | X4_RD_RECOVERY43));
+        if (!remb_receive.source && original) remb_receive.source = ssrc;
+        if (ssrc == remb_receive.source && remb_count_sequence(sequence)) {
+            remb_receive.bytes += payload;
+            ++remb_receive.packets;
+            if (original) {
+                const uint32_t timestamp = (uint32_t)packet[4] << 24 | (uint32_t)packet[5] << 16 |
+                    (uint32_t)packet[6] << 8 | packet[7];
+                remb_receive_transit(timestamp, now);
+            }
+        }
+    }
+    atomic_flag_clear_explicit(&remb_receive_gate, memory_order_release);
+}
+
+bool x4_rtc_diag_remb_take(unsigned epoch, X4RembReceiveWindow *out)
+{
+    if (!epoch || !out || atomic_flag_test_and_set_explicit(&remb_receive_gate, memory_order_acquire))
+        return false;
+    const bool ready = atomic_load_explicit(&remb_receive_epoch, memory_order_acquire) == epoch &&
+        remb_receive.source != 0;
+    if (ready) {
+        *out = (X4RembReceiveWindow){
+            .bytes = remb_receive.bytes, .packets = remb_receive.packets,
+            .video_ssrc = remb_receive.source, .delay_us = remb_receive.filtered_transit,
+            .delay_valid = remb_receive.delay_valid
+        };
+        remb_receive.bytes = remb_receive.packets = 0;
+        remb_receive.filtered_transit = 0;
+        remb_receive.have_transit = remb_receive.delay_valid = false;
+    }
+    atomic_flag_clear_explicit(&remb_receive_gate, memory_order_release);
+    return ready;
+}
+#endif

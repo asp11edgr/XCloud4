@@ -15,17 +15,24 @@ PROBE_TITLE_ID = "XCLD00002"
 PROBE_CONTENT_ID = "IV0000-XCLD00002_00-XCLOUD4PROBE0000"
 PUBLIC_TITLE_ID = "XCLD00003"
 PUBLIC_CONTENT_ID = "IV0000-XCLD00003_00-XCLOUD4PUBLIC000"
-VERSION = "01.26"
-PRODUCT_VERSION = "0.7.58-lab"
-PUBLIC_VERSION = "01.07"
-PUBLIC_PRODUCT_VERSION = "1.2.1-beta"
+VERSION = "01.79"
+PRODUCT_VERSION = "0.7.111-lab"
+NORMAL_PACKAGE_NAME = "XCloud4-0.7.111-lab-51g.pkg"
+PUBLIC_VERSION = "01.47"
+PUBLIC_PRODUCT_VERSION = "1.3.0-beta"
+LEGACY_PROBE_VERSION = "01.55"
+LEGACY_PROBE_PRODUCT_VERSION = "0.7.87-lab"
+T26_VERSION = "02.02"
+T26_PRODUCT_VERSION = "0.7.62-probe.t26b"
+T27_VERSION = "02.03"
+T27_PRODUCT_VERSION = "0.7.63-probe.t27"
 NORMAL_SUFFIXES = ("", "-ui", "-baseline", "-nack-off", "-nack-on", "-grace-off", "-grace-45", "-grace-45-rumble", "-720p60", "-1080p60", "-perfiles")
 STREAM_SUFFIXES = {"-720p60": 1, "-1080p60": 2, "-perfiles": 1}
 FLAG_LIMITS = {"X4_RECEIVER_NACK": (0, 1), "X4_NACK_GRACE_MS": (0, 45),
     "X4_RUMBLE": (0, 1), "X4_INGRESS_MODE_BASELINE": (0, 1),
     "X4_VIDEO_CAPACITY_1080": (0, 1), "X4_VIDEO_PROBE": (0, 1),
     "X4_STREAM_PROFILE": (0, 1, 2)}
-OPTIONAL_FLAG_LIMITS = {"X4_PUBLIC": (0, 1)}
+OPTIONAL_FLAG_LIMITS = {"X4_PUBLIC": (0, 1), "X4_PROBE_T26": (0, 1), "X4_PROBE_T27": (0, 1)}
 
 
 def validate_ids(title_id, content_id):
@@ -44,22 +51,31 @@ def metadata(mode="normal", variant="", suffix=""):
         if variant or suffix not in NORMAL_SUFFIXES:
             raise ValueError("Normal mode has no probe variant; preserve normal suffix policy")
         title, title_id, content_id = "XCloud4 Lab", NORMAL_TITLE_ID, NORMAL_CONTENT_ID
-        package_name = f"XCloud4-{PRODUCT_VERSION}{suffix}.pkg"
+        package_name = f"XCloud4-{PRODUCT_VERSION}{suffix}.pkg" if suffix else NORMAL_PACKAGE_NAME
         stage, dist, demo = "build/package", "dist", True
     elif mode == "public":
         if variant or suffix not in ("", "-publico"):
             raise ValueError("Public mode has no probe variant and only allows empty or -publico suffix")
         title, title_id, content_id = "XCloud4", PUBLIC_TITLE_ID, PUBLIC_CONTENT_ID
         version, product_version = PUBLIC_VERSION, PUBLIC_PRODUCT_VERSION
-        package_name = f"XCloud4-{PUBLIC_PRODUCT_VERSION}-publico.pkg"
+        package_name = "XCloud4-1.3.0-beta-publico-51g.pkg"
         stage, dist, demo = "build/package-public", "dist", False
         stream_profile = 1
     elif mode == "probe":
-        if variant not in ("off", "on") or suffix:
-            raise ValueError("Probe mode requires explicit off/on and no normal suffix")
+        if variant not in ("off", "on", "t26", "t27") or suffix:
+            raise ValueError("Probe mode requires explicit off/on/t26/t27 and no normal suffix")
         title, title_id, content_id = f"XCloud4 Sonda {variant.upper()}", PROBE_TITLE_ID, PROBE_CONTENT_ID
-        package_name = f"XCloud4-{PRODUCT_VERSION}-sonda-capacity-{variant}.pkg"
+        version, product_version = LEGACY_PROBE_VERSION, LEGACY_PROBE_PRODUCT_VERSION
+        package_name = f"XCloud4-{product_version}-sonda-capacity-{variant}.pkg"
         stage, dist, demo = f"build/package-probe-{variant}", f"dist/probe-{variant}", False
+        if variant == "t26":
+            title = "XCloud4 Probe"
+            version, product_version = T26_VERSION, T26_PRODUCT_VERSION
+            package_name, stream_profile = "XCloud4-probe-t26b.pkg", 1
+        elif variant == "t27":
+            title = "XCloud4 Probe T27"
+            version, product_version = T27_VERSION, T27_PRODUCT_VERSION
+            package_name, stream_profile = "XCloud4-probe-t27.pkg", 1
     else:
         raise ValueError("Package mode must be normal, public or probe")
     validate_ids(title_id, content_id)
@@ -69,7 +85,8 @@ def metadata(mode="normal", variant="", suffix=""):
         staging=stage, dist=dist, include_demo=demo,
         sfo={"APP_TYPE": 1, "APP_VER": version, "ATTRIBUTE": 0, "CATEGORY": "gd",
             "CONTENT_ID": content_id, "DOWNLOAD_DATA_SIZE": 0, "SYSTEM_VER": 0,
-            "TITLE": title, "TITLE_ID": title_id, "VERSION": version})
+            "TITLE": title, "TITLE_ID": title_id, "VERSION": version,
+            **({"X4_PRODUCT_VERSION": product_version} if mode != "probe" else {})})
 
 
 def parse_config(text):
@@ -99,6 +116,12 @@ def check_flags(identity, flags):
     if set(base) != set(FLAG_LIMITS):
         raise ValueError("Incomplete seven-flag build config")
     pub = flags.get("X4_PUBLIC", 0)
+    t26 = flags.get("X4_PROBE_T26", 0)
+    t27 = flags.get("X4_PROBE_T27", 0)
+    if t27 not in (0,1) or t27 != int(identity["mode"]=="probe" and identity["variant"]=="t27"):
+        raise ValueError("X4_PROBE_T27=1 is exclusive to probe/t27")
+    if t26 not in (0, 1) or t26 != int(identity["mode"] == "probe" and identity["variant"] in ("t26","t27")):
+        raise ValueError("X4_PROBE_T26=1 is exclusive to the reused probe/t26/t27 bank")
     if identity["mode"] == "public":
         expected = dict(X4_RECEIVER_NACK=1, X4_NACK_GRACE_MS=45, X4_RUMBLE=1,
             X4_INGRESS_MODE_BASELINE=0, X4_VIDEO_PROBE=0, X4_VIDEO_CAPACITY_1080=1,
@@ -122,16 +145,47 @@ def check_flags(identity, flags):
     else:
         expected = dict(X4_RECEIVER_NACK=1, X4_NACK_GRACE_MS=45, X4_RUMBLE=0,
             X4_INGRESS_MODE_BASELINE=0, X4_VIDEO_PROBE=1,
-            X4_VIDEO_CAPACITY_1080=int(identity["variant"] == "on"), X4_STREAM_PROFILE=0)
+            X4_VIDEO_CAPACITY_1080=int(identity["variant"] in ("on", "t26", "t27")),
+            X4_STREAM_PROFILE=int(identity["variant"] in ("t26", "t27")))
         if pub != 0 or base != expected:
             raise ValueError("Probe variant disagrees with the exact approved seven flags")
 
 
 def build_identity(header, flags, expected_product=PRODUCT_VERSION):
     header = header.replace("\r\n", "\n")
+    public = flags.get("X4_PUBLIC", 0)
+    t26 = flags.get("X4_PROBE_T26", 0)
+    if public not in (0, 1) or t26 not in (0, 1) or (t26 and (public or not flags["X4_VIDEO_PROBE"])):
+        raise ValueError("Unsupported identity edition")
+    t27 = flags.get("X4_PROBE_T27",0)
+    if t27 not in (0,1) or (t27 and not t26):
+        raise ValueError("T27 requires the reused T26 bank")
+    t27_branch = re.compile(r'^#if X4_VIDEO_PROBE && X4_PROBE_T27\n'
+        r'(?P<probe>(?:(?!^#(?:if|elif|else|endif)\b)[^\n]*\n)*)'
+        r'#else\n(?P<legacy>.*?)'
+        r'^#endif /\* X4_VIDEO_PROBE && X4_PROBE_T27 \*/(?:\n|$)',re.M|re.S)
+    branches=list(t27_branch.finditer(header))
+    if len(branches)>1 or (t27 and len(branches)!=1):raise ValueError("Unambiguous T27 identity branch required")
+    header=t27_branch.sub(lambda m:m['probe'] if t27 else m['legacy'],header)
+    # Select the one explicit experiment branch before resolving the frozen
+    # public/Lab pairs. The end marker avoids guessing at nested #endif lines.
+    experiment = re.compile(r'^#if X4_VIDEO_PROBE && X4_PROBE_T26\n'
+        r'(?P<probe>(?:(?!^#(?:if|elif|else|endif)\b)[^\n]*\n)*)'
+        r'#else\n(?P<legacy>.*?)'
+        r'^#endif /\* X4_VIDEO_PROBE && X4_PROBE_T26 \*/(?:\n|$)', re.M | re.S)
+    branches = list(experiment.finditer(header))
+    if len(branches) > 1 or (t26 and not t27 and len(branches) != 1):
+        raise ValueError("Unambiguous T26 identity branch required")
+    header = experiment.sub(lambda match: match["probe"] if t26 else match["legacy"], header)
+    # Resolve only the two explicit product edition pairs used by build_identity.h.
+    # Any remaining duplicate definition still fails the checks below.
+    pair = re.compile(r'^#if X4_PUBLIC\n'
+        r'(#define (X4_SOURCE_ID|X4_PRODUCT_VERSION) "[^"\n]+"\n)'
+        r'#else\n(#define \2 "[^"\n]+"\n)#endif(?:\n|$)', re.M)
+    header = pair.sub(lambda match: match[1] if public else match[3], header)
     source = re.findall(r'^#define X4_SOURCE_ID "([a-f0-9]{40})"$', header, re.M)
     product = re.findall(r'^#define X4_PRODUCT_VERSION "([0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?)"$', header, re.M)
-    if len(source) != 1 or expected_product not in product:
+    if len(source) != 1 or product != [expected_product]:
         raise ValueError("Unambiguous source/product identity required")
     return source[0] + f'-n{flags["X4_RECEIVER_NACK"]}-g{flags["X4_NACK_GRACE_MS"]}' + \
         f'-r{flags["X4_RUMBLE"]}-vc{flags["X4_VIDEO_CAPACITY_1080"]}-p{flags["X4_VIDEO_PROBE"]}' + \
@@ -205,14 +259,16 @@ def main(argv=None):
     parser.add_argument("--suffix", default="")
     parser.add_argument("--format", choices=("json", "lines"), default="json")
     parser.add_argument("--config", default="build/build_config.h")
-    parser.add_argument("--source-header", default="src/core/build_identity.h")
+    parser.add_argument("--source-header")
     parser.add_argument("--elf", default="build/xcloud4.elf")
     parser.add_argument("--self", dest="self_file", default="build/eboot.bin")
     parser.add_argument("--sfo-file")
     args = parser.parse_args(argv)
     try:
         identity = metadata(args.mode, args.variant, args.suffix)
-        result = preflight(identity, args.config, args.source_header, args.elf, args.self_file) if args.command == "verify" else {"identity": identity, "scope": "Metadata policy only; not an artifact validation"}
+        header = args.source_header or ("src/core/build_identity.h" if args.mode == "probe"
+                                        else "src/core/app_identity.h")
+        result = preflight(identity, args.config, header, args.elf, args.self_file) if args.command == "verify" else {"identity": identity, "scope": "Metadata policy only; not an artifact validation"}
         if args.command == "sfo":
             if not args.sfo_file: raise ValueError("Extracted SFO path required")
             result["sfo_fields"] = verify_sfo(bounded_file(args.sfo_file, 65536), identity)

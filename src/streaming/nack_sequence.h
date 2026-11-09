@@ -2,6 +2,10 @@
 #pragma once
 #include <stdint.h>
 
+/* The app-owned C++ override may have loaded this exact POD from the pinned
+ * RTC Message overlay first. Other translation units keep this definition. */
+#ifndef X4_NACK_SEQUENCE_FROM_RTC_MESSAGE
+
 enum {
     X4_NACK_SEQUENCE_INITIAL = 1,
     X4_NACK_SEQUENCE_OMISSION,
@@ -24,3 +28,4 @@ typedef struct {
     uint32_t transport_epoch, sequence_epoch, previous_epoch;
     uint32_t anchor_rtp_timestamp, reason;
 } X4NackSequenceTag;
+#endif

@@ -19,7 +19,7 @@ cleanup() { rm -f -- "$build_dir"/*; rmdir -- "$build_dir"; }
 trap cleanup EXIT
 cp -- "$repo_dir/src/streaming/rtc_receive_diag.h" "$build_dir/x4_rtc_receive_diag.h"
 common=(-std=c++17 -O1 -g -Wall -Wextra -Werror -pthread \
-    -DX4_OPENORBIS -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -ffunction-sections -fdata-sections \
+    -DX4_OPENORBIS -DX4_RECOVERY43=0 -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -ffunction-sections -fdata-sections \
     -I"$build_dir" -I"$repo_dir/src/streaming" -I"$vendor_dir/include" \
     -I"$vendor_dir/include/rtc" -I"$vendor_dir/src" -I"$plog_include" \
     "$repo_dir/tests/receiver_nack_handler_test.cpp" \
@@ -48,4 +48,13 @@ if "$compiler" -x c++ "$build_dir/sanitizer-probe.c" -fsanitize=address,undefine
 else
     cat "$build_dir/asan-build.txt"
     echo "UNAVAILABLE ASan/UBSan host build; not a sanitizer pass"
+fi
+
+if [[ "${X4_NACK_TSAN:-0}" == 1 ]]; then
+    "$c_compiler" -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=thread \
+        -I"$repo_dir/src/streaming" -c "$repo_dir/src/streaming/receiver_nack_state.c" \
+        -o "$build_dir/state-tsan.o"
+    "$compiler" "${common[@]}" -DX4_NACK_TSAN_FIXTURE=1 "$build_dir/state-tsan.o" -fsanitize=thread -no-pie \
+        -o "$build_dir/handler-tsan"
+    TSAN_OPTIONS=halt_on_error=1 "$build_dir/handler-tsan"
 fi

@@ -2,6 +2,7 @@
 /* Real release worker/parser; transport returns only an in-process fixture. */
 #include "../src/auth/release_check.c"
 #include <assert.h>
+#include <time.h>
 
 struct X4Http { int value; } fixture_http;
 static const char *fixture_body;
@@ -29,6 +30,17 @@ static void worker_fixture(const char *body,enum X4UpdateStatus expected,const c
     char output[64];memset(output,'x',sizeof(output));
     bool valid=x4_release_check_tag(output,sizeof(output));
     if(tag)assert(valid&&!strcmp(output,tag));else assert(!valid&&!output[0]);
+}
+
+static void wait_for_worker(void)
+{
+    const struct timespec tick = {.tv_nsec = 1000000};
+    for (unsigned i = 0; i < 3000; ++i) {
+        if (atomic_load_explicit(&check_state.done, memory_order_acquire)) return;
+        (void)x4_release_check_status(NULL, 0);
+        (void)nanosleep(&tick, NULL);
+    }
+    assert(!"release worker timed out");
 }
 int main(void)
 {
@@ -70,6 +82,48 @@ int main(void)
     worker_fixture("[{\"tag_name\":\"lab-0.0.0\"}]",X4_UPDATE_LATEST,NULL);
 #endif
     worker_fixture("{}",X4_UPDATE_FAILED,NULL);
-    puts("PASS release tag: real public/lab worker+parser, exact 63-byte ASCII allowlist, no truncation, invalid/missing tag yields generic fallback, no added request or remote URL consumed");
+    int major, minor, patch;
+    assert(x4_version_parse("v9999999999999999999999.1.1", &major, &minor, &patch) == -1);
+    assert(x4_version_parse("v1.9999999999999999999999.1", &major, &minor, &patch) == -1);
+    assert(x4_version_parse("v1.1.9999999999999999999999", &major, &minor, &patch) == -1);
+#if X4_PUBLIC
+    const char *const manifest = X4_UPDATE_PUBLIC_MANIFEST, *const signature = X4_UPDATE_PUBLIC_SIGNATURE;
+    const char *const other = X4_UPDATE_LAB_MANIFEST;
+    const char *const both =
+        "{\"tag_name\":\"v9.8.7-beta\",\"assets\":[{\"name\":\"" X4_UPDATE_PUBLIC_MANIFEST "\","
+        "\"browser_download_url\":\"https://untrusted.invalid/\"},{\"name\":\"" X4_UPDATE_PUBLIC_SIGNATURE "\"}]}";
+    const char *const duplicate =
+        "{\"tag_name\":\"v9.8.7-beta\",\"assets\":[{\"name\":\"" X4_UPDATE_PUBLIC_MANIFEST "\"},"
+        "{\"name\":\"" X4_UPDATE_PUBLIC_MANIFEST "\"},{\"name\":\"" X4_UPDATE_PUBLIC_SIGNATURE "\"}]}";
+    const char *const latest = "{\"tag_name\":\"v0.0.0\"}";
+#else
+    const char *const manifest = X4_UPDATE_LAB_MANIFEST, *const signature = X4_UPDATE_LAB_SIGNATURE;
+    const char *const other = X4_UPDATE_PUBLIC_MANIFEST;
+    const char *const both =
+        "[{\"tag_name\":\"v9.8.7\",\"assets\":[{\"name\":\"" X4_UPDATE_PUBLIC_MANIFEST "\"}]},"
+        "{\"tag_name\":\"lab-9.8.7\",\"assets\":[{\"name\":\"" X4_UPDATE_LAB_MANIFEST "\","
+        "\"browser_download_url\":\"https://untrusted.invalid/\"},{\"name\":\"" X4_UPDATE_LAB_SIGNATURE "\"}]}]";
+    const char *const duplicate =
+        "[{\"tag_name\":\"lab-9.8.7\",\"assets\":[{\"name\":\"" X4_UPDATE_LAB_MANIFEST "\"},"
+        "{\"name\":\"" X4_UPDATE_LAB_MANIFEST "\"},{\"name\":\"" X4_UPDATE_LAB_SIGNATURE "\"}]}]";
+    const char *const latest = "[{\"tag_name\":\"lab-0.0.0\"}]";
+#endif
+    fixture_body = both;
+    const unsigned before = requests;
+    x4_release_check_start();
+    wait_for_worker();
+    assert(requests == before + 1 && x4_release_check_asset(manifest) && x4_release_check_asset(signature));
+    assert(!x4_release_check_asset(other) && !x4_release_check_asset(NULL));
+    fixture_body = duplicate;
+    assert(x4_release_check_restart());
+    wait_for_worker();
+    assert(requests == before + 2 && !x4_release_check_asset(manifest) && x4_release_check_asset(signature));
+    fixture_body = latest;
+    assert(x4_release_check_restart());
+    wait_for_worker();
+    assert(requests == before + 3 && !x4_release_check_asset(manifest) && !x4_release_check_asset(signature));
+    assert(x4_release_check_status(NULL, 0) == X4_UPDATE_LATEST);
+    x4_release_check_stop();
+    puts("RELEASE51_PASS tag=checked assets=edition-specific duplicates=rejected recheck=3 exact-endpoint=1");
     return 0;
 }

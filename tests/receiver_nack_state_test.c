@@ -42,7 +42,10 @@ static void initial_and_contiguous(void)
 {
     X4ReceiverNackState state;
     x4_receiver_nack_init(&state, true);
-    CHECK(sizeof(state) < 4096);
+    /* One context per transport, allocated with the handler. Adaptive
+     * reserves 64 reusable ranges; legacy still visits exactly 16. */
+    CHECK(sizeof(state) <= 16u * 1024u);
+    CHECK(state.legacy && X4_RECEIVER_NACK_WATCH_SLOTS == 16);
     X4ReceiverNackObservation r = video(&state, 100, 1000);
     CHECK(r.flags == X4_NACK_OBS_INITIAL);
     CHECK(r.extended_sequence == 100 && r.sequence_epoch == 1);
@@ -142,7 +145,7 @@ static void range_64_boundary(void)
     video(&state, 1000, 10);
     X4ReceiverNackObservation r = video(&state, 1065, 20);
     CHECK(r.gap.request_id == 1 && r.gap.missing_count == 64);
-    CHECK(state.ranges[0].pending == UINT64_MAX);
+    CHECK(state.ranges[0].pending[0] == UINT64_MAX);
     for (unsigned i = 0; i < 64; ++i) {
         r = video(&state, (uint16_t)(1001 + i), 30 + i);
         CHECK(r.arrival.present && r.arrival.first_observation);
@@ -501,8 +504,94 @@ static void provenance_reason_never_authorizes_foreign_or_ambiguous_rebind(void)
     CHECK(r.sequence_tag.previous_high_extended == UINT64_MAX && !r.gap.present);
 }
 
+static void adaptive_retry_wrap_and_deadline(void)
+{
+    X4ReceiverNackState state;
+    x4_receiver_nack_init_mode(&state, true, false);
+    CHECK(state.grace_us == 60000 && state.retry_delay_us == 20000);
+    x4_receiver_nack_set_rtt(&state, 5);
+    CHECK(state.grace_us == 45000 && state.retry_delay_us == 20000);
+    x4_receiver_nack_set_rtt(&state, 26);
+    CHECK(state.grace_us == 67000 && state.retry_delay_us == 39000);
+    video(&state, 65529, 1000);
+    X4ReceiverNackObservation observation = video(&state, (uint16_t)(65530 + 65), 2000);
+    uint64_t request = observation.gap.request_id;
+    CHECK(request == 1 && observation.gap.missing_count == 65);
+    uint64_t mask[X4_RECEIVER_NACK_MASK_WORDS];
+    X4ReceiverNackGap gap;
+    bool retry;
+    CHECK(x4_receiver_nack_next(&state, 2000, &gap, mask, &retry) && !retry);
+    CHECK(gap.request_id == request && mask[0] == UINT64_MAX && mask[1] == 1);
+    observation = video(&state, 0, 15000);
+    CHECK(observation.arrival.first_observation && observation.arrival.request_id == request);
+    CHECK(!x4_receiver_nack_next(&state, 40999, &gap, mask, &retry));
+    CHECK(x4_receiver_nack_next(&state, 41000, &gap, mask, &retry) && retry);
+    CHECK(gap.request_id == request && mask[0] == (UINT64_MAX ^ (UINT64_C(1) << 6)) &&
+        mask[1] == 1);
+    CHECK(!x4_receiver_nack_next(&state, 68000, &gap, mask, &retry));
+    CHECK(state.metrics.initial_requests == 1 && state.metrics.retries == 1 &&
+        state.metrics.requested_positions == 129 && state.metrics.grace_us == 67000);
+    observation = video(&state, (uint16_t)(65595 + 513), 70000);
+    CHECK(observation.gap.missing_count == 512 && observation.gap.request_id == 2);
+    CHECK(!x4_receiver_nack_next(&state, 70000, &gap, mask, &retry)); /* Bucket depleted. */
+    CHECK(state.next_send_us == 131000 && !state.metrics.budget_suppressed_positions);
+    CHECK(x4_receiver_nack_next(&state, 131000, &gap, mask, &retry) && !retry);
+    CHECK(!state.next_send_us && gap.missing_count == 512); /* No late retry. */
+    observation = video(&state, (uint16_t)(65595 + 513 + 513), 132000);
+    CHECK(observation.gap.missing_count == 512 && observation.gap.request_id == 3);
+    CHECK(!x4_receiver_nack_next(&state, 132000, &gap, mask, &retry));
+    CHECK(state.metrics.budget_suppressed_positions == 512);
+    observation = video(&state, (uint16_t)(65595 + 513 + 513 + 514), 139000);
+    CHECK(observation.gap.missing_count == 513 && !observation.gap.request_id);
+
+    x4_receiver_nack_init_mode(&state, true, false);
+    state.request_ordinal = UINT32_MAX - 1;
+    video(&state, 10, 1000);
+    observation = video(&state, 12, 2000);
+    CHECK(observation.gap.request_id == UINT32_MAX);
+    observation = video(&state, 14, 3000);
+    CHECK(observation.gap.request_id == 1);
+    CHECK(x4_receiver_nack_next(&state, 3000, &gap, mask, &retry) &&
+        gap.first_extended == 11 && gap.request_id == UINT32_MAX);
+    CHECK(x4_receiver_nack_next(&state, 3001, &gap, mask, &retry) &&
+        gap.first_extended == 13 && gap.request_id == 1);
+}
+
+static void adaptive_ten_minutes_at_three_percent(void)
+{
+    X4ReceiverNackState state;
+    x4_receiver_nack_init_mode(&state, true, false);
+    x4_receiver_nack_set_rtt(&state, 26);
+    uint64_t mask[X4_RECEIVER_NACK_MASK_WORDS], total = 0, initial = 0, retries = 0;
+    X4ReceiverNackGap gap;
+    bool retry;
+    for (unsigned i = 0; i <= 900000; ++i) {
+        uint64_t now = 1 + (uint64_t)i * 667;
+        unsigned phase = i % 100;
+        if (phase != 10 && phase != 44 && phase != 77)
+            video(&state, (uint16_t)i, now);
+        if (!state.next_send_us || now < state.next_send_us) continue;
+        if (!x4_receiver_nack_next(&state, now, &gap, mask, &retry)) continue;
+        CHECK(gap.missing_count == 1 && mask[0] == 1 && !mask[1]);
+        CHECK(gap.first_extended <= i && i - gap.first_extended < 110);
+        CHECK(++total <= 512 + now / 1000);
+        if (retry) ++retries;
+        else {
+            ++initial;
+            CHECK(gap.request_id == initial);
+        }
+    }
+    CHECK(initial == 27000 && retries >= 26997 && total == initial + retries);
+    CHECK(state.metrics.initial_requests == initial && state.metrics.retries == retries &&
+        state.metrics.requested_positions == total && !state.metrics.budget_suppressed_positions);
+    printf("PASS adaptive 10 min 3%%: initial=%" PRIu64 " retry=%" PRIu64 " positions=%" PRIu64 "\n",
+        initial, retries, total);
+}
+
 int main(void)
 {
+    CASE(adaptive_retry_wrap_and_deadline);
+    CASE(adaptive_ten_minutes_at_three_percent);
     CASE(initial_and_contiguous);
     CASE(single_gap_and_cancel);
     CASE(duplicate_arrival_never_retries);

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Small source oracle for unchanged 0.7.47 audio and real JSON smoke output."""
+"""Small source oracle for unchanged legacy audio and real JSON smoke output."""
 from pathlib import Path
 import hashlib
 import json
@@ -23,11 +23,12 @@ def function(name):
     return SOURCE[start:end]
 
 class AudioSourceTest(unittest.TestCase):
-    def test_previous_worker_exact_0747(self):
-        # LF-normalized bytes of the installed/validated 0.7.47 source.
+    def test_previous_worker_exact_t40b(self):
+        # Pin the verified base. It already services the RTP receive epoch in
+        # play(), which is the difference from the original 0.7.47 digest.
         expected = {
             "append_pcm": "d7906e7807066b825b83fabd386a488fc8c39796b2a1a4b2822eb62d59156f7b",
-            "play": "54beafba1e0fc3aca9a3f1f49965797d00ce6f5cd2abc0ff75fadc2172babf32",
+            "play": "0a2afce6dead13864c7412463646e199105f4fff7a29ba7754272f0d89661786",
         }
         for name, digest in expected.items():
             self.assertEqual(hashlib.sha256(function(name).encode()).hexdigest(), digest)
@@ -64,7 +65,7 @@ class AudioSourceTest(unittest.TestCase):
         self.assertEqual(len(records), 1)
         record = records[0]
         self.assertEqual(record["mode"], "new")
-        self.assertFalse(record["fec_implemented"])
+        self.assertTrue(record["fec_implemented"])
         self.assertEqual(record["fec_packets"], 0)
         self.assertEqual(record["pcm_overflows"], 1)
         self.assertEqual(record["underflow_intervals_ms"]["mean"], 20)

@@ -9,7 +9,6 @@
  * This fixture never invokes /play or locale selection. The menu hooks,
  * ring operations, histogram and pipeline JSON exporter remain production
  * implementations; no metric or exporter is replaced by this locale stub. */
-const char *x4_lang_locale(void) { return "es-MX"; }
 
 static void ui_perf_bins(void)
 {

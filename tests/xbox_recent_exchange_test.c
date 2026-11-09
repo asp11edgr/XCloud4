@@ -8,6 +8,28 @@
 static unsigned checks, stage, mode, mru_calls, store_calls, title_calls;
 static X4XboxWork *current_work;
 static _Atomic int cancel_flag;
+#if !X4_PUBLIC && !X4_VIDEO_PROBE
+static const char *xsts_override;
+static int xsts_status;
+static bool quota_request;
+static X4XstsDiagSnapshot claim_snapshot;
+#endif
+static const char *const user_claims[] = {
+    "{\"Token\":\"user-token\",\"DisplayClaims\":{\"xui\":[{\"gtg\":\"ClassicPlayer\",\"mgt\":\"ModernPlayer\"}]}}",
+    "{\"Token\":\"user-token\",\"DisplayClaims\":{\"xui\":[{\"mgt\":\"Jugador \\u00d1\"}]}}",
+    "{\"Token\":\"user-token\",\"DisplayClaims\":{\"xui\":[{\"gtg\":{},\"mgt\":\"   \"}]}}",
+    "{\"Token\":\"user-token\"}",
+    "{\"Token\":\"user-token\",\"DisplayClaims\":{\"xui\":[{\"uhs\":\"987\"}]}}",
+};
+static const char *const xsts_claims[] = {
+    "{\"Token\":\"xsts-token\",\"DisplayClaims\":{\"xui\":[{\"gtg\":\"OtherName\","
+        "\"uhs\":\"987\",\"\\u0078id\":\"1234567890\",\"extra_claim\":{\"nested\":\"hidden\"},"
+        "\"unsafe\\u0022key\":\"ignored\"},{\"second_user\":\"hidden\"}]}}",
+    "{\"Token\":\"xsts-token\"}",
+    "{\"Token\":\"xsts-token\",\"DisplayClaims\":{\"xui\":[{\"gtg\":\"\",\"mgt\":\"RestoredPlayer\"}]}}",
+    "{\"Token\":\"xsts-token\"}",
+    "{\"Token\":\"xsts-token\",\"DisplayClaims\":{\"xui\":[{\"gtg\":null,\"mgt\":false}]}}",
+};
 #define CHECK(x) do{++checks;if(!(x)){fprintf(stderr,"MRU exchange check failed line%d: %s\n",__LINE__,#x);exit(1);}}while(0)
 /* Server choice is a separate owner. Model a previously saved Automatic
  * choice; assert the real parser publishes the fixture's sole default region.
@@ -38,8 +60,22 @@ int x4_http_json_request(X4Http *h,const char *url,const X4HttpHeader *headers,s
 {
     (void)h;CHECK(cancel==&cancel_flag);*status=200;
     const char *response=NULL;
-    if(!strcmp(url,X4_XBOX_USER_URL)){CHECK(stage++==0);CHECK(json&&strstr(json,"d=private-host-token"));response="{\"Token\":\"user-token\"}";}
-    else if(!strcmp(url,X4_XBOX_XSTS_URL)){CHECK(stage++==1);CHECK(json&&strstr(json,"user-token"));response="{\"Token\":\"xsts-token\"}";}
+    if (!strcmp(url, X4_XBOX_USER_URL)) {
+        CHECK(stage++ == 0);
+        CHECK(json && strstr(json, "d=private-host-token"));
+        response = user_claims[mode];
+    } else if (!strcmp(url, X4_XBOX_XSTS_URL)) {
+        CHECK(stage++ == 1);
+        CHECK(json && strstr(json, "user-token"));
+        response = xsts_claims[mode];
+#if !X4_PUBLIC && !X4_VIDEO_PROBE
+        CHECK(strstr(json, quota_request ? "http://mp.microsoft.com/" : "http://gssv.xboxlive.com/"));
+        if (xsts_override) {
+            response = xsts_override;
+            *status = xsts_status;
+        }
+#endif
+    }
     else if(!strcmp(url,offerings[0].url)){CHECK(stage++==2);CHECK(json&&strstr(json,"xsts-token"));response="{\"gsToken\":\"gs-token\",\"offeringSettings\":{\"regions\":[{\"isDefault\":true,\"baseUri\":\"https://region.gssv-play-prod.xboxlive.com\",\"name\":\"Host Region\"}]}}";}
     else if(!strcmp(url,"https://region.gssv-play-prod.xboxlive.com/v2/titles")){
         CHECK(!json&&count==3);CHECK(!strcmp(headers[0].value,"Bearer gs-token"));CHECK(current_work->gs_token[0]);++title_calls;
@@ -65,9 +101,80 @@ static void verify_wiped(void){
     CHECK(zero_buffer(current_work->response,sizeof(current_work->response))&&zero_buffer(current_work->request,sizeof(current_work->request))&&zero_buffer(current_work->url,sizeof(current_work->url))&&zero_buffer(current_work->origin,sizeof(current_work->origin)));
     x4_xbox_work_free(current_work);current_work=NULL;
 }
+
+#if !X4_PUBLIC && !X4_VIDEO_PROBE
+static void diag_exchange(const char *body, int status, bool market)
+{
+    new_run(0);
+    stage = 1;
+    xsts_override = body;
+    xsts_status = status;
+    quota_request = market;
+    current_work->cancel = &cancel_flag;
+    current_work->http = x4_http_open(NULL);
+    CHECK(current_work->http);
+    strcpy(current_work->user_token, "user-token");
+    char hash[21] = {0};
+    CHECK((xsts_request(current_work, market ? &hash : NULL) == 0) == (status == 200));
+    CHECK(!market || !strcmp(hash, "987"));
+    CHECK(zero_buffer(current_work->user_token, sizeof(current_work->user_token)));
+    CHECK(zero_buffer(current_work->response, sizeof(current_work->response)));
+    x4_http_close(current_work->http);
+    x4_xbox_work_free(current_work);
+    current_work = NULL;
+    xsts_override = NULL;
+    quota_request = false;
+}
+
+static void verify_claim_diag(void)
+{
+    x4_xsts_diag_snapshot(&claim_snapshot);
+    CHECK(claim_snapshot.count == 6 && claim_snapshot.revision == x4_xsts_diag_revision());
+    const X4XstsDiagResponse *record = &claim_snapshot.responses[0];
+    CHECK(record->party == X4_XSTS_DIAG_GSSV && record->status == 200);
+    CHECK(record->count == 4 && record->omitted == 1);
+    const char *const expected[] = {"gtg", "uhs", "xid", "extra_claim"};
+    for (unsigned i = 0; i < record->count; ++i) CHECK(!strcmp(record->names[i], expected[i]));
+    CHECK(claim_snapshot.responses[1].count == 0);
+    CHECK(claim_snapshot.responses[2].count == 2 &&
+        !strcmp(claim_snapshot.responses[2].names[1], "mgt"));
+
+    diag_exchange("{\"Token\":\"xsts-token\",\"DisplayClaims\":{\"xui\":[{\"uhs\":\"987\",\"xid\":\"private-number\"}]}}", 200, true);
+    diag_exchange("{\"XErr\":42,\"DisplayClaims\":{\"xui\":[{\"denied\":\"private-value\"}]}}", 401, false);
+    diag_exchange("{malformed}", 503, false);
+    x4_xsts_diag_snapshot(&claim_snapshot);
+    CHECK(claim_snapshot.count == 9 && claim_snapshot.revision == 9);
+    record = &claim_snapshot.responses[6];
+    CHECK(record->party == X4_XSTS_DIAG_MARKET && record->status == 200 && record->count == 2);
+    CHECK(!strcmp(record->names[0], "uhs") && !strcmp(record->names[1], "xid"));
+    record = &claim_snapshot.responses[7];
+    CHECK(record->party == X4_XSTS_DIAG_GSSV && record->status == 401 && record->count == 1);
+    CHECK(!strcmp(record->names[0], "denied"));
+    CHECK(claim_snapshot.responses[8].status == 503 && claim_snapshot.responses[8].count == 0);
+
+    const char crowded[] = "{\"DisplayClaims\":{\"xui\":[{\"a0\":0,\"a1\":0,\"a2\":0,"
+        "\"a3\":0,\"a4\":0,\"a5\":0,\"a6\":0,\"a7\":0,\"a8\":0,\"a9\":0,\"a10\":0,\"a11\":0,"
+        "\"a12\":0,\"a13\":0,\"a14\":0,\"a15\":0,\"a16\":0}]}}";
+    X4JsonSpan root;
+    CHECK(x4_json_parse(crowded, sizeof(crowded) - 1, &root) == 0);
+    for (unsigned i = 0; i < X4_XSTS_DIAG_RESPONSES; ++i) note_xsts_claims(X4_XSTS_DIAG_GSSV, (int)i, root);
+    x4_xsts_diag_snapshot(&claim_snapshot);
+    CHECK(claim_snapshot.count == X4_XSTS_DIAG_RESPONSES &&
+        claim_snapshot.revision == X4_XSTS_DIAG_RESPONSES + 9);
+    for (unsigned i = 0; i < claim_snapshot.count; ++i) {
+        record = &claim_snapshot.responses[i];
+        CHECK(record->status == (int)i && record->count == X4_XSTS_DIAG_NAMES && record->omitted == 1);
+        CHECK(!strcmp(record->names[0], "a0") && !strcmp(record->names[15], "a15"));
+    }
+    puts("HOST51C_XSTS_PASS relying_parties=2 values=0 invalid_response=1 history_limit=32");
+}
+#endif
+
 int main(void)
 {
+    const char *const gamertags[] = {"ClassicPlayer", "Jugador Ñ", "RestoredPlayer", "", ""};
     for(unsigned m=0;m<5;++m){new_run(m);const X4CatalogSnapshot *catalog=x4_xbox_catalog(current_work,"private-host-token",&cancel_flag,NULL,NULL);const X4RecentSnapshot *recent=x4_xbox_catalog_recent(current_work);
+        CHECK(!strcmp(catalog->gamertag, gamertags[m]));
         if(m==3){CHECK(catalog->state==X4_CATALOG_CANCELLED&&recent->state==X4_CATALOG_CANCELLED);CHECK(!store_calls);}
         else if(m==4){CHECK(catalog->state==X4_CATALOG_ERROR&&recent->state==X4_CATALOG_ERROR);CHECK(!mru_calls&&!store_calls);}
         else{CHECK(catalog->state==X4_CATALOG_READY&&catalog->count==1);CHECK(!strcmp(catalog->titles[0].name,"Edición ñ"));CHECK(store_calls==1&&mru_calls==1&&title_calls==1);
@@ -75,5 +182,8 @@ int main(void)
         verify_wiped();
     }
     new_run(0);const X4RecentSnapshot *recent=x4_xbox_recents(current_work,"private-host-token",&cancel_flag);CHECK(recent->state==X4_CATALOG_READY&&recent->count==1);CHECK(!title_calls&&!store_calls&&mru_calls==1);verify_wiped();
-    printf("production Xbox MRU exchange PASS: %u checks; controlled host transport, no live request or streaming\n",checks);return 0;
+#if !X4_PUBLIC && !X4_VIDEO_PROBE
+    verify_claim_diag();
+#endif
+    printf("production Xbox MRU exchange PASS: %u checks; gamertag claims classic/modern/absent, no live request or streaming\n",checks);return 0;
 }

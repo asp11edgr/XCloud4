@@ -23,8 +23,9 @@ int x4_text_width_px(int size, int semibold, const char *text);
 void x4_text_ellipsis_px(uint32_t *pixels, int x, int y, int size, int semibold,
                         const char *text, int max_width, uint32_t color);
 /* Returns bytes written excluding NUL; sanitizes invalid UTF-8 with U+FFFD,
- * preserves complete codepoints, and appends U+2026 when truncating. Newlines
- * end this single-line operation. Output is always NUL-terminated if cap > 0. */
+ * preserves complete codepoints, and truncates only after a whole word with
+ * U+2026. Returns zero if no whole word fits. Newlines end this single-line
+ * operation. Output is always NUL-terminated if cap > 0. */
 size_t x4_text_fit_utf8(char *out, size_t cap, int size, int semibold,
                        const char *text, int max_width);
 /* Decode one codepoint, consuming at least one byte of a nonempty string.

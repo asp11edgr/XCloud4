@@ -161,21 +161,19 @@ static void test_main_menu_4_cards_navigation(void)
     x4_screen_update(&s, ORBIS_PAD_BUTTON_CIRCLE, 0);
     assert(s.page == 0 && s.catalog_from_home == 0);
 
-    /* Test Cuenta card (index 2) */
+    /* Continue emits only a UI request. The signed-out tile opens Account. */
     s.selected = 2;
     x4_screen_update(&s, ORBIS_PAD_BUTTON_CROSS, 0);
-    assert(s.page == 4);
+    assert(s.page == 0 && s.open_recent_requested == 1);
+    s.open_recent_requested = 0;
+    s.signed_in = 0;
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_CROSS, 0);
+    assert(s.page == 4 && !s.open_recent_requested);
     s.page = 0;
 
-    /* Move DOWN to bottom pills (3=Ajustes, 4=Acerca de, 5=Apoyar) */
+    /* About and Support are the only bottom pills. */
     s.selected = 0;
     x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
-    assert(s.selected == 3);
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_CROSS, 0);
-    assert(s.open_settings_requested == 1);
-    s.open_settings_requested = 0;
-
-    x4_screen_update(&s, ORBIS_PAD_BUTTON_RIGHT, 0);
     assert(s.selected == 4);
     x4_screen_update(&s, ORBIS_PAD_BUTTON_CROSS, 0);
     assert(s.page == 2); /* Acerca de */
@@ -273,13 +271,29 @@ static void test_summary_screen_quality_selection(void)
     x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
     assert(s.selected == 2);
 
-    /* DOWN at bottom does not overflow */
+#if X4_PUBLIC
+    /* T27 adds Maximum only to the public Fortnite selector. Navigation
+     * reaches all four values, then clamps at the actual last choice. */
     x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
-    assert(s.selected == 2);
-
-    /* UP moves back to 1080p (1) */
+    assert(s.selected == (int)X4_PIC_QUALITY_1080P_MAX);
+    assert(x4_picture_settings_get() == X4_PIC_QUALITY_1080P_ALTA);
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_1080P_MAX);
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_RIGHT, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_1080P_MAX);
     x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
-    assert(s.selected == 1);
+    assert(s.selected == (int)X4_PIC_QUALITY_720P);
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_LEFT, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_1080P);
+#else
+    /* Lab keeps exactly the historical three values in both directions. */
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_DOWN, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_720P);
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_RIGHT, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_720P);
+    x4_screen_update(&s, ORBIS_PAD_BUTTON_UP, 0);
+    assert(s.selected == (int)X4_PIC_QUALITY_1080P);
+#endif
 
     /* User presses CIRCLE to cancel -> returns to page 0, settings NOT saved */
     x4_screen_update(&s, ORBIS_PAD_BUTTON_CIRCLE, 0);
@@ -296,19 +310,34 @@ static void test_summary_screen_quality_selection(void)
     assert(s.selected == 1);
 
     /* Simulate CROSS press handler on page 8: saves quality and configures profile */
-    x4_picture_settings_set((X4PictureQualityOption)s.selected);
+    assert(x4_picture_settings_set((X4PictureQualityOption)s.selected));
     assert(x4_picture_settings_get() == X4_PIC_QUALITY_1080P);
     assert(x4_picture_settings_to_profile(X4_PIC_QUALITY_1080P) == X4_REQUEST_1080P_G8);
 
     /* Test 720p (2) */
     s.selected = 2;
-    x4_picture_settings_set((X4PictureQualityOption)s.selected);
+    assert(x4_picture_settings_set((X4PictureQualityOption)s.selected));
     assert(x4_picture_settings_get() == X4_PIC_QUALITY_720P);
     assert(x4_picture_settings_to_profile(X4_PIC_QUALITY_720P) == X4_REQUEST_720P_HQ);
 
+#if X4_PUBLIC
+    /* Maximum persists and requests the existing HQ profile/alias. This
+     * checks our request only; it makes no assertion about Xbox delivery. */
+    s.selected = (int)X4_PIC_QUALITY_1080P_MAX;
+    assert(x4_picture_settings_set((X4PictureQualityOption)s.selected));
+    x4_picture_settings_init();
+    assert(x4_picture_settings_get() == X4_PIC_QUALITY_1080P_MAX);
+    assert(x4_picture_settings_current_profile() == X4_REQUEST_1080P_HQ);
+    X4StreamRequestConfig maximum = x4_stream_settings_get();
+    assert(maximum.profile == X4_REQUEST_1080P_HQ);
+    const char *alias = x4_stream_request_resolution_alias(&maximum);
+    assert(alias && !strcmp(alias, "1080HQ"));
+    assert(maximum.width == 1920u && maximum.height == 1080u);
+#endif
+
     /* Test 1080p Alta (0) */
     s.selected = 0;
-    x4_picture_settings_set((X4PictureQualityOption)s.selected);
+    assert(x4_picture_settings_set((X4PictureQualityOption)s.selected));
     assert(x4_picture_settings_get() == X4_PIC_QUALITY_1080P_ALTA);
     assert(x4_picture_settings_to_profile(X4_PIC_QUALITY_1080P_ALTA) == X4_REQUEST_1080P_G);
 

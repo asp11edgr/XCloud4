@@ -75,13 +75,13 @@ garantizar conectividad HTTPS segura en firmwares antiguos de PlayStation 4 (com
 | 1 | Intermedio | `C=US, O=Microsoft Corporation, CN=Microsoft TLS G2 RSA CA OCSP 10` | `C=US, O=Microsoft Corporation, CN=Microsoft TLS RSA Root G2` |
 | 2 | Raíz / Ancla | `C=US, O=Microsoft Corporation, CN=Microsoft TLS RSA Root G2` | `C=US, O=DigiCert Inc, OU=www.digicert.com, CN=DigiCert Global Root G2` |
 
-### Host: `eastus.gssv-play-prod.xboxlive.com`
+### Región Este de EE. UU.: `eus.core.gssv-play-prod.xboxlive.com`
 
-*No se pudo conectar directamente vía TLS (host interno o privado).*
+*La prueba histórica usó la etiqueta equivocada `eastus`; el fallo de DNS no demuestra que el host correcto sea privado.*
 
-### Host: `westeurope.gssv-play-prod.xboxlive.com`
+### Región Europa occidental: `weu.core.gssv-play-prod.xboxlive.com`
 
-*No se pudo conectar directamente vía TLS (host interno o privado).*
+*La prueba histórica usó la etiqueta equivocada `westeurope`; no validó el host abreviado.*
 
 ### Host: `displaycatalog.mp.microsoft.com`
 
@@ -108,9 +108,11 @@ garantizar conectividad HTTPS segura en firmwares antiguos de PlayStation 4 (com
 | 1 | Intermedio | `C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication CA DV E36` | `C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication Root E46` |
 | 2 | Raíz / Ancla | `C=GB, O=Sectigo Limited, CN=Sectigo Public Server Authentication Root E46` | `C=US, ST=New Jersey, L=Jersey City, O=The USERTRUST Network, CN=USERTrust ECC Certification Authority` |
 
-### Hosts Regionales: `<region>.gssv-play-prod.xboxlive.com`
+### Hosts Regionales: `<región>.core.gssv-play-prod.xboxlive.com`
 
-Los endpoints regionales (por ejemplo `eastus.americas.gssv-play-prod.xboxlive.com` y `westeurope.europe.gssv-play-prod.xboxlive.com`)
+Los endpoints regionales usan etiquetas abreviadas como `mxc`, `eus`, `weu`,
+`brs`, `uks` y `cia`. Por ejemplo, `mxc.core.gssv-play-prod.xboxlive.com` y
+`eus.core.gssv-play-prod.xboxlive.com`
 comparten la misma infraestructura PKI de Xbox Cloud Gaming que `xgpuweb.gssv-play-prod.xboxlive.com`:
 
 - **Sujeto:** `CN=gssv-play-prod.xboxlive.com`
@@ -125,4 +127,29 @@ La variante experimental `XCloud4-0.7.57-lab-cabundle.pkg` (asociada al flag de 
 
 1. **Incompatibilidad con el modelo de verificación de libSceSsl / sceHttps:** En la biblioteca TLS de PlayStation 4, omitir la bandera `KNOWN_CA` (`0x20u`) en `sceHttpsEnableOption` no elimina ni desactiva las raíces del sistema preinstaladas en el firmware. En su lugar, desactiva la comprobación estricta de que la cadena TLS termine obligatoriamente en una raíz de confianza conocida.
 2. **Falso positivo de cobertura y degradación de seguridad:** Desactivar `KNOWN_CA` permite que cualquier certificado sin ancla confiable pueda considerarse válido bajo ciertas condiciones, lo que debilitaría la seguridad criptográfica del transporte HTTPS en lugar de simular con precisión un almacén antiguo. Además, la prueba de validación pasaría con o sin nuestro paquete de certificados, perdiendo valor probatorio.
-3. **Estrategia definitiva:** Se utiliza siempre la verificación estricta completa `X4_HTTPS_VERIFY_ALL` (`0xBDu`) tanto en la edición pública como en el laboratorio. Las raíces empaquetadas se registran directamente en el contexto HTTP mediante `sceHttpsLoadCert` (con reintento automático a las 7 raíces RSA si las raíces ECC no son admitidas por el firmware de la consola), sumándose de manera segura al almacén de confianza sin comprometer las políticas de seguridad.
+3. **Estrategia histórica anterior a T31:** Se utilizaba la verificación estricta completa `X4_HTTPS_VERIFY_ALL` (`0xBDu`) tanto en la edición pública como en el laboratorio. Las raíces empaquetadas se registraban en el contexto HTTP mediante `sceHttpsLoadCert`, con reintento a las 7 raíces RSA cuando el firmware rechazaba las ECC. La T31 sustituye ese transporte como se describe a continuación; no vuelve a la variante `cabundle` descartada.
+
+## 5. Transporte HTTPS propio — T31 (Lab 0.7.70 / pública 01.14)
+
+Todo el HTTPS de ambos productos pasa por Mbed TLS 3.6.7, ya enlazado para DTLS,
+sin cargar libSceHttp/libSceSsl ni recurrir a ellos si falla TLS. Se conservan la
+validación de destinos, métodos y cabeceras, los plazos, la cancelación y los dos
+canales públicos keep-alive. No se utiliza un proxy configurado en la consola.
+
+Cada contexto HTTP analiza las **11 raíces DER** de este inventario. La cadena,
+las fechas y el nombre del host se verifican obligatoriamente; SNI y comprobación
+del nombre usan el mismo host validado. No hay pinning, modo inseguro ni opción
+para desactivar la verificación. Un error de fecha pide revisar fecha y hora.
+
+Se ofrecen TLS 1.2 y 1.3, con ECDHE y AES-GCM o ChaCha20-Poly1305 en TLS 1.2,
+y las tres suites AEAD de TLS 1.3. No se ofrecen CBC, RSA estático, DHE ni MAC
+SHA-1. Los grupos son X25519, secp256r1 y secp384r1. No se guardan tickets ni
+sesiones TLS para reanudarlas. La entropía procede del RNG seguro nativo;
+un fallo hace inutilizable el contexto, sin semilla alternativa.
+
+La tabla de cadenas anterior es un inventario histórico, no una garantía de
+disponibilidad ni de que un proveedor mantenga sus certificados. La fase A de
+T31 distingue los hosts que completaron TLS de los nombres regionales que
+no resolvieron; los resultados y sus límites se conservan en el diseño
+de la entrega. La aceptación real en firmware 5.05 sigue pendiente de la prueba
+del dueño en consola.

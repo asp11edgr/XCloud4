@@ -264,6 +264,24 @@ static size_t encode(uint32_t cp, char out[4])
     if (cp < 0x10000u) { out[0] = (char)(0xe0u | (cp >> 12)); out[1] = (char)(0x80u | ((cp >> 6) & 63u)); out[2] = (char)(0x80u | (cp & 63u)); return 3; }
     out[0] = (char)(0xf0u | (cp >> 18)); out[1] = (char)(0x80u | ((cp >> 12) & 63u)); out[2] = (char)(0x80u | ((cp >> 6) & 63u)); out[3] = (char)(0x80u | (cp & 63u)); return 4;
 }
+static int word_space(const char *text)
+{
+    const uint32_t cp = x4_utf8_next(&text);
+    return cp == ' ' || cp == '\t' || cp == '\r' || cp == '\n' || cp == 0xa0 || cp == 0x202f;
+}
+
+static size_t rewind_word(const char *text, size_t used, int drop_word)
+{
+    while (used) {
+        size_t start = used - 1;
+        while (start && ((unsigned char)text[start] & 0xc0u) == 0x80u) --start;
+        if (word_space(text + start)) drop_word = 0;
+        else if (!drop_word) break;
+        used = start;
+    }
+    return used;
+}
+
 size_t x4_text_fit_utf8(char *out, size_t cap, int size, int semibold,
                        const char *text, int max_width)
 {
@@ -272,6 +290,7 @@ size_t x4_text_fit_utf8(char *out, size_t cap, int size, int semibold,
     out[0] = 0;
     if (!text || max_width <= 0) return 0;
     size = bounded_size(size); Face f = select_face(size, semibold);
+    const char *next_word = text;
     while (*text && count++ < X4_FONT_MAX_CODEPOINTS) {
         uint32_t cp = x4_utf8_next(&text); char encoded[4]; size_t bytes;
         if (cp == '\n' || cp == '\r') { truncated = *text != 0; break; }
@@ -284,18 +303,24 @@ size_t x4_text_fit_utf8(char *out, size_t cap, int size, int semibold,
         if (used + bytes >= cap || extent > (int64_t)max_width * 64) { truncated = 1; break; }
         memcpy(out + used, encoded, bytes); used += bytes; out[used] = 0;
         pen = next; maximum = extent;
+        next_word = text;
     }
     if (*text) truncated = 1;
     if (truncated) {
         const char ellipsis[] = "\xe2\x80\xa6";
         int ellipsis_width = x4_text_width_px(size, semibold, ellipsis);
         if (ellipsis_width > max_width || cap < sizeof(ellipsis)) { out[0] = 0; return 0; }
-        while (used && (used + 3u >= cap ||
-                       x4_text_width_px(size, semibold, out) + ellipsis_width > max_width)) {
-            do { --used; } while (used && ((unsigned char)out[used] & 0xc0u) == 0x80u);
+        used = rewind_word(out, used, *next_word && !word_space(next_word));
+        out[used] = 0;
+        while (used) {
+            if (cap - used >= sizeof(ellipsis)) {
+                memcpy(out + used, ellipsis, sizeof(ellipsis));
+                if (x4_text_width_px(size, semibold, out) <= max_width)
+                    return used + sizeof(ellipsis) - 1;
+            }
+            used = rewind_word(out, used, 1);
             out[used] = 0;
         }
-        memcpy(out + used, ellipsis, sizeof(ellipsis)); used += 3u;
     }
     return used;
 }
@@ -303,6 +328,20 @@ void x4_text_ellipsis_px(uint32_t *pixels, int x, int y, int size, int semibold,
                         const char *text, int max_width, uint32_t color)
 {
     char fitted[2048];
-    (void)x4_text_fit_utf8(fitted, sizeof(fitted), size, semibold, text, max_width);
-    x4_text_px(pixels, x, y, size, semibold, fitted, color);
+    const int original_size = bounded_size(size);
+    int fit_size = original_size;
+    if (!x4_text_fit_utf8(fitted, sizeof(fitted), fit_size, semibold, text, max_width) &&
+        text && *text && max_width > 0 && fit_size > 8) {
+        /* An arbitrary title can start with one overlong word. Try two smaller
+         * faces before omitting it. Never draw a fragment or a lone ellipsis. */
+        fit_size = bounded_size(original_size * 3 / 4);
+        if (!x4_text_fit_utf8(fitted, sizeof(fitted), fit_size, semibold, text, max_width) &&
+            fit_size > 8) {
+            fit_size = 8;
+            (void)x4_text_fit_utf8(fitted, sizeof(fitted), fit_size, semibold, text, max_width);
+        }
+    }
+    const int shift = (original_size - fit_size) / 2;
+    if (y <= INT_MAX - shift)
+        x4_text_px(pixels, x, y + shift, fit_size, semibold, fitted, color);
 }

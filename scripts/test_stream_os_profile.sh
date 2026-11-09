@@ -14,8 +14,8 @@ for profile in 0 1 2; do
     if [[ $mode == sanitized ]]; then sanitizer_flags="-fsanitize=address,undefined -fno-omit-frame-pointer -no-pie"; fi
   "${CC:-cc}" -std=gnu11 -D_POSIX_C_SOURCE=200809L -O2 -g -Wall -Wextra -Werror -include strings.h ${X4_TEST_CFLAGS:-} \
     $compatibility_flags -DX4_STREAM_PROFILE="$profile" -DX4_STREAM_WAIT_HOST=1 \
-    -ffunction-sections -fdata-sections -Itests/host_stubs \
-    $sanitizer_flags tests/stream_os_profile_http_test.c src/auth/http_client.c src/auth/ca_bundle.c src/auth/json.c src/auth/xbox_recent.c src/streaming/stream_profile.c src/ui/lang.c src/ui/server_settings.c \
+    -DX4_HTTP_TEST -pthread -ffunction-sections -fdata-sections -Itests/host_stubs \
+    $sanitizer_flags tests/stream_os_profile_http_test.c src/auth/http_client.c src/auth/http_wire.c src/auth/ca_bundle.c src/auth/json.c src/auth/xbox_recent.c src/streaming/stream_profile.c src/ui/lang.c src/ui/server_settings.c \
     -Wl,--gc-sections -o "$build_dir/stream-os-profile-$profile-$mode"
   ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$build_dir/stream-os-profile-$profile-$mode"
  done

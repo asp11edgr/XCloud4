@@ -1,6 +1,6 @@
 {
   "format": "X4FNT01",
-  "generator": "Pillow 12.1.1",
+  "generator": "Pillow 13.0.0",
   "layout": "BASIC, independent glyph advances, no kerning/shaping",
   "sizes": [
     18,
@@ -15,16 +15,16 @@
     "Regular",
     "SemiBold"
   ],
-  "codepoints": 442,
+  "codepoints": 443,
   "faces": 14,
-  "glyphs": 6188,
-  "atlas_bytes": 3346263,
-  "alpha_bytes": 3197271,
-  "fallback_bytes": 184531,
+  "glyphs": 6202,
+  "atlas_bytes": 3348679,
+  "alpha_bytes": 3199351,
+  "fallback_bytes": 184659,
   "runtime_combined_limit": 4194304,
-  "maximum_heap_atlas_bytes": 4009773,
-  "atlas_sha256": "d52d9dfc72809e566b87634547fde0f88201b50db2af84dfc3888ffe78983b50",
-  "fallback_sha256": "709f041c8ee6236033b5350f2945cbf59cff493307fb251069cc4974b811fea7",
+  "maximum_heap_atlas_bytes": 4009645,
+  "atlas_sha256": "a1a68e9ed0ce321a0bc6944ea8fa745b854a5f30d6d90b8b74ebbc090629bf3d",
+  "fallback_sha256": "61a3e56f66a3add8213c8848707769d21c8f43ae641d4650e6ef4cc01959b56d",
   "inter": {
     "weights": [
       "Regular",
@@ -66,11 +66,11 @@
         ]
       }
     ],
-    "codepoints": 444,
+    "codepoints": 445,
     "faces": 15,
-    "glyphs": 6660,
-    "atlas_bytes": 3538765,
-    "alpha_bytes": 3378413,
-    "atlas_sha256": "519da557f22cb4c63f4f1c99544de3487b0ebf627d1c54345f4894b82e6ab3a2"
+    "glyphs": 6675,
+    "atlas_bytes": 3541475,
+    "alpha_bytes": 3380763,
+    "atlas_sha256": "1a6258ebfdde3cb7a1c94728600af90359551e49478141a8fe98867724496694"
   }
 }

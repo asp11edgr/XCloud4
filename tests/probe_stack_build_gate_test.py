@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
@@ -68,6 +69,83 @@ def find_bash():
         return tool
     windows_git = Path("C:/Program Files/Git/bin/bash.exe")
     return str(windows_git) if windows_git.is_file() else None
+
+
+def probe_audit_branches(make):
+    """Validate each selected recipe within the actual nested probe guard.
+
+    Searching the first audit occurrence in the whole Makefile confuses the
+    nested T27/T26/legacy branches. Preserve every historical recipe and check
+    the T27 frontend exactly; it prepares and audits the same ELF internally.
+    """
+    lines = make.splitlines(keepends=True)
+    prefix = ["ifeq ($(X4_VIDEO_PROBE),1)\n",
+              ".PHONY: probe-posix-audit probe-stack-audit\n"]
+    starts = [i for i in range(len(lines)-1) if lines[i:i+2] == prefix]
+    if len(starts) != 1:
+        raise ValueError("Missing unique guarded probe audit block")
+
+    def conditional(block, at, selector):
+        if at >= len(block) or block[at].rstrip('\n') != selector:
+            raise ValueError("Missing exact audit selector: "+selector)
+        depth = 1; after_else = False; parts = [[], []]
+        for i in range(at+1, len(block)):
+            directive = block[i].rstrip('\n')
+            if re.match(r"^(?:ifeq|ifneq|ifdef|ifndef)\b", directive):
+                depth += 1
+            elif directive == "endif":
+                depth -= 1
+                if depth == 0:
+                    if not after_else:
+                        raise ValueError("Missing audit alternative: "+selector)
+                    return parts[0], parts[1], i+1
+            elif depth == 1 and directive.startswith("else"):
+                if directive != "else" or after_else:
+                    raise ValueError("Unexpected audit alternative: "+selector)
+                after_else = True; continue
+            parts[int(after_else)].append(block[i])
+        raise ValueError("Unclosed audit selector: "+selector)
+
+    t26_block, legacy, following = conditional(lines, starts[0]+2, "ifeq ($(X4_PROBE_T26),1)")
+    if following >= len(lines) or lines[following] != "build/eboot.bin: probe-posix-audit probe-stack-audit\n":
+        raise ValueError("Missing common current SELF dependencies")
+    meaningful = [i for i, line in enumerate(t26_block) if line.strip() and not line.startswith('#')]
+    if not meaningful:
+        raise ValueError("Missing nested T27 selector")
+    t27, t26, end = conditional(t26_block, meaningful[0], "ifeq ($(X4_PROBE_T27),1)")
+    if any(line.strip() and not line.startswith('#') for line in t26_block[end:]):
+        raise ValueError("Unexpected recipe outside the T27/T26 branches")
+    branches = {"t27": ''.join(t27), "t26": ''.join(t26), "legacy": ''.join(legacy)}
+
+    def exact_recipe(branch, target, dependencies, commands, name):
+        pattern = r"(?m)^"+re.escape(target)+r": build/xcloud4\.elf (?P<deps>[^\n]+)\n(?P<commands>(?:\t[^\n]*\n)+)"
+        recipes = list(re.finditer(pattern, branch))
+        headers = re.findall(r"(?m)^"+re.escape(target)+r":", branch)
+        if len(headers) != 1 or len(recipes) != 1 or recipes[0]["deps"].split() != dependencies:
+            raise ValueError("Audit must depend on its actual preparer and auditor: "+name+":"+target)
+        actual = [line.strip() for line in recipes[0]["commands"].splitlines()]
+        if actual != commands:
+            raise ValueError("Branch must audit the same current ELF/policy: "+name+":"+target)
+
+    for name, branch in branches.items():
+        if name == "t27":
+            for mode in ("posix", "stack"):
+                exact_recipe(branch, "probe-"+mode+"-audit", ["scripts/test_t27_native_gates.py"],
+                    ["python3 scripts/test_t27_native_gates.py "+mode+
+                     " --elf build/xcloud4.elf --output build/probe-"+mode+"-audit.json"], name)
+            continue
+        prepare_name = "prepare_probe_t26_stack_policy.py" if name == "t26" else "prepare_probe_stack_policy.py"
+        expected = [
+            "python3 scripts/"+prepare_name+" --elf build/xcloud4.elf --su-root build --output build/probe-stack-policy.json",
+            "python3 scripts/audit_probe_stack.py --elf build/xcloud4.elf --policy build/probe-stack-policy.json --objdump objdump --output build/probe-stack-audit.json",
+        ]
+        exact_recipe(branch, "probe-stack-audit", ["scripts/audit_probe_stack.py", "scripts/"+prepare_name], expected, name)
+        audit_name = "audit_probe_t26_posix_elf.py" if name == "t26" else "audit_probe_posix_elf.py"
+        deps = ["scripts/"+audit_name]
+        if name == "t26": deps += ["scripts/prepare_probe_t26_stack_policy.py", "scripts/audit_probe_posix_elf.py"]
+        exact_recipe(branch, "probe-posix-audit", deps,
+            ["python3 scripts/"+audit_name+" build/xcloud4.elf --objdump objdump --output build/probe-posix-audit.json"], name)
+    return branches
 
 
 class Tests(unittest.TestCase):
@@ -300,8 +378,60 @@ class Tests(unittest.TestCase):
         make = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn(".PHONY: probe-posix-audit probe-stack-audit", make)
         self.assertIn("build/eboot.bin: probe-posix-audit probe-stack-audit", make)
-        self.assertIn("probe-stack-audit: build/xcloud4.elf", make)
-        self.assertLess(make.index("scripts/prepare_probe_stack_policy.py --elf"), make.index("scripts/audit_probe_stack.py --elf"))
+        branches = probe_audit_branches(make)
+        self.assertEqual(set(branches), {"t27", "t26", "legacy"})
+        for mode in ("posix", "stack"):
+            self.assertIn("python3 scripts/test_t27_native_gates.py "+mode+
+                " --elf build/xcloud4.elf --output build/probe-"+mode+"-audit.json", branches["t27"])
+        for name, prepare_name in (("t26", "prepare_probe_t26_stack_policy.py"),
+                                   ("legacy", "prepare_probe_stack_policy.py")):
+            with self.subTest(branch=name):
+                branch = branches[name]
+                self.assertIn("probe-stack-audit: build/xcloud4.elf", branch)
+                self.assertLess(branch.index("scripts/"+prepare_name+" --elf"),
+                                branch.index("scripts/audit_probe_stack.py --elf"))
+
+    def test_each_audit_branch_rejects_reversed_or_wrong_preparer(self):
+        make = (ROOT / "Makefile").read_text(encoding="utf-8")
+        branches = probe_audit_branches(make)
+        for name, branch in branches.items():
+            if name == "t27":
+                continue  # Its single frontend command is checked below.
+            recipe = re.search(r"(?m)^probe-stack-audit:[^\n]+\n(?P<commands>(?:\t[^\n]*\n)+)", branch)
+            commands = recipe["commands"].splitlines(keepends=True)
+            self.assertEqual(len(commands), 2)
+            changed = branch.replace(recipe["commands"], "".join(reversed(commands)), 1)
+            with self.subTest(branch=name, mutation="audit_before_prepare"), self.assertRaises(ValueError):
+                probe_audit_branches(make.replace(branch, changed, 1))
+            own = "prepare_probe_t26_stack_policy.py" if name == "t26" else "prepare_probe_stack_policy.py"
+            other = "prepare_probe_stack_policy.py" if name == "t26" else "prepare_probe_t26_stack_policy.py"
+            changed = branch.replace(own, other)
+            with self.subTest(branch=name, mutation="wrong_preparer"), self.assertRaises(ValueError):
+                probe_audit_branches(make.replace(branch, changed, 1))
+
+    def test_t27_frontend_wrong_elf_mode_output_or_dependency_fails(self):
+        make = (ROOT / "Makefile").read_text(encoding="utf-8")
+        branch = probe_audit_branches(make)["t27"]
+        for before, after in (
+            ("scripts/test_t27_native_gates.py stack --elf", "scripts/test_t27_native_gates.py posix --elf"),
+            ("--elf build/xcloud4.elf", "--elf build/stale.elf"),
+            ("--output build/probe-stack-audit.json", "--output build/stale-stack-audit.json"),
+            ("probe-stack-audit: build/xcloud4.elf scripts/test_t27_native_gates.py",
+             "probe-stack-audit: build/xcloud4.elf scripts/audit_probe_stack.py"),
+            ("scripts/test_t27_native_gates.py", "scripts/prepare_probe_t26_stack_policy.py"),
+        ):
+            with self.subTest(mutation=after), self.assertRaises(ValueError):
+                probe_audit_branches(make.replace(branch, branch.replace(before, after), 1))
+
+    def test_audit_selector_and_shared_self_dependencies_cannot_be_removed(self):
+        make = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for old, new in (
+            ("ifeq ($(X4_PROBE_T26),1)\n# T26 has different", "ifneq ($(X4_PROBE_T26),0)\n# T26 has different"),
+            ("ifeq ($(X4_PROBE_T27),1)\nprobe-posix-audit", "ifneq ($(X4_PROBE_T27),0)\nprobe-posix-audit"),
+            ("build/eboot.bin: probe-posix-audit probe-stack-audit", "build/eboot.bin: probe-posix-audit"),
+        ):
+            with self.subTest(mutation=new), self.assertRaises(ValueError):
+                probe_audit_branches(make.replace(old, new, 1))
 
     def test_direct_packaging_checks_gate_before_identity_or_staging(self):
         source = (ROOT / "scripts/empaquetar.sh").read_text(encoding="utf-8")

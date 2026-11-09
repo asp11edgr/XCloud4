@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #pragma once
+#include "cloud_time.h"
 #include "xbox_catalog.h"
 #include "xbox_session.h"
 #include "../input/gamepad.h"
@@ -8,7 +10,9 @@
 
 /* Microsoft account sign-in (OAuth 2.0 device authorization grant) on one
  * background worker. AUTHORIZED only means a Microsoft token was acquired;
- * it implies no Xbox Live session or game access. Tokens stay private.
+ * it implies no Xbox Live session or game access. Tokens stay private. The
+ * opt-in account setting persists only the Microsoft refresh token in the
+ * current title's encrypted SaveData, never in a snapshot or /data file.
  * The same worker reads the Xbox cloud catalog with that token; Xbox
  * credentials exist only during that run and never reach a snapshot. A
  * session run also renews the Microsoft access with its refresh token (a
@@ -32,6 +36,8 @@ enum {
     X4_AUTH_E_DEADLINE = -2013,   /* session not ready within its deadline */
     X4_AUTH_E_UNCONFIRMED = -2014, /* a remote session may exist; not confirmed closed */
     X4_AUTH_E_FORTNITE_NOT_FOUND = -2015, /* Fortnite not present in /v2/titles */
+    X4_AUTH_E_XBOX_CLOSED = -2016, /* Xbox closed the remote session */
+    X4_AUTH_E_CONNECTION_LOST = -2017, /* RTC failed or remained disconnected */
 };
 
 typedef struct X4Auth X4Auth;
@@ -64,7 +70,7 @@ enum X4AuthState {
 
 /* X4_AUTH_XBOX_SESSION is dispatched only through x4_auth_start_session;
  * x4_auth_start refuses it. */
-enum X4AuthAction { X4_AUTH_SIGN_IN, X4_AUTH_CHECK_CONNECTION, X4_AUTH_XBOX_CATALOG, X4_AUTH_XBOX_SESSION, X4_AUTH_XBOX_RECENTS, X4_AUTH_FORTNITE_QUERY };
+enum X4AuthAction { X4_AUTH_SIGN_IN, X4_AUTH_CHECK_CONNECTION, X4_AUTH_XBOX_CATALOG, X4_AUTH_XBOX_SESSION, X4_AUTH_XBOX_RECENTS, X4_AUTH_FORTNITE_QUERY, X4_AUTH_RESTORE_SESSION };
 
 typedef struct {
     enum X4AuthState state;
@@ -76,6 +82,11 @@ typedef struct {
 /* Public operations belong to main except the synchronized input source and
  * cancel/keyframe-request flags. */
 X4Auth *x4_auth_create(void);
+/* Main may toggle only while idle. true requires an accepted account warning.
+ * Snapshots never contain any credential or path into the mounted save. */
+typedef struct { bool enabled, available; int error; } X4AuthRememberSnapshot;
+void x4_auth_remember_snapshot(X4Auth *auth, X4AuthRememberSnapshot *out);
+int x4_auth_set_remember(X4Auth *auth, bool enabled);
 /* Public, non-secret country captured for the last/current GSSV job. A menu
  * change does not change this value until the next job is prepared. */
 X4AccessCountry x4_auth_access_country(const X4Auth *auth);
@@ -101,11 +112,13 @@ bool x4_auth_poll_rumble(X4Auth *auth, uint64_t now_us, X4RumbleOutput *out);
 /* Thread-safe request flag. The session owner consumes it and requests PLI;
  * this never accesses the transport from the main/decoder thread. */
 void x4_auth_request_keyframe(X4Auth *auth);
+/* Ignored before first connection or while a reconnect is already active. */
+void x4_auth_request_reload(X4Auth *auth);
 /* Main publishes a copied normalized controller state each UI iteration.
  * The RTC sender reads it under a short gate; stale states (>250 ms) and
  * cancellation produce neutral reports. No controller or token pointer is
  * shared with the sender. */
-void x4_auth_set_gamepad(X4Auth *auth, const X4GamepadFrame *frame);
+void x4_auth_set_gamepad(X4Auth *auth, const X4GamepadRoster *roster);
 /* 0 when the worker was started. Refuses while busy, refuses a connection
  * check while a token is held, and refuses the catalog without a valid one.
  * Sign-in discards any old token, catalog and server MRU. The catalog run publishes
@@ -117,6 +130,12 @@ int x4_auth_start(X4Auth *auth, enum X4AuthAction action);
 void x4_auth_cancel(X4Auth *auth);
 int x4_auth_busy(X4Auth *auth);
 void x4_auth_snapshot(X4Auth *auth, X4AuthSnapshot *out);
+/* Main-thread poll. First authorized account and each ten-minute interval
+ * schedule work. Force queues one extra refresh for a game start/end.
+ * Keep the caller's previous coherent snapshot if the mailbox is contended.
+ * Account changes invalidate previous results; revision identifies a success. */
+void x4_auth_cloud_time(X4Auth *auth, const char *market, bool force, X4CloudTime *out,
+    uint64_t *account, uint64_t *revision);
 /* Copy of the last catalog view; it holds no token, user hash or body. */
 void x4_auth_catalog_snapshot(X4Auth *auth, X4CatalogSnapshot *out);
 /* Main only: returns 1 after copying a changed view, otherwise 0. The paired
@@ -148,8 +167,8 @@ int x4_auth_start_session_request(X4Auth *auth, unsigned catalog_index,
 #endif
 /* Copy of the last session view; no token, session path or ID. */
 void x4_auth_session_snapshot(X4Auth *auth, X4SessionSnapshot *out);
-/* Wipes the local token, catalog and session view only; no global Microsoft
- * sign-out. */
+/* Wipes local credentials/views and removes+verifies the remembered access.
+ * Does not perform global Microsoft sign-out. A removal error is returned. */
 int x4_auth_forget(X4Auth *auth);
 /* Call once busy is false. On a join error the context is kept. */
 int x4_auth_close(X4Auth *auth);

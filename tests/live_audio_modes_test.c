@@ -22,6 +22,10 @@ int opus_decoder_ctl(OpusDecoder *d, int command, ...)
 { assert(command == OPUS_RESET_STATE); ++d->resets; return 0; }
 int opus_packet_get_nb_samples(const unsigned char *p, opus_int32 n, int rate)
 { assert(rate == 48000); return n ? (int)p[0] * 120 : -1; }
+int opus_packet_get_samples_per_frame(const unsigned char *p, opus_int32 rate)
+{ return opus_packet_get_nb_samples(p, 1, rate); }
+int opus_packet_has_lbrr(const unsigned char *p, opus_int32 n)
+{ assert(p && n > 0); return 0; }
 int opus_decode(OpusDecoder *d, const unsigned char *p, opus_int32 size, int16_t *out, int capacity, int fec)
 {
     assert(!fec); ++d->calls;
@@ -351,7 +355,7 @@ static void test_burst_and_metrics(void)
     x4_live_audio_snapshot(a, &s);
     FILE *f = tmpfile(); assert(f); x4_live_audio_metrics_write(f, &s); rewind(f);
     char json[4096] = {0}; assert(fread(json, 1, sizeof(json)-1, f)); fclose(f);
-    assert(strstr(json, "\"fec_implemented\":false") && strstr(json, "\"pcm_overflows\":1"));
+    assert(strstr(json, "\"fec_implemented\":true") && strstr(json, "\"pcm_overflows\":1"));
     printf("AUDIO_METRICS_JSON=%s\n", json);
     x4_live_audio_stop(a);
     puts("PASS valley/target/block/Open metrics,overflow separate,atomic snapshot/JSON");

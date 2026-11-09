@@ -250,6 +250,195 @@ Unmodified Inter Regular, SemiBold, and Bold desktop TTF fonts are retained from
 UI icons for settings (gear), user/account, search (magnifying glass), info, support (heart), home, chevrons, display (`device-desktop`), and server are rasterized offline into alpha bitmaps (`src/ui/tabler_icons_atlas.h`) from the official **Tabler Icons** repository at tag `v3.24.0` ([tabler/tabler-icons](https://github.com/tabler/tabler-icons/tree/v3.24.0)) under the **MIT License**.
 - Retained license: [Tabler-Icons-MIT.txt](docs/licenses/Tabler-Icons-MIT.txt) (SHA-256 `d5a3f948ae5cb95bfc4d2f767ef2bf6a778815b0ddb2d1c48037744cf636518e`).
 - Reproducible generator: `scripts/generate_tabler_icons.py` using unmodified SVG paths in `assets/icons/tabler/`.
+- Tarea 46: los iconos de Acceso, Mandos y Micrófono usan los SVG oficiales del mismo tag y licencia, rasterizados con el mismo algoritmo en el atlas: [`world.svg`](https://github.com/tabler/tabler-icons/blob/v3.24.0/icons/outline/world.svg), [`device-gamepad-2.svg`](https://github.com/tabler/tabler-icons/blob/v3.24.0/icons/outline/device-gamepad-2.svg), [`microphone.svg`](https://github.com/tabler/tabler-icons/blob/v3.24.0/icons/outline/microphone.svg). El SHA-256 de cada SVG está anotado junto al raster.
+
+## VCFG — Lab GPU command layout and shader validation (0.7.59)
+
+The Lab-only GPU conversion backend adapts PM4 packet layout, memory/cache/EOP
+contracts and ELF shader validation from **VCFG v2.35**, pinned commit
+[`955d3f8a8afed278d7acdd8900635797795999ef`](https://github.com/Melnikoff07/vcfg/tree/955d3f8a8afed278d7acdd8900635797795999ef),
+Copyright (c) 2026 VCFG contributors, **MIT License**. The complete notice is
+retained in [docs/licenses/VCFG-MIT.txt](docs/licenses/VCFG-MIT.txt).
+
+The owned-application adapter is in `src/video/gpu_convert.c` and
+`scripts/gen_gpu_convert_shaders.py`, adapted through the isolated GPU test.
+The four integer NV12 conversion kernels reproduce XCloud4's CPU algorithm;
+no game hooks, frame-generation kernels, register scanning or restoration are
+used. Generated machine code is checked against each validated LLVM object.
+The public build excludes this backend and its shader data.
+
+## AMD FidelityFX CAS — Lab GPU quality (0.7.62)
+
+The Lab-only RGB sharpening implementation adapts the sharpen-only, no-scaling
+CAS algorithm and reproducible bitwise portability helpers from AMD FidelityFX
+CAS, pinned commit
+[`9fabcc9a2c45f958aff55ddfda337e74ef894b7f`](https://github.com/GPUOpen-Effects/FidelityFX-CAS/tree/9fabcc9a2c45f958aff55ddfda337e74ef894b7f).
+The sources are
+[`ffx-cas/ffx_cas.h`](https://github.com/GPUOpen-Effects/FidelityFX-CAS/blob/9fabcc9a2c45f958aff55ddfda337e74ef894b7f/ffx-cas/ffx_cas.h)
+and [`ffx-cas/ffx_a.h`](https://github.com/GPUOpen-Effects/FidelityFX-CAS/blob/9fabcc9a2c45f958aff55ddfda337e74ef894b7f/ffx-cas/ffx_a.h),
+under the **MIT License**. Their header notices name Copyright (c) 2017-2019
+Advanced Micro Devices, Inc. and Copyright (c) &lt;2014&gt; &lt;Michal Drobot&gt;;
+the upstream `LICENSE.txt` names Copyright (c) 2020 Advanced Micro Devices, Inc.
+All notices and the complete permission/disclaimer are retained in
+[docs/licenses/AMD_FidelityFX_CAS.txt](docs/licenses/AMD_FidelityFX_CAS.txt).
+
+The implementation targets XCloud4's owned 1080p Smooth-conversion output,
+with a matching CPU quality reference; it does not use CAS scaling. Dither
+generation and Deband sampling are original XCloud4 implementations. No code
+from libplacebo or f3kdb is incorporated. The public build excludes this GPU
+quality path. XCloud4's original application code remains GPL-3.0-only.
+
+## Lua 5.4.9 — Lab Controller Scripting Engine (0.7.65)
+
+The Lab-only controller scripting engine embeds the official release of Lua 5.4.9
+(released August 10, 2026 / official archive `lua-5.4.9.tar.gz`),
+under the **MIT License**.
+Official source: [https://www.lua.org/ftp/lua-5.4.9.tar.gz](https://www.lua.org/ftp/lua-5.4.9.tar.gz).
+Official archive SHA-256: `2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6`.
+Copyright (C) 1994-2026 Lua.org, PUC-Rio.
+The complete MIT license is retained in [docs/licenses/Lua-MIT.txt](docs/licenses/Lua-MIT.txt).
+
+The implementation runs Lua in a strict sandbox without I/O (`io.*`), OS facilities (`os.*`),
+external package loading (`package.*`, `require`), debug facilities (`debug.*`), or coroutines.
+Bytecode loading is rejected. Memory is limited to 2 MB and an execution instruction count
+hook checks each 1,000 instructions and enforces both 50,000 instructions and a 2 ms
+wall-clock budget per call. Pattern match/gmatch/gsub are removed and find is literal-only. The public build
+excludes Lua entirely and contains no script references or symbols.
+
+## JoyShockMapper & GyroWiki — Gyroscope aiming algorithms (0.7.64)
+
+The stock gyroscope aiming script (`assets/scripts/giroscopio.lua`) adapts concepts and
+algorithms from JoyShockMapper by Jibb Smart and contributors (MIT License),
+repository: [https://github.com/Electronicks/JoyShockMapper](https://github.com/Electronicks/JoyShockMapper),
+pinned commit `74d1a1ddf4fa6e12e3674697951239ce3d5a4980`, and the public reference code on GyroWiki
+([http://gyrowiki.jibbsmart.com](http://gyrowiki.jibbsmart.com)).
+Retained license: [docs/licenses/JoyShockMapper-MIT.txt](docs/licenses/JoyShockMapper-MIT.txt).
+
+The script implements resting bias auto-calibration, smooth stepped smoothing, gyro deadzone
+and game anti-deadzone compensation for mapping DualShock 4 motion sensor angular velocity
+to Xbox right stick deflection for comfort and accessibility. No competitive advantage or
+anti-recoil macros are included or advertised.
+
+## Lógica de reconexión y avisos de PsBox
+
+Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later. Referencia de investigación fijada en [`dbf20786afc23207b461b2203dff25df86ff4804`](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/commit/dbf20786afc23207b461b2203dff25df86ff4804): `src/app/stream_player.cpp` (reconnect/tick, líneas 645-701 y 776-797) y `src/stream/stream_session.cpp` (fail, completeTransaction y serverInitiatedDisconnect, líneas 148-162, 205-212 y 368-386). Adaptación independiente en C; no se copian archivos C++ al proyecto. Licencia: https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/LICENSE .
+
+## In-game network HUD (T32)
+
+Based on PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later, pinned commit `dbf20786afc23207b461b2203dff25df86ff4804`. This is an independent C adaptation of the statistics and degraded-network presentation concepts, not a copy of C++ implementation files. Primary references: [StreamInfo and StatsIndicator](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/ui/stream_menu.h#L17-L42), [renderStats and renderWarning](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/ui/stream_menu.cpp#L602-L693), [per-second statistics and warning conditions](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/app/worker_stream.cpp#L240-L283), and [overlay selection](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/app/stream_screen.cpp#L788-L822). The menu reference lives in `src/ui`, rather than `src/app`, at this exact commit.
+
+XCloud4 uses four modes changed from the touchpad menu; L3+R3 and gamepad input are untouched. Main-owned calculations use existing snapshots, confirmed new flip observations, accepted full RTP packet bytes including headers, and an RTT baseline reset after reconnection. Fixed CPU canvases are composed outside presentation and copied opaquely before existing overlays.
+
+## HTTPS certificate-chain compatibility — PsBox reference (T31)
+
+Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later. The reviewed reference is
+PsBox v1.5.5, pinned commit
+[`dbf20786afc23207b461b2203dff25df86ff4804`](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/commit/dbf20786afc23207b461b2203dff25df86ff4804),
+especially [`src/net/http.cpp:497-560`](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/net/http.cpp#L497-L560)
+(ordering supplied intermediates by issuer and verifying the resulting chain)
+and [`src/app/shell_ps4.cpp:27-35`](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/app/shell_ps4.cpp#L27-L35)
+(its process-wide SIGPIPE handling). Both retain Copyright (C) 2026 RafaelNGP
+and SPDX GPL-3.0-or-later. This is an independent adaptation in C; no C++ files
+are copied into XCloud4.
+
+XCloud4 verifies the reordered chain against all 11 bundled DER trust anchors
+and the requested hostname before accepting it. It retains verification flags
+and only clears the Mbed TLS 3.6.7 accumulated intermediate flags after a complete
+verification returns success with zero flags. This does not disable certificate
+or hostname verification. XCloud4 ignores SIGPIPE process-wide once with
+`sigaction(SIGPIPE, SIG_IGN)` and also attempts the per-socket Orbis/FreeBSD
+`SO_NOSIGPIPE` option; rejection of that option is nonfatal and logged once.
+The platform assumptions and pending console validation are documented in the
+T31 delivery. The already bundled Mbed TLS 3.6.7 libraries and their retained
+license notices are reused; they are not rebuilt for the PS4.
+
+## Discover layout and public game lists (T35)
+
+Visual reference and SIGL identifiers: PsBox v1.5.5 (C) 2026 RafaelNGP,
+GPL-3.0-or-later, commit
+[`dbf20786afc23207b461b2203dff25df86ff4804`](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/commit/dbf20786afc23207b461b2203dff25df86ff4804).
+References: [catalog.h:66–75](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/xcloud/catalog.h#L66-L75),
+[catalog.cpp:54–87](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/xcloud/catalog.cpp#L54-L87),
+and [gssv.cpp:343–366](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/dbf20786afc23207b461b2203dff25df86ff4804/src/xcloud/gssv.cpp#L343-L366).
+XCloud4 implements its own C renderer and catalog filtering. No PsBox code,
+fonts, icons or images are included.
+
+## T33 multi-controller protocol references
+
+The T33 encoder and controller lifecycle are original XCloud4 code.
+[xbox-xcloud-player (MIT), input packet](https://github.com/unknownskl/xbox-xcloud-player/blob/a6511a645736f4988f77323284c6f0f36bf93aef/src/channel/input/packet.ts#L191-L233),
+[control events](https://github.com/unknownskl/xbox-xcloud-player/blob/a6511a645736f4988f77323284c6f0f36bf93aef/src/channel/control.ts#L57-L74),
+[rumble report](https://github.com/unknownskl/xbox-xcloud-player/blob/a6511a645736f4988f77323284c6f0f36bf93aef/src/channel/input.ts#L49-L81),
+and [Better xCloud (MIT), index handling](https://github.com/redphx/better-xcloud/blob/001953b20a227243d3139bf811afb841c0b796e4/src/utils/xcloud-interceptor.ts#L194-L202)
+supplied protocol facts only. No implementation from either project was incorporated.
+
+## T41 cloud gaming time protocol references
+
+[PsBox v1.6.0, account field and quota bucket](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/v1.6.0/src/auth/auth_manager.cpp#L278-L306)
+and [CloudNow, content access products](https://github.com/owenselles/CloudNow/blob/main/CloudNow/Xbox/XboxContentAccessClient.swift#L677-L850)
+document observed wire field numbers, types and quota values. The T41 parser,
+worker and UI are original XCloud4 code. These wire structures still need
+validation against a live response on the console.
+
+## T34 microphone protocol references
+
+The capture, resampler, RTP/RTCP and lifecycle implementation is original.
+[PsBox v1.6.0, PS4 AudioIn rates and blocks](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/1fb4f8e0c1c3985ec36b50708dbfa8e1ad224e19/src/media/audio_in_ps4.cpp#L56-L134),
+[audio track and SSRC](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/1fb4f8e0c1c3985ec36b50708dbfa8e1ad224e19/src/stream/stream_session.cpp#L513-L529),
+[RTCP reports](https://github.com/RafaelNGP/xbox-cloud-gaming-ps5/blob/1fb4f8e0c1c3985ec36b50708dbfa8e1ad224e19/src/stream/rtcp_reporter.cpp#L82-L104),
+[shadPS4 AudioIn ABI](https://github.com/shadps4-emu/shadPS4/blob/fc5d2cc219c43c8c8f354153e7b3d0c04a5d506e/src/core/libraries/audio/audioin.h#L19-L68),
+[xbox-xcloud-player (MIT), audio direction](https://github.com/unknownskl/xbox-xcloud-player/blob/a6511a645736f4988f77323284c6f0f36bf93aef/src/player.ts#L47-L57),
+[chat negotiation](https://github.com/unknownskl/xbox-xcloud-player/blob/a6511a645736f4988f77323284c6f0f36bf93aef/src/channel/chat.ts#L20-L60),
+and [Better xCloud (MIT), microphone UI](https://github.com/redphx/better-xcloud/blob/f8397043f6d2148d2345d508902a38c69cf1ee20/src/modules/shortcuts/microphone-shortcut.ts#L13-L24)
+provided protocol facts only. The already bundled libopus and libdatachannel are reused.
+
+## T43 RTX and FlexFEC protocol references
+
+The T43 implementation is original XCloud4 code. [RFC 4588, section 4](https://www.rfc-editor.org/rfc/rfc4588.html#section-4)
+and [Flexible FEC draft 03](https://datatracker.ietf.org/doc/html/draft-ietf-payload-flexible-fec-scheme-03#section-5.1.1)
+supplied packet-format facts. The [libwebrtc FlexFEC-03 header reader/writer](https://webrtc.googlesource.com/src/+/92a030d50ec74776b8fd3278354d7607960b5dd1/modules/rtp_rtcp/source/flexfec_03_header_reader_writer.cc)
+and [XOR recovery routines](https://webrtc.googlesource.com/src/+/92a030d50ec74776b8fd3278354d7607960b5dd1/modules/rtp_rtcp/source/forward_error_correction.cc),
+pinned to commit `92a030d50ec74776b8fd3278354d7607960b5dd1` (BSD-3-Clause),
+were consulted only as format references. No code was copied or adapted from
+libwebrtc or another client. See [the detailed source references](docs/REFERENCIAS_T43.md).
+
+## T43b video receiver reports
+
+The original video RR overlay applies to pinned libdatachannel
+bdc5ff28e9d3b863144c94a677ecf5bf043aaf15 (MPL-2.0). It modifies
+`include/rtc/rtc.h`, `include/rtc/message.hpp`,
+`include/rtc/rtcpreceivingsession.hpp`, `src/capi.cpp`,
+`src/rtcpreceivingsession.cpp` and `src/impl/track.cpp`, and adds
+`src/x4_video_rr.hpp`. The original notices are retained. The dependency
+source archive includes the modified sources and their reproducible
+`prepare_rr43b.py` and `rr43b_impl.hpp` inputs.
+[RFC 3550, section 6.4.1 and appendices A.3/A.8](https://www.rfc-editor.org/rfc/rfc3550.html#section-6.4.1)
+supplied packet-format and timing references. No other client's code was used.
+
+T43c uses libwebrtc (BSD-3-Clause), commit
+`3710345e71ad3a7c1f4ed4efef152fd4fc24869a`, only as a behavioral reference for
+media RR accounting. The [video receiver's statistics gate](https://github.com/webrtc-mirror/webrtc/blob/3710345e71ad3a7c1f4ed4efef152fd4fc24869a/video/rtp_video_stream_receiver2.cc#L767-L774)
+excludes recovered packets; the [RTX receiver](https://github.com/webrtc-mirror/webrtc/blob/3710345e71ad3a7c1f4ed4efef152fd4fc24869a/call/rtx_receive_stream.cc#L71-L82)
+and [FlexFEC receiver](https://github.com/webrtc-mirror/webrtc/blob/3710345e71ad3a7c1f4ed4efef152fd4fc24869a/modules/rtp_rtcp/source/flexfec_receiver.cc#L176-L186)
+mark their recovered media accordingly. The Edge mode and counters are original
+XCloud4 code in the same reproducible MPL-2.0 overlay. No code was copied or
+adapted from libwebrtc or another client.
+
+T46c tunes the OpenOrbis media socket in the pinned libjuice poll backend. The
+original overlay in `scripts/webrtc/prepare_udp_buffer46c.py` and
+`scripts/webrtc/udp_buffer46c.h` checks the effective receive and send buffer
+sizes and publishes numeric telemetry per ICE agent through a private
+libdatachannel bridge. The helper is MPL-2.0. The patch retains the upstream
+file notices and is included in the matching dependency source export for
+`webrtc-clean-21`.
 
 
+## Let's Encrypt ISRG Root X1 Trust Anchor
 
+The in-app updater (src/update/) includes the DER-encoded X.509 certificate for the Let's Encrypt ISRG Root X1 certificate authority in src/update/github_root_x1_der.h.
+
+- **Source:** Internet Security Research Group (ISRG) / Let's Encrypt ([https://letsencrypt.org/certificates/](https://letsencrypt.org/certificates/)).
+- **Upstream file:** [isrgrootx1.der](https://letsencrypt.org/certs/isrgrootx1.der).
+- **DER SHA-256:** 96bcec06264976f37460779acf28c5a7cfe8a3c0aae11a8ffcee05c0bddf08c6.
+- **Purpose:** Standalone root trust anchor used by the Mbed TLS client context in src/update/ to verify HTTPS TLS certificate chains when communicating with GitHub (pi.github.com, objects.githubusercontent.com) during update checks and downloads.
+- **Licensing and terms:** Root certificates are public trust anchors published under the ISRG CP/CPS and CC0 / Public Domain dedication.

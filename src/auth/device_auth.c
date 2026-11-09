@@ -1,9 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 #include "device_auth.h"
 #include "auth_profile.h"
+#include "cloud_time_query.h"
 #include "http_client.h"
 #include "json.h"
 #include "xbox_live.h"
+#include "session_store.h"
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -29,6 +32,7 @@
 #define X4_AUTH_STEP_USEC 100000u
 #define X4_AUTH_DEFAULT_INTERVAL 5u
 #define X4_AUTH_TOKEN_SIZE 16384
+#define X4_CLOUD_TIME_INTERVAL (600ull * X4_AUTH_USEC)
 
 /* The only verification pages ever shown; anything else is refused. */
 static const char *const verification_uris[] = {
@@ -37,7 +41,7 @@ static const char *const verification_uris[] = {
     "https://www.microsoft.com/devicelogin",
 };
 
-/* Heap workspace, one per worker run, so the native default stack suffices. */
+/* Heap workspace, one per worker run; HTTP workers request 256 KiB below. */
 typedef struct {
     char response[65536];
     char device_code[2048];
@@ -63,6 +67,26 @@ typedef struct {
     char stage[80];
 } Outcome;
 
+typedef struct {
+    uint64_t expiry;
+    char access[X4_AUTH_TOKEN_SIZE], refresh[X4_AUTH_TOKEN_SIZE];
+} QuotaCredentials;
+
+typedef struct {
+    /* Only main starts or reaps threads. The job inputs stay immutable
+     * through join. Authentication never shares its HTTP connection here. */
+    OrbisPthread thread;
+    bool running, pending;
+    uint64_t scheduled_epoch, next_poll;
+    char market[3];
+    _Atomic int finished, cancel;
+    /* The gate protects only these in-memory copies, never network I/O. */
+    atomic_flag gate;
+    uint64_t epoch, credential_revision, revision;
+    QuotaCredentials credentials;
+    X4CloudTime value;
+} CloudQuota;
+
 struct X4Auth {
     /* Main thread only. */
     OrbisPthread thread;
@@ -80,6 +104,7 @@ struct X4Auth {
     X4StreamRequestConfig session_request; /* immutable for the joined worker */
     X4StreamStartup *stream_startup; /* borrowed until RTC closes and worker joins */
 #endif
+    X4SessionStore *remember; /* serialized by the auth worker; public state is atomic */
     uint64_t token_expiry; /* monotonic usec, 0 when no token is held */
     char access_token[X4_AUTH_TOKEN_SIZE], refresh_token[X4_AUTH_TOKEN_SIZE];
     _Atomic int cancel, finished;
@@ -93,8 +118,9 @@ struct X4Auth {
     /* Captured before thread creation, read only by that worker. */
     uint64_t recent_job_account, recent_job_generation;
     X4SessionSnapshot session;
-    X4GamepadFrame gamepad;
-    uint64_t gamepad_updated;
+    /* Preserve offsets of existing members used by the rest of auth. */
+    X4GamepadFrame legacy_gamepad_padding;
+    uint64_t legacy_gamepad_updated_padding;
     X4SessionMediaCallback media_callback;
     void *media_user;
     X4Trace *media_trace; /* Same joined lifetime as media_user; diagnostic only. */
@@ -103,9 +129,15 @@ struct X4Auth {
     X4Rumble *rumble;
 #endif
     _Atomic int keyframe_requested;
+    _Atomic int reload_requested;
+    uint64_t reconnect_deadline_us; /* auth/session worker only; normal requests see zero */
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     X4KeyframeLimiter *keyframe_limiter; /* borrowed until the joined RTC owner stops */
 #endif
+    atomic_flag gamepad_gate;
+    X4GamepadRoster gamepads;
+    uint64_t gamepad_updated;
+    CloudQuota *quota;
 };
 
 static uint64_t now(void)
@@ -120,6 +152,43 @@ static void copy_text(char *dst, size_t capacity, const char *src)
     dst[n] = 0;
 }
 
+static void quota_lock(CloudQuota *q)
+{
+    while (atomic_flag_test_and_set_explicit(&q->gate, memory_order_acquire)) sceKernelUsleep(50);
+}
+
+static void quota_unlock(CloudQuota *q)
+{
+    atomic_flag_clear_explicit(&q->gate, memory_order_release);
+}
+
+static void quota_credentials(X4Auth *a, bool first_login)
+{
+    CloudQuota *q = a->quota;
+    if (!q) return;
+    quota_lock(q);
+    if (first_login || q->credentials.expiry) {
+        q->credentials.expiry = a->token_expiry;
+        memcpy(q->credentials.access, a->access_token, sizeof(q->credentials.access));
+        memcpy(q->credentials.refresh, a->refresh_token, sizeof(q->credentials.refresh));
+        ++q->credential_revision;
+    }
+    quota_unlock(q);
+}
+
+static void quota_reset(CloudQuota *q)
+{
+    if (!q) return;
+    quota_lock(q);
+    atomic_store(&q->cancel, 1);
+    ++q->epoch;
+    ++q->credential_revision;
+    q->revision = 0;
+    q->value = (X4CloudTime){0};
+    x4_secure_clear(&q->credentials, sizeof(q->credentials));
+    quota_unlock(q);
+}
+
 static void lock(X4Auth *a)
 {
     while (atomic_flag_test_and_set_explicit(&a->lock, memory_order_acquire)) sceKernelUsleep(50);
@@ -130,35 +199,46 @@ static void unlock(X4Auth *a)
     atomic_flag_clear_explicit(&a->lock, memory_order_release);
 }
 
-void x4_auth_set_gamepad(X4Auth *a, const X4GamepadFrame *frame)
+void x4_auth_set_gamepad(X4Auth *a, const X4GamepadRoster *roster)
 {
-    if (!a) return;
-    X4GamepadFrame next = {0};
-    if (frame) next = *frame;
-    uint64_t t = now();
-    lock(a);
-    a->gamepad = next;
-    a->gamepad_updated = t;
-    unlock(a);
+    if (!a || atomic_flag_test_and_set_explicit(&a->gamepad_gate, memory_order_acquire)) return;
+    a->gamepads = roster ? *roster : (X4GamepadRoster){0};
+    a->gamepad_updated = now();
+    atomic_flag_clear_explicit(&a->gamepad_gate, memory_order_release);
 }
 
-/* Called only by the RTC-owned sender, outside its gate. Auth stays alive
- * until that sender has joined and the session worker has completed. */
-static bool gamepad_source(void *user, X4GamepadFrame *out)
+/* The RTC sender copies one coherent value outside its data gate. The auth
+ * object outlives the sender. A contended or stale read cannot change topology. */
+static bool gamepad_source(void *user, X4GamepadRoster *out)
 {
     X4Auth *a = user;
-    if (!a || !out) return false;
-    uint64_t t = now(), updated;
-    lock(a);
-    *out = a->gamepad;
-    updated = a->gamepad_updated;
-    unlock(a);
-    if (!updated || t < updated || t - updated > 250000 || atomic_load(&a->cancel)) {
-        memset(out, 0, sizeof(*out));
-        return false;
+    if (!a || !out || atomic_load(&a->cancel) ||
+        atomic_flag_test_and_set_explicit(&a->gamepad_gate, memory_order_acquire)) return false;
+    const X4GamepadRoster *current=&a->gamepads;
+    unsigned present=current->connected_mask;
+    out->connected_mask=current->connected_mask;
+    out->multiplayer=current->multiplayer;
+    out->pads[0]=current->pads[0];
+    out->generation[0]=current->generation[0];
+    out->changed_us[0]=current->changed_us[0];
+    uint64_t updated=a->gamepad_updated;
+    if(current->multiplayer){
+        memcpy(out->generation,current->generation,sizeof(out->generation));
+        memcpy(out->changed_us,current->changed_us,sizeof(out->changed_us));
+        for(unsigned bits=present&0x0eu;bits;bits&=bits-1u){
+            unsigned i=(unsigned)__builtin_ctz(bits);
+            out->pads[i]=current->pads[i];
+        }
     }
-    if (!out->sampled_us) out->sampled_us = updated;
-    return out->connected;
+    atomic_flag_clear_explicit(&a->gamepad_gate, memory_order_release);
+    uint64_t t=now();
+    if(!updated||t<updated||t-updated>250000)return false;
+    if(!out->pads[0].sampled_us)out->pads[0].sampled_us=updated;
+    if(out->multiplayer)for(unsigned bits=present&0x0eu;bits;bits&=bits-1u){
+        unsigned i=(unsigned)__builtin_ctz(bits);
+        if(!out->pads[i].sampled_us)out->pads[i].sampled_us=updated;
+    }
+    return true;
 }
 
 static void publish(X4Auth *a, enum X4AuthState state, int error, int status, const char *stage,
@@ -318,6 +398,7 @@ static void session_progress(void *context, const X4SessionSnapshot *snapshot)
 static void discard_session(X4Auth *a)
 {
     wipe_tokens(a);
+    quota_reset(a->quota);
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
     clear_account_recents(a);
 }
@@ -633,32 +714,34 @@ static bool visible_token(const char *t, size_t capacity)
     return n > 0 && n < capacity;
 }
 
-/* Renews the Microsoft tokens with the stored refresh token. Once sent the
- * request is not cancellable (cancel NULL, bounded by the HTTP layer's 30 s
- * deadline and native timeouts): a rotated refresh token must be read and
- * kept, never dropped midway. The stored tokens are replaced only by a fully
- * validated answer; a transport error or malformed answer keeps them. Only
- * invalid_grant ends the local Microsoft session, never a global sign-out. */
-static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_status, const char **stage)
+/* Shared Microsoft exchange, with no writes to account state. The caller
+ * selects its own HTTP context and adopts only a fully validated reply. */
+static int fetch_refresh(X4PassportWork *p, const char *refresh, X4Http *http,
+    int *http_status, const char **stage, uint64_t reconnect_deadline,
+    const _Atomic int *cancel, uint64_t *expiry, bool *rotated, bool *expired)
 {
     size_t used = 0, length = 0;
     int status = 0;
     *stage = "Microsoft no pudo renovar el acceso";
-    if (!visible_token(a->refresh_token, sizeof(a->refresh_token))) {
+    *expired = false;
+    if (!visible_token(refresh, X4_AUTH_TOKEN_SIZE)) {
         *stage = "Microsoft no entrego renovacion de acceso";
         return X4_AUTH_E_SIGNED_OUT;
     }
     if (!form_add(p->form, sizeof(p->form), &used, "client_id", X4_AUTH_CLIENT_ID) ||
         !form_add(p->form, sizeof(p->form), &used, "grant_type", X4_AUTH_REFRESH_GRANT) ||
-        !form_add(p->form, sizeof(p->form), &used, "refresh_token", a->refresh_token) ||
+        !form_add(p->form, sizeof(p->form), &used, "refresh_token", refresh) ||
         !form_add(p->form, sizeof(p->form), &used, "scope", X4_AUTH_SCOPE)) {
         x4_secure_clear(p->form, sizeof(p->form));
         return X4_AUTH_E_FORM;
     }
     /* Lifetime counted from before the request was sent. */
     uint64_t sent = now();
-    int rc = x4_http_request(http, X4_AUTH_TOKEN_URL, p->form, p->response, sizeof(p->response), &length,
-        &status, NULL);
+    int rc = reconnect_deadline ?
+        x4_http_auth_reconnect_request(http, false, p->form, p->response, sizeof(p->response), &length,
+            &status, cancel, reconnect_deadline) :
+        x4_http_request(http, X4_AUTH_TOKEN_URL, p->form, p->response, sizeof(p->response), &length,
+            &status, cancel);
     x4_secure_clear(p->form, sizeof(p->form));
     *http_status = status;
     if (rc) return rc;
@@ -666,16 +749,9 @@ static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_
         char code[64] = {0};
         bool known = status == 400 && error_code(p->response, length, code, sizeof(code));
         x4_secure_clear(p->response, sizeof(p->response));
-        bool expired = known && !strcmp(code, "invalid_grant");
+        *expired = known && !strcmp(code, "invalid_grant");
         x4_secure_clear(code, sizeof(code));
-        printf("XCloud4: renovacion Microsoft rechazada, estado HTTP %d\n", status);
-        if (!expired) return known ? X4_AUTH_E_REJECTED : X4_AUTH_E_STATUS;
-        /* This worker owns the tokens until it releases finished; main only
-         * reads them after acquiring it. The catalog goes with the token. */
-        discard_session(a);
-        publish(a, X4_AUTH_EXPIRED, 0, status, "la sesion de Microsoft caduco", NULL, NULL, 0);
-        *stage = "la sesion de Microsoft caduco";
-        return X4_AUTH_E_SIGNED_OUT;
+        return *expired ? X4_AUTH_E_SIGNED_OUT : known ? X4_AUTH_E_REJECTED : X4_AUTH_E_STATUS;
     }
     char type[16] = {0};
     X4JsonField f[] = {
@@ -697,13 +773,243 @@ static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_
         *stage = "renovacion de Microsoft no valida";
         return X4_AUTH_E_RESPONSE;
     }
+    *expiry = sent + f[3].number * X4_AUTH_USEC;
+    *rotated = f[2].found;
+    return 0;
+}
+
+/* The ordinary auth worker keeps its existing non-cancellable renewal. A
+ * successful rotation is saved by the existing opt-in SaveData owner. */
+static int refresh_tokens(X4Auth *a, X4PassportWork *p, X4Http *http, int *http_status, const char **stage)
+{
+    uint64_t expiry = 0;
+    bool rotated = false, expired = false;
+    int rc = fetch_refresh(p, a->refresh_token, http, http_status, stage, a->reconnect_deadline_us,
+        NULL, &expiry, &rotated, &expired);
+    if (rc) {
+        if (*http_status && *http_status != 200)
+            printf("XCloud4: renovacion Microsoft rechazada, estado HTTP %d\n", *http_status);
+        if (expired) {
+            (void)x4_session_store_erase(a->remember);
+            discard_session(a);
+            publish(a, X4_AUTH_EXPIRED, 0, *http_status, "la sesion de Microsoft caduco", NULL, NULL, 0);
+            *stage = "la sesion de Microsoft caduco";
+        }
+        return rc;
+    }
     memcpy(a->access_token, p->access, sizeof(a->access_token));
-    if (f[2].found) memcpy(a->refresh_token, p->refresh, sizeof(a->refresh_token));
-    a->token_expiry = sent + f[3].number * X4_AUTH_USEC;
+    if (rotated) {
+        memcpy(a->refresh_token, p->refresh, sizeof(a->refresh_token));
+        (void)x4_session_store_rotate(a->remember, a->refresh_token);
+    }
+    a->token_expiry = expiry;
+    quota_credentials(a, false);
     x4_secure_clear(p->access, sizeof(p->access));
     x4_secure_clear(p->refresh, sizeof(p->refresh));
-    printf("XCloud4: acceso Microsoft renovado, estado HTTP %d\n", status);
+    printf("XCloud4: acceso Microsoft renovado, estado HTTP %d\n", *http_status);
     return 0;
+}
+
+#if !X4_PUBLIC
+static void quota_log_shape(const X4CloudTimeShape *shape)
+{
+    static atomic_flag printed = ATOMIC_FLAG_INIT;
+    if (!shape->length || atomic_flag_test_and_set(&printed)) return;
+    char tags[2048] = {0};
+    size_t used = 0;
+    for (size_t i = 0; i < shape->count && i < sizeof(shape->fields)/sizeof(shape->fields[0]); ++i) {
+        const X4CloudTimeField *f = &shape->fields[i];
+        int n = snprintf(tags + used, sizeof(tags) - used, " %u/%u:%u=%u",
+            (unsigned)f->level, (unsigned)f->parent, (unsigned)f->number, (unsigned)f->wire);
+        if (n < 0 || (size_t)n >= sizeof(tags) - used) break;
+        used += (size_t)n;
+    }
+    printf("XCloud4: tiempo nube estructura bytes=%zu campos_nivel/padre:numero=tipo%s\n",
+        shape->length, tags);
+}
+#endif
+
+/* A late quota poll may outlive the Microsoft access lifetime. This
+ * renewal stays in the worker mailbox, separate from SaveData and the
+ * passport/session refresh. A newer mailbox copy always wins a race. */
+static int quota_refresh(CloudQuota *q, QuotaCredentials *credentials, X4Http *http, int *status)
+{
+    X4PassportWork *p = calloc(1, sizeof(*p));
+    if (!p) return X4_AUTH_E_ALLOCATION;
+    const char *stage;
+    bool rotated = false, expired = false;
+    int rc = fetch_refresh(p, credentials->refresh, http, status, &stage, 0, &q->cancel,
+        &credentials->expiry, &rotated, &expired);
+    if (!rc) {
+        memcpy(credentials->access, p->access, sizeof(credentials->access));
+        if (rotated) memcpy(credentials->refresh, p->refresh, sizeof(credentials->refresh));
+    }
+    x4_secure_clear(p, sizeof(*p));
+    free(p);
+    return rc;
+}
+
+static void *quota_worker(void *context)
+{
+    CloudQuota *q = context;
+    QuotaCredentials *credentials = malloc(sizeof(*credentials));
+    uint64_t epoch = q->scheduled_epoch, revision = 0;
+    uint64_t started = now();
+    int rc = credentials ? X4_HTTP_CANCELLED : X4_AUTH_E_ALLOCATION, status = 0;
+    X4CloudTime value = {0};
+    X4CloudTimeShape *shape = NULL;
+#if !X4_PUBLIC
+    X4CloudTimeShape observed_shape = {0};
+    shape = &observed_shape;
+#endif
+    bool renewed = false;
+    if (credentials) {
+        quota_lock(q);
+        if (epoch == q->epoch && !atomic_load(&q->cancel)) {
+            *credentials = q->credentials;
+            revision = q->credential_revision;
+            rc = 0;
+        }
+        quota_unlock(q);
+    }
+    if (!rc) {
+        X4Http *http = x4_http_open(&rc);
+        if (!http && !rc) rc = X4_AUTH_E_ALLOCATION;
+        if (http) {
+            if (started >= credentials->expiry) {
+                rc = quota_refresh(q, credentials, http, &status);
+                renewed = rc == 0;
+            }
+            if (!rc) rc = x4_xbox_cloud_time_query(http, credentials->access, q->market,
+                &q->cancel, &value, shape, &status);
+            x4_http_close(http);
+        }
+        quota_lock(q);
+        if (epoch == q->epoch && !atomic_load(&q->cancel)) {
+            if (renewed && revision == q->credential_revision) {
+                q->credentials = *credentials;
+                ++q->credential_revision;
+            }
+            if (!rc) {
+                q->value = value;
+                ++q->revision;
+            }
+        } else {
+            rc = X4_HTTP_CANCELLED;
+            value = (X4CloudTime){0};
+            if (shape) shape->length = 0;
+        }
+        quota_unlock(q);
+    }
+    if (credentials) {
+        x4_secure_clear(credentials, sizeof(*credentials));
+        free(credentials);
+    }
+#if !X4_PUBLIC
+    quota_log_shape(shape);
+    printf("XCloud4: tiempo nube restante_s=%llu max_s=%llu ilimitado=%u fuente=%s http=%d rc=0x%08x ms=%llu\n",
+        (unsigned long long)value.remaining_s, (unsigned long long)value.max_s,
+        (unsigned)value.unlimited, x4_cloud_time_source_name(value.source),
+        status, (unsigned)rc, (unsigned long long)((now() - started) / 1000));
+#endif
+    atomic_store_explicit(&q->finished, 1, memory_order_release);
+    return NULL;
+}
+
+static int quota_join(CloudQuota *q)
+{
+    if (!q || !q->running) return 0;
+    int rc = scePthreadJoin(q->thread, NULL);
+    if (!rc) q->running = false;
+    return rc > 0 ? -rc : rc;
+}
+
+void x4_auth_cloud_time(X4Auth *a, const char *market, bool force, X4CloudTime *out,
+    uint64_t *account, uint64_t *revision)
+{
+    CloudQuota *q = a ? a->quota : NULL;
+    if (!q) {
+        if (out) *out = (X4CloudTime){0};
+        if (account) *account = 0;
+        if (revision) *revision = 0;
+        return;
+    }
+    if (q->running && atomic_load_explicit(&q->finished, memory_order_acquire))
+        (void)quota_join(q);
+    q->pending |= force;
+    uint64_t t = now();
+    bool valid_market = market && strlen(market) == 2 && market[0] >= 'A' && market[0] <= 'Z' &&
+        market[1] >= 'A' && market[1] <= 'Z';
+    if (atomic_flag_test_and_set_explicit(&q->gate, memory_order_acquire)) return;
+    if (out) *out = q->value;
+    if (account) *account = q->epoch;
+    if (revision) *revision = q->revision;
+    bool start = !q->running && valid_market && q->credentials.expiry &&
+        (q->pending || t >= q->next_poll || q->scheduled_epoch != q->epoch ||
+            strcmp(q->market, market));
+    if (start) {
+        q->pending = false;
+        q->scheduled_epoch = q->epoch;
+        q->next_poll = t + X4_CLOUD_TIME_INTERVAL;
+        memcpy(q->market, market, sizeof(q->market));
+        atomic_store(&q->cancel, 0);
+        atomic_store(&q->finished, 0);
+    }
+    quota_unlock(q);
+    if (!start) return;
+
+    OrbisPthreadAttr attr;
+    int rc = scePthreadAttrInit(&attr);
+    if (!rc) {
+        rc = scePthreadAttrSetstacksize(&attr, 256u * 1024u);
+        if (!rc) rc = scePthreadCreate(&q->thread, &attr, quota_worker, q, "x4-quota");
+        (void)scePthreadAttrDestroy(&attr);
+    }
+    if (!rc) q->running = true;
+    else atomic_store(&q->finished, 1);
+}
+
+/* Only Microsoft rejection invalidates remembered access. Network failures
+ * and temporary HTTP states preserve the encrypted save for the next launch. */
+static bool restore_rejected(int status) { return status == 400 || status == 401; }
+static bool restore_transient(int rc, int status)
+{
+    return status == 408 || status == 429 || (status >= 500 && status <= 599) ||
+        (rc && status == 0 && rc != X4_AUTH_E_ALLOCATION && rc != X4_AUTH_E_FORM &&
+            rc != X4_AUTH_E_SIGNED_OUT && rc != X4_HTTP_CANCELLED);
+}
+static bool restore_retry_wait(X4Auth *a, unsigned seconds)
+{
+    uint64_t deadline = now() + seconds * X4_AUTH_USEC;
+    while (now() < deadline) {
+        if (atomic_load_explicit(&a->cancel, memory_order_acquire)) return false;
+        uint64_t remaining = deadline - now();
+        sceKernelUsleep((unsigned)(remaining < X4_AUTH_STEP_USEC ? remaining : X4_AUTH_STEP_USEC));
+    }
+    return !atomic_load_explicit(&a->cancel, memory_order_acquire);
+}
+static int restore_refresh(X4Auth *a, X4PassportWork *p, X4Http *http,
+    int *status, const char **stage)
+{
+    static const unsigned waits[] = {5, 15, 30};
+    int rc = X4_AUTH_E_ALLOCATION;
+    if (!p) return rc;
+    for (unsigned attempt = 0;; ++attempt) {
+        if (atomic_load_explicit(&a->cancel, memory_order_acquire)) return X4_HTTP_CANCELLED;
+        *status = 0;
+        rc = refresh_tokens(a, p, http, status, stage);
+        if (!restore_transient(rc, *status) || attempt == sizeof(waits)/sizeof(waits[0])) return rc;
+        printf("XCloud4: renovacion al abrir reintento=%u espera_s=%u http=%d error=0x%08x\n",
+            attempt + 1, waits[attempt], *status, (unsigned)rc);
+        if (!restore_retry_wait(a, waits[attempt])) return X4_HTTP_CANCELLED;
+    }
+}
+static void restore_failure(X4Auth *a, Outcome *out, int rc, int status, const char *stage)
+{
+    if (restore_rejected(status)) (void)x4_session_store_erase(a->remember);
+    set(out, rc == X4_HTTP_CANCELLED ? X4_AUTH_CANCELLED :
+        rc == X4_AUTH_E_SIGNED_OUT || restore_rejected(status) ? X4_AUTH_EXPIRED : X4_AUTH_ERROR,
+        rc, status, rc == X4_HTTP_CANCELLED ? "acceso cancelado" : stage);
 }
 
 /* Passport (login.live.com) refusals: only these exact OAuth codes are named;
@@ -769,7 +1075,10 @@ static int passport_token(X4Auth *a, X4PassportWork *p, X4Http *http, char *out,
         *stage = "formulario de autorizacion de conexion";
         return X4_AUTH_E_FORM;
     }
-    int rc = x4_http_passport_request(http, p->form, p->response, sizeof(p->response), &length, &status, cancel);
+    int rc = a->reconnect_deadline_us ?
+        x4_http_auth_reconnect_request(http, true, p->form, p->response, sizeof(p->response), &length, &status,
+            cancel, a->reconnect_deadline_us) :
+        x4_http_passport_request(http, p->form, p->response, sizeof(p->response), &length, &status, cancel);
     x4_secure_clear(p->form, sizeof(p->form));
     *http_status = status;
     if (rc == X4_HTTP_CANCELLED || atomic_load(cancel)) {
@@ -939,7 +1248,19 @@ static void *worker(void *opaque)
     X4Http *http = x4_http_open(&rc);
     if (!http) set(&o, X4_AUTH_ERROR, rc, 0, "inicio HTTPS (red/TLS)");
     else if (a->action == X4_AUTH_CHECK_CONNECTION) check_connection(a, w, http, &o);
-    else sign_in(a, w, http, &o);
+    else if (a->action == X4_AUTH_RESTORE_SESSION) {
+        X4PassportWork *p = calloc(1, sizeof(*p));
+        const char *stage = "Microsoft no pudo renovar el acceso";
+        int status = 0;
+        rc = restore_refresh(a, p, http, &status, &stage);
+        if (p) { x4_secure_clear(p, sizeof(*p)); free(p); }
+        if (!rc) set(&o, X4_AUTH_AUTHORIZED, 0, status, "cuenta Microsoft autorizada");
+        else {
+            /* A refusal is not a network error: remove the saved access and
+             * ask for a fresh device sign-in. No response body is displayed. */
+            restore_failure(a, &o, rc, status, stage);
+        }
+    } else sign_in(a, w, http, &o);
     if (o.state != X4_AUTH_AUTHORIZED) wipe_tokens(a);
 
     /* Terminal states hide the code now; a token waits for the final check. */
@@ -955,6 +1276,9 @@ static void *worker(void *opaque)
         if (atomic_load(&a->cancel)) set(&o, X4_AUTH_CANCELLED, 0, 0, "acceso cancelado");
         else if (now() >= a->token_expiry) set(&o, X4_AUTH_EXPIRED, 0, 0, "token Microsoft caducado");
         if (o.state != X4_AUTH_AUTHORIZED) wipe_tokens(a);
+        else if (a->action == X4_AUTH_SIGN_IN)
+            (void)x4_session_store_rotate(a->remember, a->refresh_token);
+        if (o.state == X4_AUTH_AUTHORIZED) quota_credentials(a, true);
         publish(a, o.state, o.error, o.http_status, o.stage, NULL, NULL, 0);
     }
     printf("XCloud4: acceso Microsoft fin estado=%d http=%d error=0x%08x\n",
@@ -964,6 +1288,19 @@ static void *worker(void *opaque)
     return NULL;
 }
 
+static int create_auth_worker(X4Auth *a)
+{
+    OrbisPthreadAttr attr;
+    int rc = scePthreadAttrInit(&attr);
+    if (rc) return rc;
+    rc = scePthreadAttrSetstacksize(&attr, 256u * 1024u);
+    if (!rc) rc = scePthreadCreate(&a->thread, &attr, worker, a, "x4-auth");
+    /* Destroying attributes must not turn an already running thread into
+     * a reported creation failure and trigger its caller's error cleanup. */
+    (void)scePthreadAttrDestroy(&attr);
+    return rc;
+}
+
 /* Main thread, only while no worker runs. */
 static void expire_tokens(X4Auth *a)
 {
@@ -971,7 +1308,8 @@ static void expire_tokens(X4Auth *a)
      * finished store. Reconcile it after acquiring that store on main. A
      * catalog cancellation never touches a still valid token: a late one
      * leaves the completed catalog as published. */
-    if (a->token_expiry && a->action == X4_AUTH_SIGN_IN && atomic_load(&a->cancel)) {
+    if (a->token_expiry && (a->action == X4_AUTH_SIGN_IN || a->action == X4_AUTH_RESTORE_SESSION) && atomic_load(&a->cancel)) {
+        if (a->action == X4_AUTH_SIGN_IN) (void)x4_session_store_erase(a->remember);
         discard_session(a);
         publish(a, X4_AUTH_CANCELLED, 0, 0, "acceso cancelado", NULL, NULL, 0);
     } else if (a->token_expiry && now() >= a->token_expiry) {
@@ -1005,15 +1343,29 @@ X4Auth *x4_auth_create(void)
     if(!a->rumble) printf("XCloud4: vibracion desactivada por falta de memoria\n");
 #endif
     atomic_init(&a->cancel, 0);
+    atomic_init(&a->reload_requested, 0);
     atomic_init(&a->finished, 1);
     atomic_init(&a->keyframe_requested, 0);
     atomic_init(&a->access_country, X4_ACCESS_AUTO);
     atomic_flag_clear(&a->lock);
+    atomic_flag_clear(&a->gamepad_gate);
+    a->quota = calloc(1, sizeof(*a->quota));
+    if (a->quota) {
+        atomic_flag_clear(&a->quota->gate);
+        atomic_init(&a->quota->finished, 1);
+        atomic_init(&a->quota->cancel, 0);
+        a->quota->epoch = 1;
+    }
     a->account_epoch = 1;
     reset_recent(a, X4_CATALOG_IDLE, 0, "sin recientes de Xbox");
     publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
     reset_catalog(a, X4_CATALOG_IDLE, 0, "sin catalogo");
     reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
+    a->remember = x4_session_store_new();
+    /* Only short SaveData I/O is synchronous. Microsoft renewal runs on the
+     * existing auth worker and never blocks the UI on a network request. */
+    if (x4_session_store_restore(a->remember, a->refresh_token, sizeof(a->refresh_token)) == 1)
+        (void)x4_auth_start(a, X4_AUTH_RESTORE_SESSION);
     return a;
 }
 
@@ -1057,7 +1409,7 @@ static int start_catalog(X4Auth *a)
     atomic_store(&a->cancel, 0);
     reset_catalog(a, X4_CATALOG_LOADING, 0, "preparando consulta Xbox");
     atomic_store_explicit(&a->finished, 0, memory_order_release);
-    int rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    int rc = create_auth_worker(a);
     if (rc != 0) {
         if (rc > 0) rc = -rc;
         printf("XCloud4: catalogo Xbox crear hilo 0x%08x\n", (unsigned)rc);
@@ -1082,7 +1434,7 @@ static int start_recents(X4Auth *a)
     a->action = X4_AUTH_XBOX_RECENTS;
     atomic_store(&a->cancel, 0);
     atomic_store_explicit(&a->finished, 0, memory_order_release);
-    rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    rc = create_auth_worker(a);
     if (rc) {
         if (rc > 0) rc = -rc;
         atomic_store(&a->finished, 1); x4_xbox_work_free(a->xwork); a->xwork = NULL;
@@ -1104,7 +1456,7 @@ static int start_fortnite(X4Auth *a)
     atomic_store(&a->cancel, 0);
     reset_catalog(a, X4_CATALOG_LOADING, 0, "buscando Fortnite en el servidor");
     atomic_store_explicit(&a->finished, 0, memory_order_release);
-    int rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    int rc = create_auth_worker(a);
     if (rc != 0) {
         if (rc > 0) rc = -rc;
         printf("XCloud4: Fortnite crear hilo 0x%08x\n", (unsigned)rc);
@@ -1122,7 +1474,7 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
 {
     if (!a || (action != X4_AUTH_SIGN_IN && action != X4_AUTH_CHECK_CONNECTION &&
         action != X4_AUTH_XBOX_CATALOG && action != X4_AUTH_XBOX_RECENTS &&
-        action != X4_AUTH_FORTNITE_QUERY)) return X4_AUTH_E_ARGUMENT;
+        action != X4_AUTH_FORTNITE_QUERY && action != X4_AUTH_RESTORE_SESSION)) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
@@ -1130,12 +1482,19 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
     /* The check would replace the AUTHORIZED snapshot, which already proves
      * a working connection. */
     if (action == X4_AUTH_CHECK_CONNECTION && a->token_expiry) return X4_AUTH_E_AUTHORIZED;
+    if (action == X4_AUTH_RESTORE_SESSION && (a->token_expiry || !visible_token(a->refresh_token, sizeof(a->refresh_token))))
+        return X4_AUTH_E_SIGNED_OUT;
     if (action == X4_AUTH_XBOX_CATALOG) return start_catalog(a);
     if (action == X4_AUTH_XBOX_RECENTS) return start_recents(a);
     if (action == X4_AUTH_FORTNITE_QUERY) return start_fortnite(a);
     /* A fresh sign-in deliberately discards the previous token, catalog and
      * session view; no worker runs here, so no cleanup is pending. */
     if (action == X4_AUTH_SIGN_IN) {
+        X4SessionStoreSnapshot remembered = {0};
+        x4_session_store_snapshot(a->remember, &remembered);
+        (void)x4_session_store_erase(a->remember);
+        if (remembered.enabled && remembered.available)
+            (void)x4_session_store_set_enabled(a->remember, true, NULL);
         discard_session(a);
         reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
     }
@@ -1151,7 +1510,7 @@ int x4_auth_start(X4Auth *a, enum X4AuthAction action)
     publish(a, X4_AUTH_CONNECTING, 0, 0,
         action == X4_AUTH_SIGN_IN ? "conectando con Microsoft" : "comprobando conexion TLS", NULL, NULL, 0);
     atomic_store_explicit(&a->finished, 0, memory_order_release);
-    rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    rc = create_auth_worker(a);
     if (rc != 0) {
         if (rc > 0) rc = -rc;
         printf("XCloud4: acceso Microsoft crear hilo 0x%08x\n", (unsigned)rc);
@@ -1189,6 +1548,7 @@ int x4_auth_start_session_request(X4Auth *a, unsigned index,
     int rc = join_worker(a);
     if (rc) return rc;
     atomic_store(&a->keyframe_requested, 0);
+    atomic_store(&a->reload_requested, 0);
     expire_tokens(a);
     if (!a->token_expiry || now() >= a->token_expiry) return X4_AUTH_E_SIGNED_OUT;
     /* Title and offering are copied privately before the worker exists. No
@@ -1229,6 +1589,13 @@ int x4_auth_start_session_request(X4Auth *a, unsigned index,
         return X4_AUTH_E_ALLOCATION;
     }
     a->session_title = title;
+    if (!x4_xbox_work_set_reload_request(a->xwork, &a->reload_requested) ||
+        !x4_xbox_work_set_reconnect_deadline(a->xwork, &a->reconnect_deadline_us)) {
+        x4_xbox_work_free(a->xwork); a->xwork = NULL;
+        x4_secure_clear(&title, sizeof(title));
+        x4_secure_clear(&a->session_title, sizeof(a->session_title));
+        return X4_AUTH_E_ARGUMENT;
+    }
 #if X4_STREAM_PROFILE && !X4_VIDEO_PROBE
     a->session_request = x4_stream_request_capture(request);
     if (!x4_xbox_work_set_request_config(a->xwork, &a->session_request) ||
@@ -1255,7 +1622,7 @@ int x4_auth_start_session_request(X4Auth *a, unsigned index,
     atomic_store(&a->cancel, 0);
     reset_session(a, X4_SESSION_STARTING, 0, "preparando sesion Xbox", shown, offering, region);
     atomic_store_explicit(&a->finished, 0, memory_order_release);
-    rc = scePthreadCreate(&a->thread, NULL, worker, a, "x4-auth");
+    rc = create_auth_worker(a);
     if (rc != 0) {
 #if X4_RUMBLE
         x4_rumble_disable(a->rumble);
@@ -1307,7 +1674,7 @@ void x4_auth_snapshot(X4Auth *a, X4AuthSnapshot *out)
     }
     /* Only sign-in and the check own the account view; catalog and session
      * cancels never mark the account as cancelling. */
-    if (busy && (a->action == X4_AUTH_SIGN_IN || a->action == X4_AUTH_CHECK_CONNECTION) &&
+    if (busy && (a->action == X4_AUTH_SIGN_IN || a->action == X4_AUTH_RESTORE_SESSION || a->action == X4_AUTH_CHECK_CONNECTION) &&
         atomic_load(&a->cancel)) {
         /* Hide the code at once; the worker wipes its private copy. */
         memset(out->user_code, 0, sizeof(out->user_code));
@@ -1474,16 +1841,28 @@ void x4_auth_request_keyframe(X4Auth *a)
     if (a) atomic_store(&a->keyframe_requested, 1);
 }
 
+void x4_auth_request_reload(X4Auth *a)
+{
+    if (!a) return;
+    lock(a);
+    bool allowed = a->session.ever_connected && !a->session.reconnecting &&
+        (a->session.state == X4_SESSION_CONNECTING || a->session.state == X4_SESSION_STREAMING);
+    unlock(a);
+    if (allowed && !atomic_load_explicit(&a->cancel, memory_order_acquire))
+        atomic_store_explicit(&a->reload_requested, 1, memory_order_release);
+}
+
 int x4_auth_forget(X4Auth *a)
 {
     if (!a) return X4_AUTH_E_ARGUMENT;
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
+    int erased = x4_session_store_erase(a->remember);
     discard_session(a);
     reset_session(a, X4_SESSION_IDLE, 0, "sin sesion", NULL, NULL, NULL);
-    publish(a, X4_AUTH_IDLE, 0, 0, "sin cuenta Microsoft", NULL, NULL, 0);
-    return 0;
+    publish(a, X4_AUTH_IDLE, erased, 0, "sin cuenta Microsoft", NULL, NULL, 0);
+    return erased;
 }
 
 int x4_auth_close(X4Auth *a)
@@ -1492,6 +1871,19 @@ int x4_auth_close(X4Auth *a)
     if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
     int rc = join_worker(a);
     if (rc) return rc;
+    if (a->quota) {
+        atomic_store(&a->quota->cancel, 1);
+        rc = quota_join(a->quota);
+        if (rc) return rc;
+        x4_secure_clear(a->quota, sizeof(*a->quota));
+        free(a->quota);
+        a->quota = NULL;
+    }
+    /* A failed SaveData unmount must preserve its owning context for retry.
+     * Release it before rumble so a repeated close never frees rumble twice. */
+    rc = x4_session_store_free(a->remember);
+    if (rc) return rc;
+    a->remember = NULL;
 #if X4_RUMBLE
     x4_rumble_disable(a->rumble);
     if(!x4_rumble_free(a->rumble)) return X4_AUTH_E_BUSY;
@@ -1499,4 +1891,21 @@ int x4_auth_close(X4Auth *a)
     x4_secure_clear(a, sizeof(*a));
     free(a);
     return 0;
+}
+
+void x4_auth_remember_snapshot(X4Auth *a, X4AuthRememberSnapshot *out)
+{
+    if (!out) return;
+    X4SessionStoreSnapshot view = {0};
+    x4_session_store_snapshot(a ? a->remember : NULL, &view);
+    *out = (X4AuthRememberSnapshot){view.enabled, view.available, view.error};
+}
+int x4_auth_set_remember(X4Auth *a, bool enabled)
+{
+    if (!a) return X4_AUTH_E_ARGUMENT;
+    if (x4_auth_busy(a)) return X4_AUTH_E_BUSY;
+    int rc = join_worker(a);
+    if (rc) return rc;
+    return x4_session_store_set_enabled(a->remember, enabled,
+        a->token_expiry ? a->refresh_token : NULL);
 }

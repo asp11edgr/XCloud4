@@ -3,7 +3,7 @@
 # Export the actual patched build trees without building or changing them.
 set -euo pipefail
 SCRIPT_PATH=$(realpath -- "${BASH_SOURCE[0]}")
-RTC_ROOT=$(realpath -- "${1:-${X4_WEBRTC_ROOT:-$HOME/.local/share/xcloud4/webrtc}}")
+RTC_ROOT=$(realpath -- "${1:-${X4_WEBRTC_ROOT:-$HOME/.local/share/xcloud4/webrtc-clean-21}}")
 PROJECT_ROOT=$(realpath -- "${X4_PROJECT_ROOT:-$HOME/Projects/XCloud4}")
 if [[ -n ${X4_SOURCE_VERSION:-} ]]; then
     SOURCE_VERSION=$X4_SOURCE_VERSION
@@ -118,7 +118,11 @@ generator = rtc / 'libdatachannel/src/rtc_receiver_nack.cpp'
 if generator.read_bytes() != (project / 'src/streaming/rtc_receiver_nack.cpp').read_bytes():
     raise SystemExit('Vendor NACK generator differs from its frozen project source')
 add(generator, 'vendor/libdatachannel/src/rtc_receiver_nack.cpp')
-components[0]['added_paths'] = ['src/rtc_receiver_nack.cpp']
+rr = rtc / 'libdatachannel/src/x4_video_rr.hpp'
+if rr.read_bytes() != (project / 'scripts/webrtc/rr43b_impl.hpp').read_bytes():
+    raise SystemExit('Vendor video RR differs from its frozen overlay source')
+add(rr, 'vendor/libdatachannel/src/x4_video_rr.hpp')
+components[0]['added_paths'] = ['src/rtc_receiver_nack.cpp', 'src/x4_video_rr.hpp']
 
 # Opus is the official release-tar tree, not a Git checkout. Builds reside in
 # the sibling build-opus directory and are never traversed by this exporter.
@@ -138,7 +142,9 @@ for current, dirs, files in os.walk(opus):
         source = pathlib.Path(current) / name
         add(source, 'vendor/opus-1.5.2/' + source.relative_to(opus).as_posix())
 
-for name in ('prepare_port.py', 'prepare_receive_diagnostics.py', 'prepare_receiver_nack.py', 'prepare_rtt_api.py', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
+if (rtc / 'overlay/x4_udp_buffer46c.h').read_bytes() != (project / 'scripts/webrtc/udp_buffer46c.h').read_bytes():
+    raise SystemExit('Vendor UDP buffer overlay differs from its frozen project source')
+for name in ('prepare_port.py', 'prepare_receive_diagnostics.py', 'prepare_receiver_nack.py', 'prepare_rtt_api.py', 'prepare_rr43b.py', 'rr43b_impl.hpp', 'prepare_udp_buffer46c.py', 'udp_buffer46c.h', 'build_native.sh', 'openorbis.cmake', 'mbedtls-user-config.h'):
     # build_native invokes the scripts in the project, not unrelated copies in
     # RTC_ROOT. Preserve those exact reproducible inputs in the source export.
     add(project / 'scripts/webrtc' / name, 'scripts/webrtc/' + name)

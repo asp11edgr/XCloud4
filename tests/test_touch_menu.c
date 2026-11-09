@@ -92,7 +92,7 @@ static void test_game_input_gate(void)
 static void test_menu_navigation_and_timeout(void)
 {
     X4TouchMenu menu;
-    x4_touch_menu_init(&menu, true); /* Public: 4 items */
+    x4_touch_menu_init(&menu, true); /* Public: 5 items */
 
     /* Open */
     CHECK(!x4_touch_menu_feed_touch(&menu, true, 2, 1000000ULL));
@@ -107,13 +107,15 @@ static void test_menu_navigation_and_timeout(void)
     CHECK(menu.selected_index == 2);
     CHECK(x4_touch_menu_update(&menu, ORBIS_PAD_BUTTON_DOWN, ORBIS_PAD_BUTTON_DOWN, 2300000ULL) == X4_TOUCH_MENU_ACTION_NONE);
     CHECK(menu.selected_index == 3);
-    /* Wrap around */
     CHECK(x4_touch_menu_update(&menu, ORBIS_PAD_BUTTON_DOWN, ORBIS_PAD_BUTTON_DOWN, 2400000ULL) == X4_TOUCH_MENU_ACTION_NONE);
+    CHECK(menu.selected_index == 4);
+    /* Wrap around after the fifth public row. */
+    CHECK(x4_touch_menu_update(&menu, ORBIS_PAD_BUTTON_DOWN, ORBIS_PAD_BUTTON_DOWN, 2450000ULL) == X4_TOUCH_MENU_ACTION_NONE);
     CHECK(menu.selected_index == 0);
 
     /* Up arrow wrap around */
     CHECK(x4_touch_menu_update(&menu, ORBIS_PAD_BUTTON_UP, ORBIS_PAD_BUTTON_UP, 2500000ULL) == X4_TOUCH_MENU_ACTION_NONE);
-    CHECK(menu.selected_index == 3);
+    CHECK(menu.selected_index == 4);
 
     /* Inactivity timeout (15 s) */
     CHECK(x4_touch_menu_update(&menu, 0, 0, 2500000ULL + 15000000ULL) == X4_TOUCH_MENU_ACTION_NONE);
@@ -142,7 +144,7 @@ static void test_actions_public_and_lab(void)
 
     pub.is_open = true;
     pub.last_activity_us = 1000000ULL;
-    pub.selected_index = 3;
+    pub.selected_index = 4;
     CHECK(x4_touch_menu_update(&pub, ORBIS_PAD_BUTTON_CROSS, ORBIS_PAD_BUTTON_CROSS, 1100000ULL) == X4_TOUCH_MENU_ACTION_CANCEL);
 
     /* Lab: item 3 -> MARK_TEST, item 4 -> EXIT_APP, item 5 -> CANCEL */
@@ -150,18 +152,30 @@ static void test_actions_public_and_lab(void)
     x4_touch_menu_init(&lab, false);
     lab.is_open = true;
     lab.last_activity_us = 1000000ULL;
-    lab.selected_index = 3;
+    lab.selected_index = 4;
     CHECK(x4_touch_menu_update(&lab, ORBIS_PAD_BUTTON_CROSS, ORBIS_PAD_BUTTON_CROSS, 1100000ULL) == X4_TOUCH_MENU_ACTION_MARK_TEST);
 
     lab.is_open = true;
     lab.last_activity_us = 1000000ULL;
-    lab.selected_index = 4;
+    lab.selected_index = 5;
     CHECK(x4_touch_menu_update(&lab, ORBIS_PAD_BUTTON_CROSS, ORBIS_PAD_BUTTON_CROSS, 1100000ULL) == X4_TOUCH_MENU_ACTION_EXIT_APP);
 
     lab.is_open = true;
     lab.last_activity_us = 1000000ULL;
-    lab.selected_index = 5;
+    lab.selected_index = 6;
     CHECK(x4_touch_menu_update(&lab, ORBIS_PAD_BUTTON_CROSS, ORBIS_PAD_BUTTON_CROSS, 1100000ULL) == X4_TOUCH_MENU_ACTION_CANCEL);
+}
+
+static void test_reload_closes_and_suppresses(void)
+{
+    for(int public=0;public<2;++public) {
+        X4TouchMenu menu;x4_touch_menu_init(&menu,public!=0);
+        CHECK(menu.item_count==(public?5:7));
+        menu.is_open=true;menu.last_activity_us=1000000;menu.selected_index=3;
+        CHECK(x4_touch_menu_update(&menu,ORBIS_PAD_BUTTON_CROSS,ORBIS_PAD_BUTTON_CROSS,1100000)==X4_TOUCH_MENU_ACTION_RELOAD_STREAM);
+        CHECK(!menu.is_open);
+        CHECK(x4_touch_menu_filter_buttons(&menu,ORBIS_PAD_BUTTON_CROSS)==0);
+    }
 }
 
 static void test_button_suppression(void)
@@ -255,6 +269,7 @@ static void test_nexus_pulse(void)
 
 int main(void)
 {
+    test_reload_closes_and_suppresses();
     test_touch_threshold();
     test_one_finger_does_not_open();
     test_reopening_only_after_lifting();

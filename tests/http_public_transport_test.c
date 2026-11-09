@@ -1,277 +1,285 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
-/* Compile the complete production HTTP implementation against a deterministic
- * native-ABI fixture. This validates local contracts, not PS4 networking. */
+/* Complete production HTTP policy/wire with a deterministic TLS link double. */
 #include <assert.h>
-#include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+static void *policy_malloc(size_t);
+static void *policy_calloc(size_t,size_t);
+static void policy_free(void *);
+#define malloc policy_malloc
+#define calloc policy_calloc
+#define free policy_free
 #include "../src/auth/http_client.c"
-
-static unsigned checks;
-#define CHECK(x) do { ++checks; if (!(x)) { fprintf(stderr, "HTTP check failed %s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
-enum ResourceKind { NONE, TEMPLATE, CONNECTION, REQUEST };
-static struct Resource { enum ResourceKind kind; int parent; const char *borrowed_url; bool keepalive;
-    unsigned verify; int redirect, cookies; size_t offset; } resource[2048];
-static unsigned next_id, connections, templates, requests, sends, terminated;
-static unsigned public_connections, private_connections;
-static bool fail_send, fail_read, fail_delete_request, fail_delete_connection;
-static bool missing_header_api;
-static int response_status = 200;
-static const char *response_body = "{}", *response_headers = "HTTP/1.1 200 OK\r\n\r\n";
+#undef free
+#undef calloc
+#undef malloc
+#include "tls_transport_fake.h"
+static void *policy_allocations[128];
+static size_t policy_allocation_count;
+static void *remember_allocation(void *p)
+{if(p){assert(policy_allocation_count<128);policy_allocations[policy_allocation_count++]=p;}return p;}
+static void *policy_malloc(size_t bytes){return remember_allocation(malloc(bytes));}
+static void *policy_calloc(size_t count,size_t bytes){return remember_allocation(calloc(count,bytes));}
+static void policy_free(void *p)
+{
+ if(!p)return;
+ for(size_t i=0;i<policy_allocation_count;++i)if(policy_allocations[i]==p){
+  policy_allocations[i]=policy_allocations[--policy_allocation_count];free(p);return;
+ }
+ assert(!"free outside the production-owner allocation registry");
+}
+static void reclaim_fake_quarantine(void)
+{
+ /* Only after the fake kernel proves no actual socket/reference remains.
+  * The real product intentionally retains these owners until process exit. */
+ x4tf_reclaim_retained();
+ while(policy_allocation_count)policy_free(policy_allocations[policy_allocation_count-1]);
+}
+static unsigned checks,public_connections,private_connections;
+static bool seen_connection[2048],exercise_reentry;
+static X4Http *reentry_http;
+static int response_status=200;
+static const char *response_body="{}",*response_headers="HTTP/1.1 200 OK\r\n\r\n";
 static uint64_t fake_clock;
-static _Atomic int *cancel_during_send;
-
-uint64_t sceKernelGetProcessTime(void) { return fake_clock; }
-int sceKernelUsleep(unsigned int microseconds) { (void)microseconds; return 0; }
-const char *x4_lang_store_suffix(void) { return "&market=MX&languages=es-MX&fieldsTemplate=Details"; }
-static int32_t new_resource(enum ResourceKind kind, int parent)
+#define CHECK(x) do { ++checks;if(!(x)){fprintf(stderr,"HTTP check failed line=%d\n",__LINE__);abort();} }while(0)
+uint64_t sceKernelGetProcessTime(void){return fake_clock;}
+int sceKernelUsleep(unsigned us){(void)us;return 0;}
+const char *x4_lang_store_suffix(void){return "&market=MX&languages=es-MX&fieldsTemplate=Details";}
+static const char *market = "MX", *locale = "es-MX";
+const char *x4_lang_market(void){return market;}
+const char *x4_lang_locale(void){return locale;}
+static const char *store="https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details";
+static const char *image="https://store-images.s-microsoft.com/image/apps.test?w=356&h=200&q=85&format=jpg";
+static void reply(const X4TfRequest *request,X4TfResponse *response)
 {
-    CHECK(++next_id < sizeof(resource) / sizeof(resource[0]));
-    resource[next_id] = (struct Resource){.kind = kind, .parent = parent, .redirect = -1, .cookies = -1};
-    return (int32_t)next_id;
+ CHECK(request->connection_id<2048);
+ if(!seen_connection[request->connection_id]){
+  seen_connection[request->connection_id]=true;
+  if(request->keepalive)++public_connections;else ++private_connections;
+ }
+ CHECK(!x4tf_header(request,"Cookie"));
+ CHECK(x4tf_header_count(request,"Host")==1&&x4tf_header_count(request,"Accept-Encoding")==1);
+ if (!strncmp(request->url, X4_SIGL_URL_PREFIX, sizeof(X4_SIGL_URL_PREFIX)-1)) {
+  CHECK(!request->keepalive && request->method==0 && !request->body_size);
+  CHECK(!x4tf_header(request,"Authorization") && !x4tf_header(request,"X-MS-Device-Info"));
+ }
+ if(request->keepalive){
+  CHECK(request->method==0&&!request->body_size);
+  CHECK(!strncmp(request->url,store_prefix,sizeof(store_prefix)-1)||x4_http_public_image_url(request->url));
+  CHECK(!x4tf_header(request,"Authorization")&&!x4tf_header(request,"X-MS-Device-Info"));
+  for(size_t i=0;i<request->header_count;++i){
+   const char *name=request->headers[i].name;
+   CHECK(!strcmp(name,"Host")||!strcmp(name,"Connection")||!strcmp(name,"Accept")||!strcmp(name,"Accept-Encoding")||!strcmp(name,"User-Agent"));
+   CHECK(!strstr(request->headers[i].value,"Bearer")&&!strstr(request->headers[i].value,"credential"));
+  }
+ }
+ CHECK(x4tf_header(request,"User-Agent")&&!strcmp(x4tf_header(request,"User-Agent"),"XCloud4"));
+ response->status=response_status;response->body=response_body;response->headers=response_headers;
+ if(exercise_reentry){
+  exercise_reentry=false;char body[64];size_t length=0;int status=0;unsigned before=x4tf.connections;
+  CHECK(x4_http_public_reset(reentry_http)==X4_HTTP_BUSY);
+  CHECK(x4_http_public_metadata_request(reentry_http,store,body,sizeof(body),&length,&status,NULL)==X4_HTTP_BUSY);
+  CHECK(x4tf.connections==before);
+ }
 }
-static int32_t mock_zero(void) { return 0; }
-static int32_t mock_pool(const char *name, int32_t size, int32_t flags)
-{ CHECK(!strcmp(name, "x4-http-net") && size == X4_NET_POOL_SIZE && !flags); return 51; }
-static int32_t mock_pool_destroy(int32_t id) { CHECK(id == 51); return 0; }
-static int32_t mock_ssl(size_t bytes) { CHECK(bytes == X4_SSL_POOL_SIZE); return 52; }
-static int32_t mock_ssl_term(int32_t id) { CHECK(id == 52); return 0; }
-static int32_t mock_http(int32_t net, int32_t ssl, size_t bytes)
-{ CHECK(net == 51 && ssl == 52 && bytes == X4_HTTP_POOL_SIZE); return 53; }
-static int32_t mock_http_term(int32_t id)
-{ CHECK(id == 53); for (unsigned i = 1; i <= next_id; ++i) CHECK(resource[i].kind == NONE); ++terminated; return 0; }
-static int32_t mock_template(int32_t ctx, const char *agent, int32_t version, int32_t proxy)
-{ CHECK(ctx == 53 && !strcmp(agent, "XCloud4") && version == 2 && !proxy); ++templates; return new_resource(TEMPLATE, 0); }
-static int32_t mock_timeout(int32_t tmpl, uint32_t timeout)
-{ CHECK(resource[tmpl].kind == TEMPLATE && timeout == X4_HTTP_TIMEOUT_USEC); return 0; }
-static int32_t mock_redirect(int32_t tmpl, int32_t on)
-{ CHECK(resource[tmpl].kind == TEMPLATE && !on); resource[tmpl].redirect = on; return 0; }
-static int32_t mock_cookie(int32_t tmpl, int32_t on)
-{ CHECK(resource[tmpl].kind == TEMPLATE && !on); resource[tmpl].cookies = on; return 0; }
-static int32_t mock_load_cert(int32_t httpId, int32_t nbr, void *cert_list, void *cert, void *priv_key)
-{ (void)cert; (void)priv_key; CHECK(httpId == 53 && (nbr == 11 || nbr == 7) && cert_list != NULL); return 0; }
-static int32_t mock_tls(int32_t tmpl, uint32_t flags)
-{ CHECK(resource[tmpl].kind == TEMPLATE && flags == X4_HTTPS_VERIFY_ALL); resource[tmpl].verify = flags; return 0; }
-static int32_t mock_connection(int32_t tmpl, const char *url, bool keepalive)
-{
-    CHECK(resource[tmpl].kind == TEMPLATE && resource[tmpl].verify == X4_HTTPS_VERIFY_ALL &&
-        !resource[tmpl].redirect && !resource[tmpl].cookies);
-    if (keepalive) {
-        CHECK(!strncmp(url, store_prefix, sizeof(store_prefix) - 1) || x4_http_public_image_url(url));
-        ++public_connections;
-    } else ++private_connections;
-    ++connections;
-    int id = new_resource(CONNECTION, tmpl);
-    resource[id].borrowed_url = url;
-    resource[id].keepalive = keepalive;
-    return id;
-}
-static int32_t mock_request(int32_t conn, int32_t method, const char *url, uint64_t size)
-{
-    CHECK(resource[conn].kind == CONNECTION && resource[conn].borrowed_url[0]);
-    if (resource[conn].keepalive) CHECK(method == X4_HTTP_METHOD_GET && !size);
-    ++requests;
-    int id = new_resource(REQUEST, conn);
-    resource[id].borrowed_url = url;
-    return id;
-}
-static int32_t mock_header(int32_t req, const char *name, const char *value, uint32_t mode)
-{
-    CHECK(resource[req].kind == REQUEST && mode == X4_HTTP_HEADER_OVERWRITE);
-    if (resource[resource[req].parent].keepalive) {
-        CHECK(!strcmp(name, "Accept") || !strcmp(name, "Accept-Encoding"));
-        CHECK(!strstr(value, "Bearer") && !strstr(value, "credential"));
-    }
-    return 0;
-}
-static int32_t mock_send(int32_t req, const void *post, size_t size)
-{
-    CHECK(resource[req].kind == REQUEST && resource[req].borrowed_url[0]);
-    if (resource[resource[req].parent].keepalive) CHECK(!post && !size);
-    ++sends;
-    if (cancel_during_send) atomic_store(cancel_during_send, 1);
-    if (fail_send) { fail_send = false; return -77; }
-    return 0;
-}
-static int32_t mock_status(int32_t req, int32_t *status)
-{ CHECK(resource[req].kind == REQUEST); *status = response_status; return 0; }
-static int32_t mock_headers(int32_t req, char **headers, size_t *size)
-{ CHECK(resource[req].kind == REQUEST); *headers = (char *)response_headers; *size = strlen(response_headers) + 1; return 0; }
-static int32_t mock_read(int32_t req, void *target, size_t size)
-{
-    CHECK(resource[req].kind == REQUEST && resource[req].borrowed_url[0]);
-    if (fail_read) { fail_read = false; return -78; }
-    size_t total = strlen(response_body), offset = resource[req].offset;
-    size_t take = total - offset < size ? total - offset : size;
-    memcpy(target, response_body + offset, take);
-    resource[req].offset += take;
-    return (int32_t)take;
-}
-static int32_t mock_delete(int32_t id, enum ResourceKind kind)
-{
-    CHECK(resource[id].kind == kind);
-    if ((kind == REQUEST && fail_delete_request) || (kind == CONNECTION && fail_delete_connection)) return -79;
-    for (unsigned i = 1; i <= next_id; ++i) CHECK(resource[i].kind == NONE || resource[i].parent != id);
-    if (kind != TEMPLATE) CHECK(resource[id].borrowed_url && resource[id].borrowed_url[0]);
-    resource[id] = (struct Resource){0};
-    return 0;
-}
-static int32_t mock_delete_template(int32_t id) { return mock_delete(id, TEMPLATE); }
-static int32_t mock_delete_connection(int32_t id) { return mock_delete(id, CONNECTION); }
-static int32_t mock_delete_request(int32_t id) { return mock_delete(id, REQUEST); }
-
-int x4_module_open(const char *name)
-{ CHECK(!strcmp(name, "libSceNet") || !strcmp(name, "libSceSsl") || !strcmp(name, "libSceHttp")); return 1; }
-int x4_module_symbol(int handle, const char *name, void **address)
-{
-    CHECK(handle == 1);
-#define SYMBOL(symbol, function) if (!strcmp(name, symbol)) { *address = (void *)(function); return 0; }
-    SYMBOL("sceNetInit", mock_zero)
-    SYMBOL("sceNetPoolCreate", mock_pool)
-    SYMBOL("sceNetPoolDestroy", mock_pool_destroy)
-    SYMBOL("sceSslInit", mock_ssl)
-    SYMBOL("sceSslTerm", mock_ssl_term)
-    SYMBOL("sceHttpInit", mock_http)
-    SYMBOL("sceHttpTerm", mock_http_term)
-    SYMBOL("sceHttpCreateTemplate", mock_template)
-    SYMBOL("sceHttpCreateConnectionWithURL", mock_connection)
-    SYMBOL("sceHttpCreateRequestWithURL", mock_request)
-    SYMBOL("sceHttpDeleteTemplate", mock_delete_template)
-    SYMBOL("sceHttpDeleteConnection", mock_delete_connection)
-    SYMBOL("sceHttpDeleteRequest", mock_delete_request)
-    SYMBOL("sceHttpSetResolveTimeOut", mock_timeout)
-    SYMBOL("sceHttpSetConnectTimeOut", mock_timeout)
-    SYMBOL("sceHttpSetSendTimeOut", mock_timeout)
-    SYMBOL("sceHttpSetRecvTimeOut", mock_timeout)
-    SYMBOL("sceHttpSetAutoRedirect", mock_redirect)
-    SYMBOL("sceHttpSetCookieEnabled", mock_cookie)
-    SYMBOL("sceHttpAddRequestHeader", mock_header)
-    SYMBOL("sceHttpsEnableOption", mock_tls)
-    SYMBOL("sceHttpSendRequest", mock_send)
-    SYMBOL("sceHttpReadData", mock_read)
-    SYMBOL("sceHttpGetStatusCode", mock_status)
-    if (missing_header_api && !strcmp(name, "sceHttpGetAllResponseHeaders")) { *address = NULL; return -1; }
-    SYMBOL("sceHttpGetAllResponseHeaders", mock_headers)
-    SYMBOL("sceHttpsLoadCert", mock_load_cert)
-#undef SYMBOL
-    CHECK(0); return -1;
-}
-static const char *store = "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details";
-static const char *image = "https://store-images.s-microsoft.com/image/apps.test?w=512&q=80&format=jpg";
 static X4Http *open_context(void)
-{ int error = -1; X4Http *h = x4_http_open(&error); CHECK(h && !error); return h; }
-static void public_exchange(X4Http *h, bool cover)
 {
-    char body[64]; size_t length = 99; int status = 99;
-    int rc = cover ? x4_http_public_image_request(h, image, (unsigned char *)body, sizeof(body), &length, &status, NULL) :
-        x4_http_public_metadata_request(h, store, body, sizeof(body), &length, &status, NULL);
-    CHECK(!rc && length == strlen(response_body) && status == response_status && !strcmp(body, response_body));
+ CHECK(!policy_allocation_count);
+ x4tf_reset();x4tf.on_request=reply;memset(seen_connection,0,sizeof(seen_connection));
+ public_connections=private_connections=0;int error=-1;X4Http *h=x4_http_open(&error);
+ CHECK(h&&!error&&x4tf.verified_opens==1);return h;
+}
+static void public_exchange(X4Http *h,bool cover)
+{
+ char body[64];size_t length=99;int status=99;
+ int result=cover?x4_http_public_image_request(h,image,(unsigned char *)body,sizeof(body),&length,&status,NULL):
+  x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,NULL);
+ CHECK(!result&&length==strlen(response_body)&&status==response_status&&!strcmp(body,response_body));
 }
 static void test_reuse_isolation_cleanup(void)
 {
-    X4Http *h = open_context(); unsigned before = connections;
-    for (unsigned i = 0; i < 6; ++i) { public_exchange(h, false); public_exchange(h, true); }
-    CHECK(connections - before == 2); CHECK(h->public_connection[0].conn != h->public_connection[1].conn);
-    CHECK(h->public_connection[0].anchor && h->public_connection[1].anchor);
-    char body[64]; size_t length; int status;
-    before = private_connections;
-    CHECK(!x4_http_request(h, "https://login.microsoftonline.com/consumers/oauth2", "test=credential", body,
-        sizeof(body), &length, &status, NULL));
-    CHECK(private_connections == before + 1);
-    CHECK(h->public_connection[0].conn >= 0 && h->public_connection[1].conn >= 0);
-    CHECK(!x4_http_public_reset(h)); CHECK(!h->public_connection[0].anchor && !h->public_connection[1].anchor);
-    CHECK(h->public_connection[0].conn == -1 && h->public_connection[1].conn == -1);
-    public_exchange(h, false); x4_http_close(h);
+ X4Http *h=open_context();unsigned before=x4tf.connections;
+ for(unsigned i=0;i<6;++i){public_exchange(h,false);public_exchange(h,true);}
+ CHECK(x4tf.connections-before==2&&public_connections==2&&!private_connections&&x4tf.live_connections==2);
+ char body[64];size_t length;int status;before=x4tf.connections;
+ CHECK(!x4_http_request(h,"https://login.microsoftonline.com/consumers/oauth2","test=credential",body,sizeof(body),&length,&status,NULL));
+ CHECK(x4tf.connections==before+1&&private_connections==1&&x4tf.live_connections==2);
+ CHECK(!x4_http_public_reset(h)&&!x4tf.live_connections);
+ CHECK(x4tf.connection_closes==3);public_exchange(h,false);x4_http_close(h);
+ CHECK(!x4tf.live_connections&&!x4tf.live_contexts);
 }
 static void test_retry_and_cancellation(void)
 {
-    X4Http *h = open_context(); public_exchange(h, false); unsigned before = sends;
-    fail_send = true; public_exchange(h, false); CHECK(sends - before == 2);
-    before = sends; fail_read = true; public_exchange(h, false); CHECK(sends - before == 2);
-    CHECK(!x4_http_public_reset(h));
-    char body[64]; size_t length = 0; int status = 0; fail_send = true; before = sends;
-    CHECK(x4_http_public_metadata_request(h, store, body, sizeof(body), &length, &status, NULL) == -77);
-    CHECK(sends - before == 1 && !body[0] && !length && !status);
-    public_exchange(h, false);
-    _Atomic int cancel = 0; cancel_during_send = &cancel; before = sends;
-    CHECK(x4_http_public_metadata_request(h, store, body, sizeof(body), &length, &status, &cancel) == X4_HTTP_CANCELLED);
-    CHECK(sends - before == 1 && !length && !status && !body[0]); CHECK(h->public_connection[0].conn == -1);
-    cancel_during_send = NULL; public_exchange(h, false);
-    response_body = "an oversized response"; before = sends;
-    CHECK(x4_http_public_metadata_request(h, store, body, 4, &length, &status, NULL) == X4_HTTP_BOUND);
-    CHECK(sends - before == 1 && !length && !status && !body[0]);
-    response_body = "{}"; x4_http_close(h);
+ X4Http *h=open_context();public_exchange(h,false);unsigned before=x4tf.writes;
+ x4tf.fail_write=true;public_exchange(h,false);CHECK(x4tf.writes-before==2);
+ before=x4tf.requests;x4tf.fail_read=true;public_exchange(h,false);CHECK(x4tf.requests-before==2);
+ CHECK(!x4_http_public_reset(h));char body[64];size_t length=0;int status=0;
+ x4tf.fail_write=true;before=x4tf.writes;
+ CHECK(x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,NULL)==X4_TF_RESET);
+ CHECK(x4tf.writes-before==1&&!body[0]&&!length&&!status);
+ public_exchange(h,false);
+ /* A byte of HTTP status is enough to forbid replay; it need not be body. */
+ x4tf.read_fragment=1;x4tf.fail_read_after=1;before=x4tf.requests;
+ CHECK(x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,NULL)==X4_TF_RESET);
+ CHECK(x4tf.requests-before==1&&!body[0]&&!length&&!status);
+ x4tf.read_fragment=0;public_exchange(h,false);
+ _Atomic int cancel=0;x4tf.cancel_during_write=&cancel;before=x4tf.writes;
+ CHECK(x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,&cancel)==X4_HTTP_CANCELLED);
+ CHECK(x4tf.writes-before==1&&!length&&!status&&!body[0]&&!x4tf.live_connections);
+ x4tf.cancel_during_write=NULL;public_exchange(h,false);
+ response_body="an oversized response";before=x4tf.requests;
+ CHECK(x4_http_public_metadata_request(h,store,body,4,&length,&status,NULL)==X4_HTTP_BOUND);
+ CHECK(x4tf.requests-before==1&&!length&&!status&&!body[0]);response_body="{}";
+ /* A POST is never replayed, irrespective of a prior public connection. */
+ x4tf.fail_write=true;before=x4tf.writes;
+ CHECK(x4_http_request(h,"https://login.microsoftonline.com/consumers/oauth2","test=credential",body,sizeof(body),&length,&status,NULL)==X4_TF_RESET);
+ CHECK(x4tf.writes-before==1&&!length&&!status&&!body[0]);x4_http_close(h);
+ CHECK(!x4tf.live_connections&&!x4tf.live_contexts);
 }
+static void test_metadata_bound_closes(void)
+{
+ const size_t cap=1024u*1024u+1u;
+ char *oversized=malloc(cap+1),*body=malloc(cap);
+ CHECK(oversized&&body);
+ memset(oversized,'a',cap);oversized[cap]=0;
+ X4Http *h=open_context();size_t length=9;int status=9;
+ response_body=oversized;
+ CHECK(x4_http_public_metadata_request(h,store,body,cap,&length,&status,NULL)==X4_HTTP_BOUND);
+ CHECK(!length&&!status&&!body[0]&&!x4tf.live_connections);
+ unsigned connected=x4tf.connections;
+ response_body="{}";public_exchange(h,false);
+ CHECK(x4tf.connections==connected+1);
+ x4_http_close(h);free(body);free(oversized);
+ CHECK(!x4tf.live_connections&&!x4tf.live_contexts);
+}
+
 static void test_policy_and_owner(void)
 {
-    X4Http *h = open_context(); char body[64]; size_t length; int status; unsigned before = connections;
-    const char *bad[] = {"http://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details",
-        "https://displaycatalog.mp.microsoft.com:443/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details",
-        "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details&token=x",
-        "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1,,ID2&market=MX&languages=es-MX&fieldsTemplate=Details",
-        "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8,I9&market=MX&languages=es-MX&fieldsTemplate=Details",
-        "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=../bad&market=MX&languages=es-MX&fieldsTemplate=Details",
-        "https://region.gssv-play-prod.xboxlive.com/v2/titles", "https://login.live.com/oauth20_token.srf"};
-    for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); ++i)
-        CHECK(x4_http_public_metadata_request(h, bad[i], body, sizeof(body), &length, &status, NULL) == X4_HTTP_URL);
-    CHECK(connections == before);
-    const char *batch = "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8&market=MX&languages=es-MX&fieldsTemplate=Details";
-    CHECK(!x4_http_public_metadata_request(h, batch, body, sizeof(body), &length, &status, NULL));
-    CHECK(x4_http_public_image_request(h, store, (unsigned char *)body, sizeof(body), &length, &status, NULL) == X4_HTTP_URL);
-    atomic_store(&h->busy, true); int conn = h->public_connection[0].conn;
-    CHECK(x4_http_public_reset(h) == X4_HTTP_BUSY);
-    CHECK(x4_http_public_metadata_request(h, store, body, sizeof(body), &length, &status, NULL) == X4_HTTP_BUSY);
-    CHECK(h->public_connection[0].conn == conn); atomic_store(&h->busy, false);
-    response_status = 302; public_exchange(h, false); response_status = 200;
-    x4_http_close(h);
+ X4Http *h=open_context();char body[64];size_t length;int status;unsigned before=x4tf.connections;
+ const char *bad[]={"http://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details",
+  "https://displaycatalog.mp.microsoft.com:443/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details",
+  "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1&market=MX&languages=es-MX&fieldsTemplate=Details&token=x",
+  "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1,,ID2&market=MX&languages=es-MX&fieldsTemplate=Details",
+  "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8,I9&market=MX&languages=es-MX&fieldsTemplate=Details",
+  "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=../bad&market=MX&languages=es-MX&fieldsTemplate=Details",
+  "https://region.gssv-play-prod.xboxlive.com/v2/titles","https://login.live.com/oauth20_token.srf"};
+ for(size_t i=0;i<sizeof(bad)/sizeof(*bad);++i)CHECK(x4_http_public_metadata_request(h,bad[i],body,sizeof(body),&length,&status,NULL)==X4_HTTP_URL);
+ CHECK(x4tf.connections==before);
+ const char *batch="https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8&market=MX&languages=es-MX&fieldsTemplate=Details";
+ CHECK(!x4_http_public_metadata_request(h,batch,body,sizeof(body),&length,&status,NULL));
+ CHECK(x4_http_public_image_request(h,store,(unsigned char *)body,sizeof(body),&length,&status,NULL)==X4_HTTP_URL);
+ reentry_http=h;exercise_reentry=true;public_exchange(h,false);CHECK(!exercise_reentry);
+ response_status=302;before=x4tf.requests;public_exchange(h,false);
+ CHECK(x4tf.requests==before+1);response_status=200;x4_http_close(h);
+}
+static uint64_t retry_headers(const char *headers,int64_t now)
+{
+ char wire[1024],body[8];X4HttpWire parser;
+ int count=snprintf(wire,sizeof(wire),"HTTP/1.1 429 Fake\r\nContent-Length: 0\r\n%s\r\n",headers);
+ CHECK(count>0&&(size_t)count<sizeof(wire));x4_http_wire_init(&parser,body,sizeof(body),now);
+ size_t used=0;CHECK(x4_http_wire_feed(&parser,wire,(size_t)count,&used)==X4_HTTP_WIRE_DONE);
+ CHECK(used==(size_t)count);return x4_http_wire_result(&parser).retry_after_ms;
+}
+
+static void test_sigl_policy(void)
+{
+ X4Http *h = open_context();
+ char body[64];
+ size_t length = 0;
+ int status = 0;
+ const char *const allowed[] = {
+  X4_SIGL_URL_PREFIX "d8f4afcd-882a-49e3-86b3-f61fa0172b75&market=MX&language=es-MX",
+  X4_SIGL_URL_PREFIX "06323672-b8c8-43cc-b0de-32d5a9834749&market=MX&language=es-MX",
+  X4_SIGL_URL_PREFIX "6a589fa0-d493-472b-8e20-3813699d7056&market=MX&language=es-MX",
+  X4_SIGL_URL_PREFIX "31ff2361-2772-4622-849b-f4f1abb4ad1b&market=MX&language=es-MX",
+ };
+ public_exchange(h, false);
+ unsigned before = x4tf.requests;
+ for (size_t i=0; i<sizeof(allowed)/sizeof(*allowed); ++i) {
+  CHECK(!x4_http_public_metadata_request(h, allowed[i], body, sizeof(body), &length, &status, NULL));
+  CHECK(status==200 && length==2 && !strcmp(body, "{}"));
+ }
+ CHECK(x4tf.requests==before+4 && x4tf.live_connections==1);
+ const char *const rejected[] = {
+  X4_SIGL_URL_PREFIX "af206485-e87d-4624-9007-cb7f6d0cc42e&market=MX&language=es-MX",
+  X4_SIGL_URL_PREFIX "00000000-0000-0000-0000-000000000000&market=MX&language=es-MX",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=US&language=es-MX",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=MX&language=en-US",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=MX&language=es-MX&extra=1",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&language=es-MX&market=MX",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=MX&languages=es-MX",
+  X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=MX&language=es-MX#extra",
+  "https://catalog.gamepass.com.invalid/sigls/v2?id=" X4_SIGL_GUID_FREE "&market=MX&language=es-MX",
+  "https://catalog.gamepass.com:443/sigls/v2?id=" X4_SIGL_GUID_FREE "&market=MX&language=es-MX",
+  "https://catalog.gamepass.com/sigls/v1?id=" X4_SIGL_GUID_FREE "&market=MX&language=es-MX",
+ };
+ before = x4tf.connections;
+ for (size_t i=0; i<sizeof(rejected)/sizeof(*rejected); ++i) {
+  CHECK(x4_http_public_metadata_request(h, rejected[i], body, sizeof(body), &length, &status, NULL)
+    == X4_HTTP_URL);
+ }
+ CHECK(x4_http_public_image_request(h, allowed[0], (unsigned char *)body, sizeof(body),
+   &length, &status, NULL) == X4_HTTP_URL);
+ CHECK(x4tf.connections==before);
+
+ market = "GB";
+ locale = "en-GB";
+ const char *british = X4_SIGL_URL_PREFIX X4_SIGL_GUID_FREE "&market=GB&language=en-GB";
+ CHECK(!x4_http_public_metadata_request(h, british, body, sizeof(body), &length, &status, NULL));
+ CHECK(x4_http_public_metadata_request(h, allowed[0], body, sizeof(body), &length, &status, NULL)
+   == X4_HTTP_URL);
+ market = "MX";
+ locale = "es-MX";
+
+ x4tf.fail_read = true;
+ before = x4tf.requests;
+ CHECK(x4_http_public_metadata_request(h, allowed[0], body, sizeof(body), &length, &status, NULL)
+   == X4_TF_RESET);
+ CHECK(x4tf.requests==before+1 && !length && !status && !body[0] && x4tf.live_connections==1);
+ before = x4tf.connections;
+ public_exchange(h, false);
+ CHECK(x4tf.connections==before);
+ x4_http_close(h);
+ CHECK(!x4tf.live_connections && !x4tf.live_contexts);
 }
 static void test_retry_after(void)
 {
-    CHECK(retry_after_value("15", 2, 0) == 15000);
-    CHECK(retry_after_value("-1", 2, 0) == 0); CHECK(retry_after_value("1.5", 3, 0) == 0);
-    CHECK(retry_after_value("999999999999999999999", 21, 0) == UINT64_MAX);
-    CHECK(retry_after_value("Sun, 06 Nov 1994 08:49:37 GMT", 29, 784111767) == 10000);
-    CHECK(retry_after_value("Sun, 06 Nov 1994 08:49:37 GMT", 29, 784111778) == 0);
-    CHECK(retry_after_value("Tue, 29 Feb 2000 00:00:00 GMT", 29, 951782390) == 10000);
-    CHECK(retry_after_value("Tue, 29 Feb 2001 00:00:00 GMT", 29, 0) == 0);
-    const char *delta_headers = "HTTP/1.1 429\r\nretry-after:\t5 \r\n\r\n";
-    CHECK(retry_after_headers(delta_headers, strlen(delta_headers) + 1, 0) == 5000);
-    const char *duplicate = "Retry-After: 5\r\nRetry-After: 6\r\n";
-    CHECK(retry_after_headers(duplicate, strlen(duplicate), 0) == 0);
-    CHECK(retry_after_headers("Retry-After: invalid\r\n", 22, 0) == 0);
-    X4Http *h = open_context(); response_status = 429; response_headers = "HTTP/1.1 429\r\nRetry-After: 15\r\n\r\n";
-    unsigned before = sends; public_exchange(h, false); CHECK(sends - before == 1);
-    CHECK(x4_http_public_retry_after_ms(h) == 15000);
-    response_status = 200; response_headers = "HTTP/1.1 200\r\n\r\n"; public_exchange(h, true);
-    CHECK(!x4_http_public_retry_after_ms(h)); x4_http_close(h);
-    missing_header_api = true; h = open_context(); public_exchange(h, false);
-    CHECK(!x4_http_public_retry_after_ms(h)); x4_http_close(h); missing_header_api = false;
+ CHECK(x4_http_wire_retry_after("15",2,0)==15000);
+ CHECK(x4_http_wire_retry_after("-1",2,0)==0);CHECK(x4_http_wire_retry_after("1.5",3,0)==0);
+ CHECK(x4_http_wire_retry_after("999999999999999999999",21,0)==UINT64_MAX);
+ CHECK(x4_http_wire_retry_after("Sun, 06 Nov 1994 08:49:37 GMT",29,784111767)==10000);
+ CHECK(x4_http_wire_retry_after("Sun, 06 Nov 1994 08:49:37 GMT",29,784111778)==0);
+ CHECK(x4_http_wire_retry_after("Tue, 29 Feb 2000 00:00:00 GMT",29,951782390)==10000);
+ CHECK(x4_http_wire_retry_after("Tue, 29 Feb 2001 00:00:00 GMT",29,0)==0);
+ CHECK(retry_headers("retry-after:\t5 \r\n",0)==5000);
+ CHECK(retry_headers("Retry-After: 5\r\nRetry-After: 6\r\n",0)==0);
+ CHECK(retry_headers("Retry-After: invalid\r\n",0)==0);
+ X4Http *h=open_context();response_status=429;response_headers="HTTP/1.1 429\r\nRetry-After: 15\r\n\r\n";
+ unsigned before=x4tf.requests;public_exchange(h,false);CHECK(x4tf.requests-before==1&&x4_http_public_retry_after_ms(h)==15000);
+ response_status=200;response_headers="HTTP/1.1 200\r\n\r\n";public_exchange(h,true);
+ CHECK(!x4_http_public_retry_after_ms(h));x4_http_close(h);
+ /* No optional sceHttp header API exists now: an absent wire field is the
+  * equivalent unknown Retry-After result and cannot fail authentication. */
+ h=open_context();public_exchange(h,false);CHECK(!x4_http_public_retry_after_ms(h));x4_http_close(h);
 }
 static void test_quarantine(void)
 {
-    X4Http *h = open_context(); public_exchange(h, false);
-    PublicConnection saved = h->public_connection[0];
-    fail_delete_connection = true; CHECK(x4_http_public_reset(h) == X4_HTTP_UNUSABLE);
-    CHECK(h->quarantined && h->unusable && h->public_connection[0].conn == saved.conn &&
-        h->public_connection[0].anchor == saved.anchor);
-    unsigned before = terminated; x4_http_close(h); CHECK(terminated == before);
-    /* Fixture-only reclamation: no native object exists after mock_delete,
-     * so intentional process-lifetime quarantine need not leak under ASan. */
-    fail_delete_connection = false; CHECK(!mock_delete_connection(saved.conn)); CHECK(!mock_delete_template(saved.tmpl));
-    free_public_owned(&saved.anchor);
-    h = open_context(); public_exchange(h, false); saved = h->public_connection[0];
-    fail_delete_request = true; char body[64]; size_t length; int status;
-    CHECK(x4_http_public_metadata_request(h, store, body, sizeof(body), &length, &status, NULL) == X4_HTTP_UNUSABLE);
-    CHECK(h->quarantined && !length && !status && !body[0]);
-    unsigned retained_request = next_id;
-    Owned *retained_input = (Owned *)((char *)resource[retained_request].borrowed_url - offsetof(Owned, text));
-    x4_http_close(h); fail_delete_request = false;
-    CHECK(!mock_delete_request((int32_t)retained_request)); CHECK(!mock_delete_connection(saved.conn)); CHECK(!mock_delete_template(saved.tmpl));
-    free_public_owned(&retained_input); free_public_owned(&saved.anchor);
+ X4Http *h=open_context();public_exchange(h,false);unsigned before=x4tf.connection_closes;
+ x4tf.fail_close=true;CHECK(x4_http_public_reset(h)==X4_HTTP_UNUSABLE);
+ char body[64];size_t length;int status;
+ CHECK(x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,NULL)==X4_HTTP_UNUSABLE);
+ x4_http_close(h);CHECK(x4tf.connection_closes==before&&x4tf.live_connections==1&&x4tf.live_contexts==1);
+ reclaim_fake_quarantine();
+ h=open_context();public_exchange(h,false);x4tf.fail_read=x4tf.fail_close=true;
+ CHECK(x4_http_public_metadata_request(h,store,body,sizeof(body),&length,&status,NULL)==X4_HTTP_UNUSABLE);
+ CHECK(!length&&!status&&!body[0]);x4_http_close(h);CHECK(x4tf.live_connections&&x4tf.live_contexts);
+ reclaim_fake_quarantine();
 }
 int main(void)
 {
-    test_reuse_isolation_cleanup(); test_retry_and_cancellation(); test_policy_and_owner(); test_retry_after(); test_quarantine();
-    printf("production public HTTP fixture PASS: %u checks; %u public connections, %u requests\n", checks, public_connections, requests);
-    return 0;
+ test_reuse_isolation_cleanup();test_retry_and_cancellation();test_metadata_bound_closes();test_policy_and_owner();test_sigl_policy();
+ test_retry_after();test_quarantine();
+ printf("production public HTTP PASS: %u policy checks; real request wire with deterministic TLS, no network\n",checks);
+ return 0;
 }

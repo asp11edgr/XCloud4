@@ -16,16 +16,22 @@ bool x4ReceiverNackAcceptsNack(const std::string &format,
 message_ptr x4ReceiverNackPacket(uint32_t senderSsrc, uint32_t epoch,
     const X4ReceiverNackGap &gap, uint64_t pending, uint64_t dispatchTime,
     const char *cname, size_t cnameBytes);
+message_ptr x4ReceiverNackPacketWide(uint32_t senderSsrc, uint32_t epoch,
+    const X4ReceiverNackGap &gap, const uint64_t pending[X4_RECEIVER_NACK_MASK_WORDS],
+    uint64_t dispatchTime, const char *cname, size_t cnameBytes, unsigned *fciCount);
 class X4ReceiverNack final : public MediaHandler {
 public:
-    X4ReceiverNack(bool enabled, uint32_t epoch);
+    X4ReceiverNack(bool enabled, uint32_t epoch, bool legacy = true, bool grace43c = false,
+        bool policy46b = false);
     ~X4ReceiverNack() override;
     void media(const Description::Media &description) override;
     void acceptedFeedback(bool accepted);
     void incoming(message_vector &messages, const message_callback &send) override;
     int poll(const std::function<bool(message_ptr)> &send);
     int close();
-    bool sameConfiguration(bool enabled, uint32_t epoch) const;
+    bool sameConfiguration(bool enabled, uint32_t epoch, bool legacy = true, bool grace43c = false,
+        bool policy46b = false) const;
+    bool metrics(X4ReceiverNackMetrics &out);
     void duplicateInstall();
 private:
     struct Request { X4ReceiverNackGap gap{}; bool queued = false; };
@@ -34,8 +40,6 @@ private:
         uint16_t &sequence, uint32_t &timestamp, uint8_t &payloadType);
     static uint64_t sourceKey(uint32_t ssrc);
     uint64_t identity(uint64_t request) const;
-    message_ptr packet(const X4ReceiverNackGap &gap, uint64_t pending,
-        uint64_t dispatchTime);
     void counters();
     void suppress(const X4ReceiverNackGap &gap, unsigned reason, uint64_t positions);
     void graceControl(const X4ReceiverNackGap &gap, unsigned kind,
@@ -43,7 +47,13 @@ private:
         int localResult, unsigned reason);
     void sequenceControl(uint32_t ssrc, const X4NackSequenceTag &sequence);
     void resetObserver(unsigned locus);
-    const bool mEnabled;
+    void takeFirstDispatch();
+    const bool mEnabled, mLegacy, mGrace43c, mPolicy46b;
+    std::atomic<int> mLastRtt{-1};
+    std::atomic<uint64_t> mNextDue{0}, mFciTotal{0}, mRtcpPackets{0};
+    // The poll owner publishes before send, and consumes the previous pair
+    // under mGate before selecting another first attempt.
+    std::atomic<uint64_t> mFirstDispatchTime{0}, mFirstDispatchRequest{0};
     const uint32_t mEpoch;
     uint32_t mSenderSsrc;
     std::array<char, 35> mCname{};

@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "live_h264.h"
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+#include "probe_t26_v2_abi_check.h"
+#endif
 #include "videodec2_abi.h"
 #include "probe_case.h"
 #if X4_STREAM_PROFILE
@@ -75,6 +78,10 @@ typedef struct {
 } CopyHelper;
 
 struct VideoState {
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    bool t26;
+    X4T26NativeOptions t26_options;
+#endif
 #if X4_STREAM_PROFILE
     bool stream_raw;
     const atomic_bool *stream_cancel;
@@ -287,6 +294,13 @@ int x4_live_video_stop(X4LiveVideo *v)
 #endif
     /* Do not free buffers still owned by the decoder if teardown fails. */
     if (s->decoder) {
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+        if(s->t26&&s->t26_options.before){
+            int marker=s->t26_options.before(s->t26_options.context,"DeleteDecoder");
+            if(marker){v->stream_info.close_result=marker;v->stream_info.retained=true;
+                return stage(v,"MARCADOR DELETE T26",marker);}
+        }
+#endif
         int rc = s->DeleteDecoder(s->decoder);
 #if X4_STREAM_PROFILE
         if(s->stream_raw) { v->stream_info.delete_decoder_result=rc; v->stream_info.retained=rc!=0; }
@@ -1435,7 +1449,11 @@ static int stream_allocate(VideoState *s,Memory *m,size_t size,int type,size_t a
 /* Separate SPS-driven raw route. The legacy/probe configuration above stays
  * intact; Query/Create share each attempt's exact configuration and depth. */
 static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
-    const atomic_bool *cancel,X4StreamDecoderAttempt *a,bool *retryable)
+    const atomic_bool *cancel,X4StreamDecoderAttempt *a,bool *retryable
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    ,const X4T26NativeOptions *t26
+#endif
+    )
 {
     *retryable=false;
     a->compute_query=a->allocate_queue=a->query=a->create=a->cleanup=INT32_MIN;
@@ -1448,6 +1466,9 @@ static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
     v->stream_info.queried_shared_bytes=v->stream_info.queried_frame_bytes=0;
     VideoState *s=calloc(1,sizeof(*s));if(!s)return stage(v,"MEMORIA DIRECTA",-5);
     v->state=s;s->stream_raw=true;s->stream_cancel=cancel;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26){s->t26=true;s->t26_options=*t26;}
+#endif
     int rc=x4_decoder_depth_init(&s->stream_depth,a->depth);if(rc)return stage(v,"PROFUNDIDAD STREAM",rc);
     v->stream_info.input_count=s->stream_depth.input_count;
     v->stream_info.output_count=s->stream_depth.output_count;
@@ -1462,14 +1483,32 @@ static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
     STREAM_SYMBOL(QueryDecoderMemoryInfo);STREAM_SYMBOL(CreateDecoder);STREAM_SYMBOL(DeleteDecoder);STREAM_SYMBOL(Decode);STREAM_SYMBOL(Flush);
 #undef STREAM_SYMBOL
     OrbisVideodec2ComputeMemoryInfo cm={.thisSize=sizeof(cm)};
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    /* Unknown resource types are queried without inventing a compute queue.
+     * The same queue-less configuration reaches Create only after Query=0. */
+    if(!t26||t26->config.resource_type==1){
+    if(t26&&t26->before&&(rc=t26->before(t26->context,"v2.QueryComputeMemoryInfo")))
+        return stage(v,"T26 MARCADOR QUERY COMPUTE",rc);
+#endif
     rc=s->QueryComputeMemoryInfo(&cm);a->compute_query=v->stream_info.compute_query_result=rc;
     a->compute_bytes=v->stream_info.queried_compute_bytes=cm.cpuGpuMemorySize;if(rc)return stage(v,"QUERY COMPUTE",rc<0?rc:-rc);
     if(cm.cpuGpuMemorySize>MAX_MEMORY){*retryable=true;a->failure_reason=X4_STREAM_POLICY_QUERY_BUDGET;return stage(v,"PRESUPUESTO COMPUTE",-6);}
     rc=stream_allocate(s,&s->compute,cm.cpuGpuMemorySize,0,0x4000);if(rc<0)return stage(v,"MEMORIA COMPUTE",rc);
     cm.pCpuGpuMemory=s->compute.p;
     OrbisVideodec2ComputeConfigInfo cc={.thisSize=sizeof(cc),.computePipeId=0,.computeQueueId=0};
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26){cc.computePipeId=(uint16_t)t26->config.pipe_id;cc.computeQueueId=(uint16_t)t26->config.queue_id;}
+    if(t26&&t26->before&&(rc=t26->before(t26->context,"v2.AllocateComputeQueue")))
+        return stage(v,"T26 MARCADOR COLA",rc);
+#endif
     rc=s->AllocateComputeQueue(&cc,&cm,&s->queue);a->allocate_queue=v->stream_info.allocate_queue_result=rc;if(rc)return stage(v,"COLA COMPUTE",rc<0?rc:-rc);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    }
+#endif
     X4StreamCpuConfig cpu=x4_stream_cpu_config(v->stream_info.cpu_variant);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26){cpu.decoder_priority=t26->config.priority;cpu.decoder_affinity=t26->config.affinity_mask;}
+#endif
     v->stream_info.decoder_cpu_priority=cpu.decoder_priority;
     v->stream_info.decoder_cpu_affinity=cpu.decoder_affinity;
     OrbisVideodec2DecoderConfigInfo cfg={.thisSize=sizeof(cfg),.resourceType=1,.codecType=1,
@@ -1478,9 +1517,16 @@ static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
         .maxDpbFrameCount=(int)a->dpb,.decodePipelineDepth=(int)a->depth,
         .computeQueue=s->queue,.cpuAffinityMask=cpu.decoder_affinity,.cpuThreadPriority=cpu.decoder_priority,
         .optimizeProgressiveVideo=true,.checkMemoryType=false};
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26)cfg.resourceType=t26->config.resource_type;
+#endif
     OrbisVideodec2DecoderMemoryInfo mem={.thisSize=sizeof(mem)};
     printf("XCloud4: stream CPU-%u native decoder priority=%d affinity=0x%llx (same Query/Create configuration)\n",
         cpu.variant,cpu.decoder_priority,(unsigned long long)cpu.decoder_affinity);
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26&&t26->before&&(rc=t26->before(t26->context,"v2.QueryDecoderMemoryInfo")))
+        return stage(v,"T26 MARCADOR QUERY DECODER",rc);
+#endif
     rc=s->QueryDecoderMemoryInfo(&cfg,&mem);a->query=v->stream_info.query_result=rc;
     a->cpu_bytes=v->stream_info.queried_cpu_bytes=mem.cpuMemorySize;a->gpu_bytes=v->stream_info.queried_gpu_bytes=mem.gpuMemorySize;
     a->shared_bytes=v->stream_info.queried_shared_bytes=mem.cpuGpuMemorySize;a->frame_bytes=v->stream_info.queried_frame_bytes=mem.maxFrameBufferSize;
@@ -1519,8 +1565,20 @@ static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
     Memory *owned[]={&s->cpu,&s->gpu,&s->shared};size_t lengths[]={mem.cpuMemorySize,mem.gpuMemorySize,mem.cpuGpuMemorySize};
     for(unsigned i=0;i<3;++i){rc=stream_allocate(s,owned[i],lengths[i],i==1?3:0,0x4000);if(rc<0)return stage(v,"MEMORIA DECODER",rc);}
     for(unsigned i=0;i<s->stream_depth.input_count;++i){rc=stream_allocate(s,&s->input[i],X4_LIVE_AU_MAX,0,0x4000);if(rc<0)return stage(v,"MEMORIA ENTRADA",rc);}
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    for(unsigned i=0;i<s->stream_depth.output_count;++i){
+        int output_type=0;
+        if(t26)output_type=t26->config.output_memory_type;
+        rc=stream_allocate(s,&s->output[i],mem.maxFrameBufferSize,output_type,mem.frameBufferAlignment);if(rc<0)return stage(v,"MEMORIA SALIDA",rc);
+    }
+#else
     for(unsigned i=0;i<s->stream_depth.output_count;++i){rc=stream_allocate(s,&s->output[i],mem.maxFrameBufferSize,0,mem.frameBufferAlignment);if(rc<0)return stage(v,"MEMORIA SALIDA",rc);}
+#endif
     s->frame_size=mem.maxFrameBufferSize;mem.pCpuMemory=s->cpu.p;mem.pGpuMemory=s->gpu.p;mem.pCpuGpuMemory=s->shared.p;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26&&t26->before&&(rc=t26->before(t26->context,"v2.CreateDecoder")))
+        return stage(v,"T26 MARCADOR CREATE",rc);
+#endif
     rc=s->CreateDecoder(&cfg,&mem,&s->decoder);a->create=v->stream_info.create_result=rc;
     printf("XCloud4: stream Create attempt=%u fallback=%u depth=%u rc=%d\n",v->stream_info.attempt_count,a->fallback,a->depth,rc);
     if(rc){*retryable=true;a->failure_reason=X4_STREAM_POLICY_NATIVE;return stage(v,"CREATE DECODER",rc<0?rc:-rc);}
@@ -1529,6 +1587,13 @@ static int stream_start_attempt(X4LiveVideo *v,const X4StreamSps *parsed,
         return stage(v,"HANDLE DECODER INVALIDO",-7);
     }
     v->width=parsed->visible_width;v->height=parsed->visible_height;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(t26)printf("XCloud4 T26: native v2 depth=%u resource=%u pipe=%u queue=%u priority=%d affinity=0x%llx output_memory=%d query_bytes=%zu\n",
+        a->depth,t26->config.resource_type,t26->config.pipe_id,t26->config.queue_id,
+        t26->config.priority,(unsigned long long)t26->config.affinity_mask,
+        t26->config.output_memory_type,total);
+    else
+#endif
     printf("XCloud4: stream SPS profile=%u constraints=%u level=%u visible=%ux%u coded=%ux%u dpb=%u native_bytes=%zu output_memory=WB_ONION depth=%u\n",
         parsed->profile_idc,parsed->constraints,parsed->level_idc,parsed->visible_width,parsed->visible_height,
         parsed->coded_width,parsed->coded_height,parsed->max_dec_frame_buffering,total,a->depth);
@@ -1620,7 +1685,11 @@ int x4_live_video_stream_raw_start_cpu_depth(X4LiveVideo *v,const uint8_t *sps,s
              * local admission checks. A rejected depth-two call may itself
              * publish cancel, so merely making a retry eligible is not use. */
             if(active_depth!=depth)v->stream_info.depth_fallback_used=true;
-            rc=stream_start_attempt(v,&v->stream_info.sps,cancel,a,&retryable);
+            rc=stream_start_attempt(v,&v->stream_info.sps,cancel,a,&retryable
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+                ,NULL
+#endif
+                );
             if(!rc)return 0;
             snprintf(a->failure_stage,sizeof(a->failure_stage),"%s",v->stage);
             last_error=rc;
@@ -1640,6 +1709,53 @@ int x4_live_video_stream_raw_start_cpu_depth(X4LiveVideo *v,const uint8_t *sps,s
     }
     return stage(v,"CONFIGURACIONES DECODER AGOTADAS",last_error);
 }
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+int x4_live_video_t26_raw_start(X4LiveVideo *v,const uint8_t *sps,size_t bytes,
+    const atomic_bool *cancel,const X4T26NativeOptions *options)
+{
+    if(!v||v->state||!cancel||!options||!x4_t26_config_valid(&options->config)||
+        options->config.api!=X4_T26_API_V2)return -7;
+    memset(v,0,sizeof(*v));
+    v->stream_info.requested_depth=options->config.depth;
+    int rc=x4_stream_sps_inspect_diagnostic(sps,bytes,&v->stream_info.sps,
+        &v->stream_info.sps_diagnostics);
+    if(rc)return stage(v,"T26 SPS",rc);
+    const X4StreamSps *sp=&v->stream_info.sps;
+    if(sp->profile_idc!=77||sp->level_idc!=42||sp->max_num_ref_frames!=1||
+        !sp->frame_mbs_only_flag)return stage(v,"T26 PERFIL DE MUESTRA",-7);
+    X4StreamDecoderAttempt *a=&v->stream_info.attempts[0];
+    *a=(X4StreamDecoderAttempt){.profile=sp->profile_idc,.level=sp->level_idc,
+        .width=sp->coded_width,.height=sp->coded_height,
+        /* One reference in the bitstream is not the native DPB allocation
+         * ceiling. Preserve the production floor of four for this base. */
+        .dpb=4,
+        .depth=options->config.depth,.kind=X4_STREAM_ATTEMPT_SPS,
+        .dpb_requested=4,.dpb_minimum=sp->max_num_ref_frames};
+    v->stream_info.attempt_count=1;
+    v->stream_info.active_attempt=0;
+    bool ignored_retryable=false;
+    /* A measurement never substitutes a different depth, engine, SPS profile
+     * or geometry after rejection. Caller still performs safe close. */
+    return stream_start_attempt(v,sp,cancel,a,&ignored_retryable,options);
+}
+
+unsigned x4_live_video_t26_allocations(const X4LiveVideo *v,
+    X4T26Allocation out[X4_T26_ALLOCATION_MAX])
+{
+    const VideoState *s=v?v->state:NULL;
+    if(!s||!s->stream_raw||!s->t26||!out)return 0;
+    const Memory *fixed[]={&s->compute,&s->cpu,&s->gpu,&s->shared};
+    unsigned count=0;
+    for(unsigned i=0;i<4;++i)if(fixed[i]->allocated)
+        out[count++]=(X4T26Allocation){fixed[i]->offset,fixed[i]->size,i==2?3:0};
+    for(unsigned i=0;i<s->stream_depth.input_count;++i)if(s->input[i].allocated)
+        out[count++]=(X4T26Allocation){s->input[i].offset,s->input[i].size,0};
+    for(unsigned i=0;i<s->stream_depth.output_count;++i)if(s->output[i].allocated)
+        out[count++]=(X4T26Allocation){s->output[i].offset,s->output[i].size,
+            s->t26_options.config.output_memory_type};
+    return count;
+}
+#endif
 static int stream_output_fault(X4LiveVideo *v,X4ProbeNativeOutput *out,
     const OrbisVideodec2OutputInfo *native,const char *reason,int rc)
 {
@@ -1697,6 +1813,14 @@ int x4_live_video_stream_raw_decode(X4LiveVideo *v,unsigned offered,const uint8_
     x4_trace_record(v->trace,VT_DECODE_BEGIN,flush?8:0,call,flush?0:v->trace_au);
     uint64_t begin=sceKernelGetProcessTime();int rc=flush?s->Flush(s->decoder,&frame,&o):s->Decode(s->decoder,&input,&frame,&o);
     out->decode_end_us=sceKernelGetProcessTime();out->decode_us=out->decode_end_us-begin;out->accepted=frame.isAccepted;out->native_result=rc;
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    out->t26_native_called=true;
+    out->t26_native_valid=(uint32_t)o.isValid;
+    out->t26_native_error=(uint32_t)o.isErrorFrame;
+    out->t26_picture_count=o.pictureCount;
+    out->t26_native_pointer=o.pFrameBuffer;
+    out->t26_native_bytes=o.frameBufferSize;
+#endif
     if(!flush){
         if(depth_two)x4_decoder_depth_decode_returned(&s->stream_depth);
         else ++s->stream_depth.decode_completed;
@@ -1720,6 +1844,18 @@ int x4_live_video_stream_raw_decode(X4LiveVideo *v,unsigned offered,const uint8_
         printf("XCloud4: Decode rc=%d accepted=%u valid=%u error_frame=%u; ownership uncertain, Delete required\n",rc,frame.isAccepted,o.isValid,o.isErrorFrame);
         return 0;
     }
+#if X4_VIDEO_PROBE && X4_PROBE_T26
+    if(s->t26&&!depth_two&&!flush&&!o.isValid){
+        /* Depth1 has no delayed-output lease ledger. A missing picture is
+         * not proof that the offered reservation is reusable. Stop this
+         * T26 cell before rotating input/offering any buffer again; only a
+         * successful Delete can establish release. Keep native rc/flags exact. */
+        out->ownership_uncertain=true;out->control_result=-7;
+        out->frame_class=X4_STREAM_FRAME_FATAL;++v->no_picture_calls;
+        x4_trace_record(v->trace,VT_NOFRAME,0,call,v->trace_decoder_epoch);
+        return stage(v,"T26 DEPTH1 SIN SALIDA: DELETE REQUERIDO",out->control_result);
+    }
+#endif
     if(!flush&&!depth_two)s->input_slot=(s->input_slot+1)%INPUT_RING;
     if(o.isErrorFrame&&!o.isValid){
         return stream_output_fault(v,out,&o,"ERROR FRAME SIN SALIDA VALIDA",-7);

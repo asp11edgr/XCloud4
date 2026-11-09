@@ -3,6 +3,7 @@
 #include "../src/streaming/rtc_receive_diag.h"
 #include "../src/media/live_trace.h"
 #include <assert.h>
+#include <limits.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -46,7 +47,76 @@ static void *producer(void *unused)
 static void *detacher(void *unused)
 {(void)unused;x4_rtc_receive_detach(handle);atomic_store(&detached,true);return NULL;}
 
-int main(void)
+static void *startup_producer(void *argument)
+{
+    uint64_t now = (uint64_t)(uintptr_t)argument;
+    for (unsigned i = 0; i < 256; ++i) {
+        x4_rtc_diag_startup_pli(now + i);
+        x4_rtc_diag_startup_range(X4_STARTUP_RETURN, 1, now, now + i);
+    }
+    return NULL;
+}
+
+static void startup_fixture(void)
+{
+    static const uint64_t start = 1000000, end = 11000000;
+    static const uint8_t video[12] = {0x80, 102};
+    unsigned current, minimum, maximum;
+    x4_rtc_receive_diag_reset();
+    assert(!x4_rtc_diag_startup_active(start) && !x4_rtc_diag_startup_release_count());
+    x4_rtc_diag_video_grace_stats(0, start, &current, &minimum, &maximum);
+    assert(current == 80 && minimum == 80 && maximum == 80);
+    x4_rtc_diag_record_rtt_sample(16);
+    x4_rtc_diag_video_grace_stats(0, start, &current, &minimum, &maximum);
+    assert(current == 70 && minimum == 70 && maximum == 80);
+    x4_rtc_diag_record_rtt_sample(26);
+    x4_rtc_diag_video_grace_stats(0, start, &current, &minimum, &maximum);
+    assert(current == 95 && minimum == 70 && maximum == 95);
+    x4_rtc_diag_video_presented(start);
+    x4_rtc_diag_video_presented(start + 1000);
+    assert(!x4_rtc_diag_startup_active(start - 1) && x4_rtc_diag_startup_active(start));
+    assert(x4_rtc_diag_startup_active(end - 1) && !x4_rtc_diag_startup_active(end));
+    x4_rtc_diag_video_grace_stats(0, end - 1, &current, &minimum, &maximum);
+    assert(current == 250 && minimum == 70 && maximum == 250);
+    x4_rtc_diag_video_grace_stats(0, end, &current, &minimum, &maximum);
+    assert(current == 95 && minimum == 70 && maximum == 250);
+    /* No SDP SSRC/PT published yet: the primary video PT still counts. */
+    atomic_store(&ticks, start + 999);
+    x4_rtc_receive_packet(X4_RD_UDP, video, sizeof(video), 0, X4_RD_UNAUTHENTICATED);
+    atomic_store(&ticks, start + 1999);
+    x4_rtc_receive_packet(X4_RD_TRACK, video, sizeof(video), 0, X4_RD_AUTHENTICATED);
+    atomic_store(&ticks, start + 184999);
+    x4_rtc_receive_packet(X4_RD_UDP, video, sizeof(video), 0, X4_RD_UNAUTHENTICATED);
+    atomic_store(&ticks, start + 191999);
+    x4_rtc_receive_packet(X4_RD_TRACK, video, sizeof(video), 0, X4_RD_AUTHENTICATED);
+    x4_rtc_diag_startup_release(X4_STARTUP_RELEASE_REPAIRED);
+    x4_rtc_diag_startup_release(X4_STARTUP_RELEASE_CAPACITY);
+    assert(x4_rtc_diag_startup_release_count() == (X4_PUBLIC ? 0 : 2));
+    for (unsigned i = 0; i < 34; ++i)
+        x4_rtc_diag_startup_range(X4_STARTUP_DETECT, i + 1, start + 2000, start + 2000);
+    x4_rtc_diag_startup_range(X4_STARTUP_NACK, 1, start + 2000, start + 4000);
+    x4_rtc_diag_startup_range(X4_STARTUP_RETRY, 1, start + 2000, start + 24000);
+    x4_rtc_diag_startup_range(X4_STARTUP_RETURN, 1, start + 2000, start + 192000);
+    x4_rtc_diag_startup_pli(start + 193000);
+    x4_rtc_diag_startup_report(end - 1, false);
+    x4_rtc_diag_startup_report(end, false);
+    x4_rtc_diag_startup_report(end, true);
+
+    /* Ingress and PLI producers contend with the final report. */
+    x4_rtc_receive_diag_reset();
+    x4_rtc_diag_video_presented(start);
+    pthread_t workers[4];
+    for (unsigned i = 0; i < 4; ++i)
+        assert(!pthread_create(&workers[i], NULL, startup_producer,
+            (void *)(uintptr_t)(start + 1000 + 1000 * i)));
+    x4_rtc_diag_startup_report(start + 100000, true);
+    for (unsigned i = 0; i < 4; ++i) assert(!pthread_join(workers[i], NULL));
+    x4_rtc_diag_startup_report(start + 100000, true);
+    x4_rtc_receive_diag_reset();
+    assert(!x4_rtc_diag_startup_active(start) && !x4_rtc_diag_startup_release_count());
+}
+
+int main(int argc,char **argv)
 {
     uint8_t p[24]={0x80,0x80|102,0xff,0xff,0,0,0,0,0x12,0x34,0x56,0x78};
     x4_rtc_receive_attach(handle);
@@ -131,22 +201,50 @@ int main(void)
     assert(summary.unknown_pt_packets == 1);
     puts("PASS inbound RTP stream breakdown and lowest-level reject counters");
 
-    x4_rtc_diag_record_remote_candidate("candidate:1 1 UDP 2130706431 192.168.1.50 50000 typ host", "video");
-    x4_rtc_diag_record_remote_candidate("candidate:2 1 UDP 1694498815 203.0.113.5 50001 typ srflx raddr 192.168.1.50 rport 50000", "audio");
-    x4_rtc_diag_record_selected_pair("192.168.1.100:54321", "203.0.113.5:50001");
+    static const char host_candidate[] = "candidate:1 1 UDP 2130706431 192.0.2.50 50000 typ host";
+    static const char srflx_candidate[] =
+        "a=candidate:2 1 UDP 1694498815 203.0.113.5 50001 typ srflx raddr 192.0.2.50 rport 50000";
+    x4_rtc_diag_record_remote_candidate(host_candidate, "video");
+    x4_rtc_diag_record_remote_candidate(srflx_candidate, "198.51.100.99");
+    x4_rtc_diag_record_selected_pair(srflx_candidate, host_candidate);
     X4IceConnectionSummary ice_summary;
     x4_rtc_diag_get_ice_summary(&ice_summary);
     assert(ice_summary.remote_candidate_count == 2);
     assert(strcmp(ice_summary.remote_candidates[0].type, "host") == 0);
-    assert(strcmp(ice_summary.remote_candidates[0].ip, "192.168.1.50") == 0);
+    assert(strcmp(ice_summary.remote_candidates[0].ip, "192.0.2.50") == 0);
     assert(ice_summary.remote_candidates[0].port == 50000);
     assert(strcmp(ice_summary.remote_candidates[1].type, "srflx") == 0);
     assert(strcmp(ice_summary.remote_candidates[1].ip, "203.0.113.5") == 0);
     assert(ice_summary.remote_candidates[1].port == 50001);
     assert(ice_summary.has_selected_pair);
-    assert(strcmp(ice_summary.selected_remote, "203.0.113.5:50001") == 0);
-    assert(strcmp(ice_summary.selected_local, "192.168.1.100:54321") == 0);
+    assert(strcmp(ice_summary.selected_remote, host_candidate) == 0);
+    assert(strcmp(ice_summary.selected_local, srflx_candidate) == 0);
     puts("PASS ICE remote candidates and selected candidate pair recording");
+
+    x4_rtc_diag_record_remote_candidate("candidate:3 1 TCP 1677734911 2001:db8::5 50002 typ relay", "video");
+    /* Even an unrecognized type, protocol or MID may not smuggle an address
+     * into a classification field. A non-IP endpoint has no prefix. */
+    x4_rtc_diag_record_remote_candidate("candidate:4 1 2001:db8::9 1 198.51.100.2 50003 typ 2001:db8::7", "video");
+    x4_rtc_diag_record_selected_pair("candidate:5 1 UDP 1 example.invalid 54321 typ host", NULL);
+    x4_rtc_diag_record_selected_pair("candidate:6 1 udp 1 2001:db8:ab12::6 54321 typ host", "[2001:db8::5]:50002");
+    FILE *ice_json=tmpfile();assert(ice_json);
+    fputc('{',ice_json);x4_rtc_diag_write_ice_json(ice_json);fputs("\"end\":true}\n",ice_json);
+    assert(!fflush(ice_json));long json_bytes=ftell(ice_json);assert(json_bytes>0&&json_bytes<8192);
+    rewind(ice_json);char json[8192];assert(fread(json,1,(size_t)json_bytes,ice_json)==(size_t)json_bytes);json[json_bytes]=0;
+#if X4_PUBLIC
+    assert(strstr(json,"\"remote_candidate_counts\":{\"host\":1,\"srflx\":1,\"relay\":1,\"prflx\":0,\"unknown\":1}"));
+    assert(strstr(json,"\"remote_type\":\"relay\",\"transport\":\"TCP\""));
+    assert(!strstr(json,".x.x")&&!strstr(json,"::/32")&&!strstr(json,"2001:db8")&&!strstr(json,"selected_candidate_pair"));
+#else
+    assert(strstr(json,"\"remote_candidates\":[")&&strstr(json,"\"selected_candidate_pair\":{"));
+    assert(strstr(json,"192.0.x.x")&&strstr(json,"2001:db8::/32")&&strstr(json,"\"remote\":\"relay/tcp\""));
+#endif
+    assert(!strstr(json,"candidate:")&&!strstr(json,"\"port\"")&&!strstr(json,"game_server_"));
+    assert(!strstr(json,"192.0.2.")&&!strstr(json,"203.0.113.")&&!strstr(json,"198.51.100."));
+    assert(!strstr(json,"2001:db8::5")&&!strstr(json,"2001:db8:ab12")&&!strstr(json,"50002"));
+    if(argc==2){FILE *copy=fopen(argv[1],"wb");assert(copy);assert(fwrite(json,1,(size_t)json_bytes,copy)==(size_t)json_bytes);assert(!fclose(copy));}
+    assert(!fclose(ice_json));
+    puts("PASS real ICE JSON exporter: public types and protocols; Lab adds masked prefixes");
 
     /* Test RTT sampling, aggregation (p50, p95), and reset */
     x4_rtc_receive_diag_reset();
@@ -187,5 +285,21 @@ int main(void)
     assert(!ice_summary.has_selected_pair);
     puts("PASS RTT sampling, percentile calculation, and clean session reset");
 
-    puts("11 receive bridge cases passed");return 0;
+    assert(x4_rtc_diag_rtt_p50_ms() == -1 && x4_rtc_diag_video_grace_ms() == 60);
+    for (unsigned i = 0; i < X4_RTT_MAX_SAMPLES; ++i)
+        x4_rtc_diag_record_rtt_sample(7);
+    assert(x4_rtc_diag_rtt_p50_ms() == 7 && x4_rtc_diag_video_grace_ms() == 45);
+    for (unsigned i = 0; i < 31; ++i) x4_rtc_diag_record_rtt_sample(26);
+    assert(x4_rtc_diag_rtt_p50_ms() == 26 && x4_rtc_diag_video_grace_ms() == 67);
+    for (unsigned i = 0; i < 31; ++i) x4_rtc_diag_record_rtt_sample(INT_MAX);
+    assert(x4_rtc_diag_video_grace_ms() == 100);
+    x4_rtc_diag_reset_video_rtt();
+    assert(x4_rtc_diag_rtt_p50_ms() == -1 && x4_rtc_diag_video_grace_ms() == 60);
+    x4_rtc_diag_get_rtt_summary(&rtt_sum);
+    assert(rtt_sum.sample_count == X4_RTT_MAX_SAMPLES && rtt_sum.p50 == 7);
+    puts("PASS bounded rolling video RTT, grace clamp, and peer reset");
+
+    startup_fixture();
+    puts("PASS first presentation, adaptive bounds, startup collection/close and reset");
+    puts("12 receive bridge cases passed");return 0;
 }

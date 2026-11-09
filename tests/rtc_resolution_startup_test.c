@@ -50,7 +50,8 @@ void x4_native_random_or_exit(void *data, size_t size)
 }
 void x4_trace_record(X4Trace *trace, uint16_t event, uint16_t flags, uint64_t a, uint64_t b)
 { (void)trace;(void)event;(void)flags;(void)a;(void)b; }
-uint64_t sceKernelGetProcessTime(void) { return 1000000; }
+static uint64_t fixture_clock_us=1000000;
+uint64_t sceKernelGetProcessTime(void) { return fixture_clock_us; }
 
 static X4Rtc *fixture(unsigned profile)
 {
@@ -71,6 +72,9 @@ static X4Rtc *fixture(unsigned profile)
     atomic_init(&rtc->error,0);
     atomic_init(&rtc->startup_complete,false);
     atomic_init(&rtc->input_metadata_sent,false);
+#if !X4_PUBLIC
+    lab_peer_diagnostics_init(rtc);
+#endif
     atomic_flag_clear(&rtc->data_gate);
 #if X4_STREAM_PROFILE
     rtc->request_config=x4_stream_request_config((X4StreamRequestProfile)profile,X4_COLOR_AUTO_709);

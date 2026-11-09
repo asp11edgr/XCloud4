@@ -13,19 +13,42 @@ fi
 PROBE_VARIANT=${X4_PROBE_VARIANT:-}
 PACKAGE_SUFFIX=${X4_PACKAGE_SUFFIX:-}
 STREAM_PROFILE=${X4_STREAM_PROFILE:-0}
+T26_FLAG=${X4_PROBE_T26:-0}
+T27_FLAG=${X4_PROBE_T27:-0}
+case "$T27_FLAG" in 0|1) ;; *) echo 'Invalid explicit T27 flag.' >&2; exit 1 ;; esac
+if [[ "$T27_FLAG" == 1 && ( "$PACKAGE_MODE" != probe || "$PROBE_VARIANT" != t27 || "$T26_FLAG" != 1 ) ]]; then
+    echo 'T27 is exclusive to probe/t27 with reused T26 bank.' >&2; exit 1
+fi
+case "$T26_FLAG" in 0|1) ;; *) echo 'Invalid explicit T26 flag.' >&2; exit 1 ;; esac
+if [[ "$T26_FLAG" == 1 && ( "$PACKAGE_MODE" != probe || "$PROBE_VARIANT" != t26 && "$PROBE_VARIANT" != t27 ) ]]; then
+    echo 'T26 is exclusive to probe mode with variant t26.' >&2; exit 1
+fi
 case "$STREAM_PROFILE" in 0|1|2) ;; *) echo 'Invalid explicit streaming profile.' >&2; exit 1 ;; esac
 # A direct probe packaging invocation must pass the same current-ELF gates as
 # make all, even if a matching stale SELF was left by an earlier build. Run this
 # before creating staging directories or copying anything into the package.
 if [[ "$PACKAGE_MODE" == probe ]]; then
-    [[ "$STREAM_PROFILE" == 0 ]] || { echo 'Local probe must use streaming profile 0.' >&2; exit 1; }
     case "$PROBE_VARIANT" in
-        off) PROBE_CAPACITY=0 ;;
-        on) PROBE_CAPACITY=1 ;;
-        *) echo 'Probe packaging requires explicit off/on variant.' >&2; exit 1 ;;
+        t27)
+            STREAM_PROFILE=${X4_STREAM_PROFILE:-1}
+            [[ "$T27_FLAG" == 1 && "$T26_FLAG" == 1 && "$STREAM_PROFILE" == 1 ]] || { echo 'T27 requires both bank flags and streaming profile1.' >&2; exit 1; }
+            make build/eboot.bin X4_VIDEO_PROBE=1 X4_PROBE_T26=1 X4_PROBE_T27=1 X4_VIDEO_CAPACITY_1080=1 \
+                X4_RECEIVER_NACK=1 X4_NACK_GRACE_MS=45 X4_RUMBLE=0 X4_INGRESS_MODE=mpsc X4_STREAM_PROFILE=1 X4_PUBLIC=0
+            ;;
+        t26)
+            STREAM_PROFILE=${X4_STREAM_PROFILE:-1}
+            [[ "$T26_FLAG" == 1 && "$STREAM_PROFILE" == 1 ]] || { echo 'T26 requires explicit X4_PROBE_T26=1 and streaming profile 1.' >&2; exit 1; }
+            make build/eboot.bin X4_VIDEO_PROBE=1 X4_PROBE_T26=1 X4_VIDEO_CAPACITY_1080=1 \
+                X4_RECEIVER_NACK=1 X4_NACK_GRACE_MS=45 X4_RUMBLE=0 X4_INGRESS_MODE=mpsc X4_STREAM_PROFILE=1 X4_PUBLIC=0
+            ;;
+        off|on)
+            [[ "$T26_FLAG" == 0 && "$STREAM_PROFILE" == 0 ]] || { echo 'Legacy local probe requires streaming profile 0 and no T26 flag.' >&2; exit 1; }
+            if [[ "$PROBE_VARIANT" == on ]]; then PROBE_CAPACITY=1; else PROBE_CAPACITY=0; fi
+            make build/eboot.bin X4_VIDEO_PROBE=1 X4_VIDEO_CAPACITY_1080="$PROBE_CAPACITY" \
+                X4_RECEIVER_NACK=1 X4_NACK_GRACE_MS=45 X4_RUMBLE=0 X4_INGRESS_MODE=mpsc X4_STREAM_PROFILE=0 X4_PUBLIC=0
+            ;;
+        *) echo 'Probe packaging requires explicit off/on/t26/t27 variant.' >&2; exit 1 ;;
     esac
-    make build/eboot.bin X4_VIDEO_PROBE=1 X4_VIDEO_CAPACITY_1080="$PROBE_CAPACITY" \
-        X4_RECEIVER_NACK=1 X4_NACK_GRACE_MS=45 X4_RUMBLE=0 X4_INGRESS_MODE=mpsc X4_STREAM_PROFILE=0 X4_PUBLIC=0
 elif [[ "$PACKAGE_MODE" == public ]]; then
     STREAM_PROFILE=${X4_STREAM_PROFILE:-1}
     [[ "$STREAM_PROFILE" == 1 ]] || { echo 'Public package requires streaming profile 1.' >&2; exit 1; }
@@ -102,7 +125,22 @@ PACKAGE_FILES='eboot.bin sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/
 if [[ "$INCLUDE_DEMO" == 1 ]]; then
     PACKAGE_FILES='eboot.bin assets/sample.h264 sce_module/libSceFios2.prx sce_module/libc.prx sce_sys/param.sfo sce_sys/icon0.png LICENSE.txt THIRD_PARTY_NOTICES.md'
 fi
+if [[ "$PACKAGE_MODE" != probe ]]; then
+    if [[ "$PACKAGE_MODE" == normal ]]; then
+        cp assets/pic1-lab.png "$PACKAGE_ROOT/sce_sys/pic1.png"
+    else
+        cp assets/pic1.png "$PACKAGE_ROOT/sce_sys/pic1.png"
+    fi
+    PACKAGE_FILES+=" sce_sys/pic1.png"
+fi
 for asset in "${FONT_FILES[@]}"; do PACKAGE_FILES+=" assets/fonts/$asset"; done
+if [[ "$PACKAGE_MODE" == normal ]]; then
+    mkdir -p "$PACKAGE_ROOT/assets/scripts"
+    cp assets/scripts/*.lua "$PACKAGE_ROOT/assets/scripts/"
+    for script in assets/scripts/*.lua; do
+        PACKAGE_FILES+=" assets/scripts/${script##*/}"
+    done
+fi
 for license in "${LICENSE_FILES[@]}"; do
     PACKAGE_FILES+=" licenses/${license##*/}"
 done
@@ -119,6 +157,9 @@ entry SYSTEM_VER Integer 4 0
 entry TITLE Utf8 128 "$TITLE"
 entry TITLE_ID Utf8 12 "$TITLE_ID"
 entry VERSION Utf8 8 "$VERSION"
+if [[ "$PACKAGE_MODE" != probe ]]; then
+    entry X4_PRODUCT_VERSION Utf8 48 "$PACKAGE_VERSION"
+fi
 # Fail before GP4/PKG creation if the tool-generated SFO has wrong semantics.
 python3 scripts/package_identity.py sfo --mode "$PACKAGE_MODE" \
     --variant "$PROBE_VARIANT" --suffix="$PACKAGE_SUFFIX" \
@@ -129,9 +170,11 @@ python3 scripts/package_identity.py sfo --mode "$PACKAGE_MODE" \
         --files "$PACKAGE_FILES"
     # Preserve the tool's directory tree and declare the nested runtime font
     # directory explicitly; create-gp4 does not enumerate these directories.
-    python3 - <<'PY'
+    python3 - "$PACKAGE_MODE" <<'PY'
+import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
+package_mode = sys.argv[1]
 project = Path('xcloud4.gp4')
 tree = ET.parse(project)
 roots = [node for node in tree.iter() if node.tag.rsplit('}', 1)[-1] == 'rootdir']
@@ -146,6 +189,8 @@ def directory(parent, name):
     return found[0] if found else ET.SubElement(parent, namespace + 'dir', {'targ_name': name})
 directory(rootdir, 'licenses')
 directory(directory(rootdir, 'assets'), 'fonts')
+if package_mode == 'normal':
+    directory(directory(rootdir, 'assets'), 'scripts')
 ET.indent(tree, space='\t')
 tree.write(project, encoding='utf-8', xml_declaration=True)
 PY

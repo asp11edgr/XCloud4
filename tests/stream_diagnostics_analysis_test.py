@@ -3,6 +3,9 @@
 import json, sys
 from pathlib import Path
 d=json.loads(Path(sys.argv[1]).read_text())
+assert len(d['stages'])==18
+for name in ('decoder_slot_acquisition_wait','decoder_ring_gate_wait'):
+ assert d['stages'][name]['count']==0 and d['stages'][name]['p50_upper_us'] is None
 s=d['stages']['decode']
 assert s['count']==100 and s['p50_upper_us']==6000 and s['p95_upper_us']==10500 and s['p99_upper_us']==10900
 assert d['stages']['decode_IDR']['count']==d['stages']['decode_non_IDR']['count']==50

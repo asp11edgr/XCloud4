@@ -67,4 +67,22 @@ for lhs,rhs in [('video_matrix_received','received_matrix'),('video_matrix_selec
 assert '#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE' in media
 assert '#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE' in auth
 assert '#if X4_STREAM_PROFILE && !X4_VIDEO_PROBE' in (root/'src/ui/stream_settings.c').read_text(encoding='utf-8')
+assert '#define SETTINGS_ROWS 18u' in settings and '#define LAB_VISIBLE_ROWS 10u' in settings
+assert 'quality_draft_owner' in settings and 'atomic_uint quality_settings' in settings
+assert 'atomic_store_explicit(&quality_settings,0u,memory_order_release);' in settings
+assert settings.index('if(!draft_valid(s))') < settings.index('x4_stream_settings_conversion_set((s->convert_sharp>>5)&1u)')
+assert settings.index('x4_stream_settings_set_lab(s->profile') < settings.index('(void)x4_gpu_quality_settings_set(quality_draft)')
+assert 'quality&QUALITY_CAS?cas_sharpness:sharpness' in settings
+assert 'quality&QUALITY_PAUSE_REPEAT?X4_TR_LAB_GPU_PAUSE_REPEAT:X4_TR_LAB_GPU_PAUSE_CPU' in settings
+assert not any(name in (root/'src/ui/stream_settings.h').read_text(encoding='utf-8') for name in ('quality_draft','quality_settings'))
+for name in ('src/ui/lang.h','src/ui/lang.c'):
+    source=(root/name).read_text(encoding='utf-8')
+    for position in (i for i in range(len(source)) if source.startswith('X4_TR_LAB_DITHER',i)):
+        assert source.rfind('#if !X4_PUBLIC',0,position)>source.rfind('#endif',0,position)
+assert settings.index('if (!s->open) {') < settings.index('script_settings_rescan();')
+assert 'if (!game_input) script_previous_us = 0;' in main
+assert 'script_previous_us = script_at;' in main and 'if (dt > 0.1f) dt = 0.1f;' in main
+assert 'float dt = (script_previous_us && script_at > script_previous_us)' in main
+assert main.index('x4_script_engine_export_session_json(') < main.index('x4_script_engine_shutdown();')
+assert main.count('x4_script_engine_export_session_json(')==1
 print('stream settings/main/auth/media/RTC snapshot source contract passed; not a runtime claim')

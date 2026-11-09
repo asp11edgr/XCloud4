@@ -2,6 +2,43 @@
 
 This document describes how to build both **XCloud4 Public Beta** (`X4_PUBLIC=1`) and **XCloud4 Lab** (`X4_PUBLIC=0`) from this source tree on an `x86_64` Linux host.
 
+### Lab GPU conversion shaders (0.7.59)
+
+The generated `src/video/gpu/gpu_shaders.h` is committed: ordinary builds do
+not need LLVM AMDGPU tools. To regenerate it, use an `llc` with the `amdgcn`
+backend (validated with Ubuntu LLVM **21.1.8**, `gfx700`):
+
+```sh
+make X4_PUBLIC=0 X4_GPU_LLC=/path/to/llvm-21/bin/llc gpu-convert-shaders
+```
+
+The generator emits four validated ELF objects, assembly, raw binaries and
+`shader-resources.json` under `build/gpu-shaders`, then copies the generated
+header. Entry offsets must be zero; relocations, scratch/spills and unexpected
+LDS are rejected. Do not edit machine-code arrays manually. VCFG provenance
+and its MIT notice are retained in `THIRD_PARTY_NOTICES.md` and
+`docs/licenses/VCFG-MIT.txt`.
+
+The Lab R3 choice defaults to CPU. GPU admission requires established uncropped
+8-bit NV12 1920×1080 visible/1920×1088 storage. The arena reserves 64 KiB of
+WB_ONION for immutable code, DCB, parameters and EOP; a separate 491,520-byte
+CPU-only scratch surface verifies 64 rows every 300 completed GPU conversions.
+The decoder pixels and existing WC_GARLIC scanout are used directly, without
+an RGB staging copy. Both reservations already use CPU/GPU protection `0x33`.
+
+A 50 ms CPU-observed EOP deadline disables GPU for the session and quarantines
+its input/scanout leases; CPU continues with the other slots. Timeout never
+proves GPU cancellation. An absent EOP prevents safe decoder recreation and
+release: a later SPS/restart quiesce keeps its existing finite deadline, and
+shutdown retains the context instead of deleting memory still read/written by
+the GPU. Recovery from a globally stuck GPU/driver is not guaranteed. Public
+builds exclude the GPU translation unit, APIs, settings and all shader arrays.
+
+For algorithm tests, `scripts/test_gpu_convert.sh` lowers the same LLVM IR to
+host code with raw-buffer I/O substitutes and compares against the real CPU
+converter. This proves arithmetic under the tested ABI, not PS4 execution.
+See the T23 delivery for fixture paths, versions, hashes and console checks.
+
 ---
 
 ## 1. Host Prerequisites
