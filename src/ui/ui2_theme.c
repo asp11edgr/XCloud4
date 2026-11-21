@@ -37,7 +37,8 @@ static uint32_t focus_color(float d)
         float t = (X4_UI2_FOCUS_SPREAD - d) / (X4_UI2_FOCUS_SPREAD - 1.25f);
         opacity = (unsigned)(54.0f * t * t);
     }
-    return (X4_UI2_ACCENT & 0x00ffffffu) | (opacity << 24);
+    uint32_t color = d <= 0.25f ? X4_UI2_ACCENT_SOFT : X4_UI2_ACCENT;
+    return (color & 0x00ffffffu) | (opacity << 24);
 }
 
 static const FocusStamp *focus_stamp(int radius)
@@ -79,7 +80,7 @@ void x4_ui2_focus(uint32_t *pixels, int x, int y, int w, int h, int radius)
             int top = y - spread + sy, bottom = y + h + spread - 1 - sy;
             blend(pixels, left, top, color);
             blend(pixels, right, top, color);
-            /* Keep the soft lower elevation under the green ring. */
+            /* Keep the soft lower shadow under the focus ring. */
             if (sy < X4_UI2_FOCUS_SPREAD && (color >> 24) < 75) {
                 blend(pixels, left, bottom, X4_RGBA(1, 6, 9, 46));
                 blend(pixels, right, bottom, X4_RGBA(1, 6, 9, 46));
@@ -161,14 +162,10 @@ static int glyph_width(enum X4PadGlyph glyph)
 
 int x4_ui2_pad_glyph(uint32_t *pixels, int x, int y, enum X4PadGlyph glyph)
 {
-    static const uint32_t colors[] = {
-        X4_RGB(121, 194, 255), X4_RGB(255, 137, 152), X4_RGB(101, 241, 166),
-        X4_RGB(244, 153, 226),
-    };
     if ((unsigned)glyph > X4_GLYPH_R2) return 0;
     if (!pixels) return glyph_width(glyph);
     if (glyph > X4_GLYPH_SQUARE) return x4_apple_draw_pad_glyph(pixels, x, y, glyph);
-    const uint32_t color = colors[glyph];
+    const uint32_t color = X4_UI2_TEXT;
 #ifdef X4_UI48_CAPTURE
     x4_ui46_capture_contrast(pixels, "Glifo del pie", x, y, 28, 28, color);
 #endif
@@ -188,7 +185,7 @@ int x4_ui2_pad_glyph(uint32_t *pixels, int x, int y, enum X4PadGlyph glyph)
     return 28;
 }
 
-void x4_ui2_footer(uint32_t *pixels, const X4Ui2Hint *hints, size_t count)
+static void draw_footer(uint32_t *pixels, const X4Ui2Hint *hints, size_t count, bool left)
 {
     enum { GAP = 32, PAIR_GAP = 6, INSET = 10, SIZE = 22 };
     if (!count) return;
@@ -200,7 +197,7 @@ void x4_ui2_footer(uint32_t *pixels, const X4Ui2Hint *hints, size_t count)
         if (has_label) width += INSET + x4_text_width_px(SIZE, X4_FONT_REGULAR, label);
         if (i + 1 < count) width += has_label ? GAP : PAIR_GAP;
     }
-    int x = X4_UI_SAFE_RIGHT - width;
+    int x = left ? X4_UI_SAFE_LEFT : X4_UI_SAFE_RIGHT - width;
     const int y = X4_UI_FOOTER_Y;
     for (size_t i = 0; i < count; ++i) {
         const int glyph_w = glyph_width(hints[i].glyph);
@@ -227,6 +224,16 @@ void x4_ui2_footer(uint32_t *pixels, const X4Ui2Hint *hints, size_t count)
     }
 }
 
+void x4_ui2_footer(uint32_t *pixels, const X4Ui2Hint *hints, size_t count)
+{
+    draw_footer(pixels, hints, count, false);
+}
+
+void x4_ui2_footer_left(uint32_t *pixels, const X4Ui2Hint *hints, size_t count)
+{
+    draw_footer(pixels, hints, count, true);
+}
+
 void x4_ui2_chip(uint32_t *pixels, int x, int y, int w, int h,
     const char *label, bool accent)
 {
@@ -246,9 +253,9 @@ void x4_ui2_button(uint32_t *pixels, int x, int y, int w, int h,
     const char *label, bool primary, bool focused, enum X4TablerIconId icon)
 {
     if (w < 36 || h < 30 || !label) return;
-    const int radius = h / 2;
+    const int radius = X4_UI2_RADIUS_CONTROL;
     if (primary)
-        x4_apple_fill_round_rect(pixels, x, y, w, h, radius, X4_UI2_ACCENT);
+        x4_apple_fill_round_rect(pixels, x, y, w, h, radius, X4_UI2_TEXT);
     else
         x4_ui2_card(pixels, x, y, w, h, radius);
     if (focused) x4_ui2_focus(pixels, x, y, w, h, radius);
@@ -333,7 +340,7 @@ int x4_ui2_cloud_width(int height)
     return cloud_height(height) * CLOUD_W / CLOUD_H;
 }
 
-static void draw_cloud(uint32_t *pixels, int x, int y, int height, uint32_t color, bool brand)
+void x4_ui2_cloud(uint32_t *pixels, int x, int y, int height, uint32_t color)
 {
     if (!pixels) return;
     height = cloud_height(height);
@@ -346,27 +353,14 @@ static void draw_cloud(uint32_t *pixels, int x, int y, int height, uint32_t colo
         for (int col = 0; col < width; ++col) {
             int sx = ((2 * col + 1) * CLOUD_W) / (2 * width);
             unsigned alpha = (cloud_alpha[sy][sx] * opacity + 127u) / 255u;
-            if (alpha) {
-                uint32_t tint = color;
-                if (brand) {
-                    const unsigned t = (unsigned)(255 * col / (width - 1));
-                    tint = X4_RGB(34 * t / 255, 212 + 15 * t / 255, 255 - 145 * t / 255)
-                        & 0x00ffffffu;
-                }
-                blend(pixels, x + col, y + row, tint | (alpha << 24));
-            }
+            if (alpha) blend(pixels, x + col, y + row, color | (alpha << 24));
         }
     }
 }
 
-void x4_ui2_cloud(uint32_t *pixels, int x, int y, int height, uint32_t color)
-{
-    draw_cloud(pixels, x, y, height, color, false);
-}
-
 void x4_ui2_brand_cloud(uint32_t *pixels, int x, int y, int height)
 {
-    draw_cloud(pixels, x, y, height, X4_RGB(0, 212, 255), true);
+    x4_ui2_cloud(pixels, x, y, height, X4_UI2_ACCENT_SOFT);
 }
 
 static int brand_size(int size)
@@ -390,6 +384,21 @@ int x4_ui2_brand(uint32_t *pixels, int x, int y, int size)
     int text_x = x + x4_ui2_cloud_width(size) + size / 4;
     x4_text_px(pixels, text_x, y, size, X4_FONT_BOLD, "XCloud", X4_UI2_TEXT);
     text_x += x4_text_width_px(size, X4_FONT_BOLD, "XCloud");
-    x4_text_px(pixels, text_x, y, size, X4_FONT_BOLD, "4", X4_RGB(34, 227, 110));
+    x4_text_px(pixels, text_x, y, size, X4_FONT_BOLD, "4", X4_UI2_TEXT);
     return text_x - x + x4_text_width_px(size, X4_FONT_BOLD, "4");
+}
+
+void x4_ui2_qr_frame(uint32_t *pixels, int x, int y, int edge)
+{
+    enum { PADDING = 6 };
+    x4_apple_stroke_round_rect(pixels, x - PADDING, y - PADDING,
+        edge + PADDING * 2, edge + PADDING * 2, X4_UI2_RADIUS_CARD, 2.0f, X4_UI2_ACCENT);
+}
+
+bool x4_ui2_draw_qr(uint32_t *pixels, int center_x, int center_y, int edge, const char *url)
+{
+    if (!x4_apple_draw_public_qr(pixels, center_x, center_y, edge, url)) return false;
+    /* Frame outside the square so the four-module quiet zone stays white. */
+    x4_ui2_qr_frame(pixels, center_x - edge / 2, center_y - edge / 2, edge);
+    return true;
 }

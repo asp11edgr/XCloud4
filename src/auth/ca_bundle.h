@@ -5,13 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__has_include)
-#  if __has_include(<orbis/Ssl.h>)
-#    include <orbis/Ssl.h>
-#  endif
-#endif
-
-#ifndef _ORBIS_SSL_H_
+#if __has_include(<orbis/Ssl.h>)
+#  include <orbis/Ssl.h>
+#else
 typedef struct SslPem {
     char *ptr;
     size_t size;

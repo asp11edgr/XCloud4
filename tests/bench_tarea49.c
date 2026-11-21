@@ -26,7 +26,7 @@ static void home49_bench(uint32_t *pixels)
     for (unsigned frame = 0; frame < FRAMES; ++frame) {
         start = clock_us();
         changed = x4_ui2_home_draw(&model, &catalog, &assets, 1,
-            frame & 1u ? X4_UI2_HOME_CONTINUE : X4_UI2_HOME_EXPLORE, true, pixels, damage);
+            frame & 1u ? X4_UI2_HOME_CONTINUE : X4_UI2_HOME_TILE_FIRST, true, pixels, damage);
         measure(&samples, X4_UI_MENU, frame, start, clock_us(), changed);
     }
     report(&samples, X4_UI_MENU, "inicio");

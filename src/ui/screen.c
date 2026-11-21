@@ -3,6 +3,7 @@
 #include "screen.h"
 #include "cloud_time_ui.h"
 #include "apple_ui.h"
+#include "ui2_theme.h"
 #include "canvas.h"
 #include "font.h"
 #include "lang.h"
@@ -92,8 +93,8 @@ bool x4_auth_qr_payload(const char *uri, const char *code, char *payload_out, si
     return true;
 }
 
-static const uint32_t BG = 0xff1b1510, PANEL = 0xff30261c;
-static const uint32_t WHITE = 0xfff5f1eb, MUTED = 0xffb6a899, GREEN = 0xff72d86e;
+static const uint32_t BG = X4_UI2_BACKGROUND, PANEL = X4_UI2_SURFACE;
+static const uint32_t WHITE = X4_UI2_TEXT, MUTED = X4_UI2_MUTED, GREEN = X4_UI2_ACCENT;
 
 static void update_home_menu(X4Screen *s, uint32_t pressed)
 {
@@ -1199,9 +1200,9 @@ static void touch_menu_prerender(const X4TouchMenu *menu, int muted)
     const int mx=MENU_X,my=MENU_Y,mw=MENU_W,row_h=MENU_ROW_H,gap=items==8?6:MENU_GAP;
     const int mh=252+items*(row_h+gap);
     /* Opaque dark backing; all further alpha blends read only this canvas. */
-    x4_rect(p,mx,my,mw,mh,X4_RGB(11,16,29));
-    x4_apple_fill_round_rect(p,mx,my,mw,mh,28,X4_RGB(11,16,29));
-    x4_apple_stroke_round_rect(p,mx,my,mw,mh,28,1.5f,X4_RGBA(255,255,255,60));
+    x4_rect(p,mx,my,mw,mh,X4_UI2_BACKGROUND);
+    x4_apple_fill_round_rect(p,mx,my,mw,mh,28,X4_UI2_BACKGROUND);
+    x4_apple_stroke_round_rect(p,mx,my,mw,mh,28,1.5f,X4_UI2_BORDER);
     x4_apple_draw_brand_logo(p,mx+40,my+30);
     x4_text_px(p,mx+40,my+114,44,X4_FONT_BOLD,x4_tr(X4_TR_50_SCREEN_GAME_MENU),INK);
     for(int i=0;i<items;++i) {
@@ -1221,9 +1222,10 @@ static void touch_menu_prerender(const X4TouchMenu *menu, int muted)
         else if(i==6)text=x4_tr(X4_TR_TOUCH_MENU_EXIT_APP);
         else {text=x4_tr(X4_TR_TOUCH_MENU_CANCEL);cancel=true;}
         int y=my+190+i*(row_h+gap);
-        x4_apple_fill_round_rect(p,mx+40,y,mw-80,row_h,20,X4_RGBA(255,255,255,i==menu->selected_index?36:14));
-        x4_apple_stroke_round_rect(p,mx+40,y,mw-80,row_h,20,1.0f,X4_RGBA(255,255,255,38));
-        if(i==menu->selected_index)x4_apple_focus_ring(p,mx+40,y,mw-80,row_h,20);
+        x4_apple_fill_round_rect(p,mx+40,y,mw-80,row_h,X4_UI2_RADIUS_CONTROL,
+            i==menu->selected_index?X4_UI2_ACTIVE:X4_UI2_SURFACE);
+        x4_apple_stroke_round_rect(p,mx+40,y,mw-80,row_h,X4_UI2_RADIUS_CONTROL,1.0f,X4_UI2_BORDER);
+        if(i==menu->selected_index)x4_apple_focus_ring(p,mx+40,y,mw-80,row_h,X4_UI2_RADIUS_CONTROL);
         phase2_menu_icon(p,mx+66,y+24,i,muted!=0,cancel);
         x4_text_ellipsis_px(p,mx+126,y+22,28,X4_FONT_SEMIBOLD,text,mw-208,INK);
     }

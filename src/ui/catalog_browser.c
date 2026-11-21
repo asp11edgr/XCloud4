@@ -71,6 +71,14 @@ static bool query_length(const X4CatalogBrowser *b, size_t *length)
     return false;
 }
 
+static size_t search_key(const char *query, size_t length, char key[X4_CATALOG_QUERY_MAX])
+{
+    size_t count = 0;
+    for (size_t i = 0; i < length; ++i)
+        if (query[i] != ' ') key[count++] = (char)folded((unsigned char)query[i]);
+    return count;
+}
+
 static bool contains(const char *text, size_t capacity, const char *query, size_t length)
 {
     if (!length) return true;
@@ -90,24 +98,30 @@ static bool contains(const char *text, size_t capacity, const char *query, size_
             continue;
         }
         if (count==sizeof(normalized)/sizeof(normalized[0])) return false;
-        normalized[count++]=latin_fold(code);
+        code = latin_fold(code);
+        if (code < 0x80 && !((code >= 'A' && code <= 'Z') || (code >= '0' && code <= '9')))
+            continue;
+        if (code == 0xa0 || (code >= 0x2000 && code <= 0x200b) ||
+            (code >= 0x2010 && code <= 0x2015) || code == 0x202f) continue;
+        normalized[count++]=code;
     }
     for (size_t i = 0; i < count; ++i) {
         size_t matched = 0;
         while (matched < length && matched < count - i &&
-            normalized[i + matched] == folded((unsigned char)query[matched]))
+            normalized[i + matched] == (unsigned char)query[matched])
             ++matched;
         if (matched == length) return true;
     }
     return false;
 }
 
-static bool matches_query(const X4CatalogBrowser *b, const X4CatalogTitle *title, size_t length)
+static bool matches_query(const X4CatalogTitle *title, const char *query, size_t length)
 {
     if (!x4_recent_title_id_valid(title->id,sizeof(title->id)) ||
         strnlen(title->name, sizeof(title->name)) == sizeof(title->name)) return false;
-    return !length || contains(title->name, sizeof(title->name), b->query, length) ||
-        contains(title->id, sizeof(title->id), b->query, length);
+    return !length || contains(title->name, sizeof(title->name), query, length) ||
+        contains(title->id, sizeof(title->id), query, length) ||
+        contains(title->product_id, sizeof(title->product_id), query, length);
 }
 
 static bool matches_access(const X4CatalogBrowser *b, const X4CatalogTitle *title)
@@ -366,6 +380,8 @@ void x4_catalog_browser_rebuild(X4CatalogBrowser *b, const X4CatalogSnapshot *c)
         b->criteria_dirty = false;
         return;
     }
+    char key[X4_CATALOG_QUERY_MAX];
+    length = search_key(b->query, length, key);
     if (b->ui2_enabled) ui2_prepare_counts(b, chip_by_slot);
     b->group_counts[X4_CATALOG_FILTER_ALL] = c->count;
     bool found = false;
@@ -373,7 +389,7 @@ void x4_catalog_browser_rebuild(X4CatalogBrowser *b, const X4CatalogSnapshot *c)
         const X4CatalogTitle *title = &c->titles[index];
         ++b->group_counts[title->entitled ? X4_CATALOG_FILTER_CONFIRMED_ACCESS :
             X4_CATALOG_FILTER_UNCONFIRMED_ACCESS];
-        bool query_match = matches_query(b, title, length);
+        bool query_match = matches_query(title, key, length);
         if (b->ui2_enabled) {
             if (title->product_id[0] &&
                 x4_recent_title_id_valid(title->id, sizeof(title->id))) {
@@ -422,8 +438,10 @@ bool x4_catalog_browser_selected_index(const X4CatalogBrowser *b,
         b->selected >= b->filtered_count || (unsigned)b->filter >= X4_CATALOG_FILTER_COUNT ||
         !query_length(b, &length)) return false;
     unsigned index = b->indices[b->selected];
+    char key[X4_CATALOG_QUERY_MAX];
+    length = search_key(b->query, length, key);
     if (index >= c->count || index >= X4_CATALOG_MAX ||
-        !matches_query(b, &c->titles[index], length) || !matches_filters(b, &c->titles[index], index) ||
+        !matches_query(&c->titles[index], key, length) || !matches_filters(b, &c->titles[index], index) ||
         strncmp(b->selected_id, c->titles[index].id, sizeof(b->selected_id))) return false;
     *source_index = index;
     return true;
@@ -1460,32 +1478,15 @@ const X4Favorite *x4_catalog_browser_ui2_favorite(const X4CatalogBrowser *b)
     return &b->favorites->items[b->ui2_favorite_selected];
 }
 
-bool x4_catalog_browser_ui2_left_edge(const X4CatalogBrowser *b)
+bool x4_catalog_browser_ui2_top_edge(const X4CatalogBrowser *b)
 {
     if (!b) return true;
-    if (b->active_tab == X4_CAT_TAB_DISCOVER)
-        return b->ui2_collection_focus ? !b->ui2_collection_selected :
-            b->hero_focused ? b->featured_count < 2 : !b->discover_row_selected;
+    if (b->active_tab == X4_CAT_TAB_DISCOVER) return b->hero_focused;
     if (b->active_tab == X4_CAT_TAB_RECENTS) {
-        if (b->library.bound) {
-            const X4Ui2Library *l = &b->library;
-            if (l->popup || l->manage) return false;
-            switch (l->focus) {
-            case X4_UI2_LIBRARY_TABS: return l->tab == X4_UI2_LIBRARY_ALL;
-            case X4_UI2_LIBRARY_CONTINUE: return !l->continue_selected;
-            case X4_UI2_LIBRARY_GRID: return !(l->grid_selected % X4_CATALOG_UI2_COLUMNS);
-            default: return l->focus == X4_UI2_LIBRARY_SORT;
-            }
-        }
-        if (b->ui2_library_tabs) return !b->ui2_favorites;
-        unsigned selected = b->ui2_favorites ? b->ui2_favorite_selected : b->recent_selected;
-        return !(selected % X4_CATALOG_UI2_COLUMNS);
+        if (!b->library.bound) return b->ui2_library_tabs;
+        return !b->library.popup && !b->library.manage && b->library.focus == X4_UI2_LIBRARY_TABS;
     }
-    if (b->ui2_selector_open) return false;
-    if (x4_catalog_browser_ui2_selector_count(b, b->ui2_content_focus))
-        return b->ui2_content_focus == X4_UI2_CATALOG_GENRES;
-    if (b->ui2_content_focus == X4_UI2_CATALOG_SEARCH) return true;
-    return !b->filtered_count || !(b->selected % X4_CATALOG_UI2_COLUMNS);
+    return !b->ui2_selector_open && b->ui2_content_focus == X4_UI2_CATALOG_SEARCH;
 }
 
 unsigned x4_catalog_browser_ui2_similar(const X4CatalogBrowser *b, const X4CatalogSnapshot *c,

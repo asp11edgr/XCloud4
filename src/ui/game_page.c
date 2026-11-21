@@ -46,7 +46,7 @@ _Static_assert(GAME_TITLE_Y + 2 * GAME_TITLE_STEP + 3 * GAME_HEADER_GAP +
 
 #define GAME_WHITE X4_UI2_TEXT
 #define GAME_SOFT X4_UI2_MUTED
-#define GAME_GREEN X4_UI2_ACCENT
+#define GAME_ACCENT X4_UI2_ACCENT
 
 #ifdef X4_UI46_CAPTURE
 #define CONTRAST(p, role, x, y, w, h, color) \
@@ -168,7 +168,7 @@ static const char *description(const X4GamePageModel *model)
 
 static bool has_store(const X4GamePageModel *model)
 {
-    return !model->entitled && x4_product_id_valid(model->product_id);
+    return (model->free_in_store || !model->entitled) && x4_product_id_valid(model->product_id);
 }
 
 static bool can_play(const X4GamePageModel *model)
@@ -315,8 +315,8 @@ static void draw_notice(uint32_t *p, const char *notice)
 {
     if (!notice || !notice[0]) return;
     enum { X = 1328, Y = 126, W = GAME_RIGHT - X, H = 122 };
-    x4_apple_fill_round_rect(p, X, Y, W, H, 24, X4_RGBA(12, 20, 34, 237));
-    x4_apple_stroke_round_rect(p, X, Y, W, H, 24, 1.0f, X4_RGBA(233, 242, 249, 75));
+    x4_apple_fill_round_rect(p, X, Y, W, H, 24, X4_UI2_TINT(237));
+    x4_apple_stroke_round_rect(p, X, Y, W, H, 24, 1.0f, X4_UI2_BORDER);
     x4_apple_draw_icon(p, X + 24, Y + 24, X4_ICON_INFO, GAME_WHITE);
     x4_apple_text_wrap(p, X + 62, Y + 22, 23, X4_FONT_REGULAR,
         notice, W - 86, 32, 3, GAME_SOFT);
@@ -326,20 +326,26 @@ static void draw_store(uint32_t *p, const X4GamePageModel *model)
 {
     char url[X4_GAME_STORE_URL_CAP];
     if (!x4_game_page_store_url(model->product_id, url, sizeof(url))) return;
-    x4_apple_fill_round_rect(p, 0, 0, GAME_W, GAME_H, 0, X4_RGBA(2, 7, 14, 187));
-    x4_apple_fill_round_rect(p, 356, 202, 1208, 647, 38, X4_RGB(15, 27, 42));
-    x4_apple_stroke_round_rect(p, 356, 202, 1208, 647, 38, 1.0f, X4_RGBA(222, 234, 250, 82));
-    x4_text_ellipsis_px(p, 418, 253, 46, X4_FONT_BOLD, store_label(model), 1080, GAME_WHITE);
-    x4_apple_text_wrap(p, 418, 346, 25, X4_FONT_REGULAR,
-        x4_tr(X4_TR_50_SCREEN_GAME_STORE_QR),
-        500, 39, 4, GAME_SOFT);
-    x4_apple_draw_public_qr(p, 1225, 484, 310, url);
+    x4_apple_fill_round_rect(p, 0, 0, GAME_W, GAME_H, 0, X4_UI2_TINT(187));
+    enum { PANEL_X = 322, PANEL_Y = 218, PANEL_W = 1276, PANEL_H = 613,
+        TEXT_X = PANEL_X + 56, QR_X = 1280, QR_Y = 534, QR_EDGE = 312 };
+    x4_ui2_card(p, PANEL_X, PANEL_Y, PANEL_W, PANEL_H, X4_UI2_RADIUS_CARD);
+    x4_apple_draw_icon(p, TEXT_X, PANEL_Y + 48, X4_ICON_DEVICE_GAMEPAD, X4_UI2_ACCENT);
+    x4_text_ellipsis_px(p, TEXT_X + 38, PANEL_Y + 46, 24, X4_FONT_BOLD,
+        "Xbox Store", 520, X4_UI2_ACCENT);
+    x4_text_ellipsis_px(p, TEXT_X, 315, 46, X4_FONT_BOLD, store_label(model), 1120, GAME_WHITE);
+    x4_rect(p, TEXT_X, 380, PANEL_W - 112, 1, X4_UI2_BORDER);
+    x4_apple_text_wrap(p, TEXT_X, 416, 25, X4_FONT_REGULAR,
+        x4_tr(X4_TR_50_SCREEN_GAME_STORE_QR), 580, 36, 5, GAME_SOFT);
+    x4_rect(p, 1004, 409, 1, 323, X4_UI2_BORDER);
+    (void)x4_ui2_draw_qr(p, QR_X, QR_Y + 28, QR_EDGE, url);
     const char *short_url = url + sizeof("https://") - 1;
     int width = x4_text_width_px(18, X4_FONT_REGULAR, short_url);
-    x4_text_ellipsis_px(p, 1225 - width / 2, 654, 18, X4_FONT_REGULAR, short_url, 540, GAME_SOFT);
-    x4_apple_pill_button(p, 418, 689, 385, 63,
+    if (width > 430) width = 430;
+    x4_text_ellipsis_px(p, QR_X - width / 2, 744, 18, X4_FONT_REGULAR, short_url, width, GAME_SOFT);
+    x4_ui2_button(p, TEXT_X, 652, 515, 64,
         x4_tr(X4_TR_50_SCREEN_GAME_STORE_REFRESH), true, true, X4_ICON_NONE);
-    x4_apple_draw_footer_hint(p, 418, 774, X4_PAD_CIRCLE, x4_tr(X4_TR_APPLE_HINT_BACK));
+    x4_apple_draw_footer_hint(p, TEXT_X, 744, X4_PAD_CIRCLE, x4_tr(X4_TR_APPLE_HINT_BACK));
 }
 
 
@@ -602,7 +608,7 @@ static int draw_badge(uint32_t *p, int x, int y, const char *label, bool accent,
     if (!label || !label[0]) return x;
     int w = x4_text_width_px(X4_UI2_CAPTION, X4_FONT_SEMIBOLD, label) + 26 + (icon ? 31 : 0);
     if (w > GAME_RIGHT - x) return x;
-    const uint32_t ink = accent ? GAME_GREEN : GAME_WHITE;
+    const uint32_t ink = accent ? GAME_ACCENT : GAME_WHITE;
     if (accent) x4_apple_fill_round_rect(p, x, y, w, GAME_BADGE_H, 17, X4_UI2_ACTIVE);
     else x4_ui2_card(p, x, y, w, GAME_BADGE_H, 17);
     if (icon) x4_apple_draw_icon(p, x + 11, y + 5, X4_ICON_DEVICE_GAMEPAD, ink);
@@ -696,7 +702,7 @@ static X4UiRect action_rect(X4GamePageFocus focus, const X4GamePageModel *model,
         x += 340;
     }
     if (focus == X4_GAME_FOCUS_STORE && has_store(model))
-        return (X4UiRect){x, y, 298, GAME_PLAY_H};
+        return (X4UiRect){x, y, 408, GAME_PLAY_H};
     return (X4UiRect){0};
 }
 
@@ -705,7 +711,7 @@ static void draw_button(uint32_t *p, X4UiRect rect, const char *label,
 {
     const int radius = GAME_ACTION_RADIUS;
     if (!rect.w) return;
-    if (primary) x4_apple_fill_round_rect(p, rect.x, rect.y, rect.w, rect.h, radius, GAME_GREEN);
+    if (primary) x4_apple_fill_round_rect(p, rect.x, rect.y, rect.w, rect.h, radius, GAME_ACCENT);
     else x4_ui2_card(p, rect.x, rect.y, rect.w, rect.h, radius);
     const uint32_t ink = primary ? X4_UI2_INK : GAME_WHITE;
     const int icon_space = play || icon != X4_ICON_NONE ? 34 : 0;
@@ -764,7 +770,7 @@ static void draw_tabs(uint32_t *p, X4GamePageTab selected)
         game_text_line(p, "game tab", r.x + offset, r.y + 9, X4_UI2_CAPTION, weight,
             label, r.w - offset - 12, active ? GAME_WHITE : GAME_SOFT);
         if (active)
-            x4_apple_fill_round_rect(p, r.x + offset - 5, r.y + r.h - 7, width + 10, 4, 2, GAME_GREEN);
+            x4_apple_fill_round_rect(p, r.x + offset - 5, r.y + r.h - 7, width + 10, 4, 2, GAME_ACCENT);
     }
 }
 
@@ -936,7 +942,7 @@ static void draw_details_description(uint32_t *p, const GamePanel *panel,
         if (thumb < 12) thumb = 12;
         x4_apple_fill_round_rect(p, w, GAME_DESC_Y, 4, height, 2, X4_UI2_BORDER);
         x4_apple_fill_round_rect(p, w, GAME_DESC_Y + (height - thumb) * (int)offset / (int)max,
-            4, thumb, 2, GAME_GREEN);
+            4, thumb, 2, GAME_ACCENT);
     }
 }
 

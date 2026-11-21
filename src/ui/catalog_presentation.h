@@ -3,7 +3,8 @@
 #include "catalog_browser.h"
 #include "product_metadata.h"
 
-enum { X4_PRESENTATION_HASH_SLOTS=8192, X4_PRESENTATION_DEMAND_MAX=24 };
+enum { X4_PRESENTATION_HASH_SLOTS=8192, X4_PRESENTATION_DEMAND_MAX=24,
+    X4_PRESENTATION_BUDGET_BYTES = 736u * 1024u };
 typedef struct { char product_id[32],name[128];uint64_t seen_generation; } X4PresentationName;
 /* Main-only public name/genre overlay. <=736 KiB, no image pixels, no credentials
  * and no allocation/network operation. Covers remain in the separate LRU. */
@@ -27,6 +28,9 @@ size_t x4_catalog_presentation_ingest(X4CatalogPresentation *presentation,uint64
  * provider IDs, access bits and auth worker's snapshot remain untouched.
  * Rebuild browser after true: its selected title ID remains the anchor. */
 bool x4_catalog_presentation_apply_names(X4CatalogPresentation *presentation,X4CatalogSnapshot *catalog);
+/* Fill missing names only for products in the current cloud catalog. */
+bool x4_catalog_presentation_search_names(X4CatalogSnapshot *catalog,
+    const X4StoreSearchTitle *titles, size_t count);
 /* Retain optional traits only from the game details already fetched by the
  * existing detail route. No additional worker request or disk-cache format. */
 bool x4_catalog_presentation_ingest_detail(X4CatalogPresentation *presentation,

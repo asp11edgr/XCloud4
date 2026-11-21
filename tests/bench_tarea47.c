@@ -86,7 +86,7 @@ static void bench_home(const char *data, uint32_t *pixels)
         uint64_t start = clock_us();
         x4_screen_draw(&menu, &controller, pixels);
 #else
-        int selected = (i & 1u) ? X4_UI2_HOME_CONTINUE : X4_UI2_HOME_EXPLORE;
+        int selected = (i & 1u) ? X4_UI2_HOME_CONTINUE : X4_UI2_HOME_TILE_FIRST;
         uint64_t start = clock_us();
         x4_ui2_home_model(&model, true, &catalog, &recent, &browser.home_rows);
         size_t changed = x4_ui2_home_draw(&model, &catalog, &assets, assets.revision,

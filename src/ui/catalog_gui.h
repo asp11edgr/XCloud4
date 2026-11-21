@@ -40,7 +40,7 @@ void x4_catalog_gui_keyboard_cache_invalidate(void);
 void x4_catalog_gui_keyboard_cache_snapshot(X4CatalogKeyboardCacheStats *out);
 
 /* Retain content selection while the left navigation owns the visible focus. */
-void x4_catalog_gui_sidebar_focused(bool focused);
+void x4_catalog_gui_header_focused(bool focused);
 
 /* Set the visible Discover clock before the draw signature is computed.
  * A changed marker requests the next bounded carousel transition frame. */

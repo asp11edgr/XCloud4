@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include "../src/ui/catalog_presentation.h"
+#include "../src/ui/catalog_assets.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +61,7 @@ static void rejected_metadata_and_empty_catalog(void)
     setup(3);metadata_for(0,0,"Fine");strcpy(metadata[0].product_id,"../bad");
     metadata_for(1,1,"Broken\xc0\xaf");CHECK(x4_catalog_presentation_ingest(&presentation,1,1,metadata,2)==0);
     CHECK(presentation.rejected_metadata==2);CHECK(presentation.count==0);
-    metadata_for(0,0,"Fine");CHECK(x4_catalog_presentation_ingest(&presentation,1,2,metadata,25)==0);
+    metadata_for(0,0,"Fine");CHECK(x4_catalog_presentation_ingest(&presentation,1,2,metadata,X4_CATALOG_RESIDENT_SLOTS+1)==0);
     CHECK(x4_catalog_presentation_ingest(&presentation,1,2,NULL,1)==0);
     CHECK(x4_catalog_presentation_ingest(&presentation,1,2,metadata,1)==1);
     catalog.state=X4_CATALOG_LOADING;CHECK(!x4_catalog_presentation_apply_names(&presentation,&catalog));
@@ -264,7 +265,7 @@ static void bounded_overlay_and_refresh_eviction(void)
     x4_catalog_presentation_set_generation(&presentation,3);CHECK(x4_catalog_presentation_ingest(&presentation,3,1,metadata,1)==1);
     CHECK(presentation.count==4096);strcpy(catalog.titles[0].product_id,"PRODUCT9999");catalog.titles[0].name[0]=0;
     CHECK(x4_catalog_presentation_apply_names(&presentation,&catalog));CHECK(!strcmp(catalog.titles[0].name,"New product"));
-    CHECK(sizeof(presentation)<=704u*1024);
+    CHECK(sizeof(presentation) <= X4_PRESENTATION_BUDGET_BYTES);
 }
 int main(void)
 {

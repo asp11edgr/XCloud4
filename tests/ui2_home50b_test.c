@@ -65,7 +65,7 @@ static void check_late_home(enum X4Lang language, uint32_t *pixels, uint32_t *pr
     X4Ui2HomeModel model;
     x4_catalog_browser_home_rebuild(&browser, &catalog, NULL, sigls);
     x4_ui2_home_model(&model, true, &catalog, NULL, &browser.home_rows);
-    assert(model.popular_count == 1 && model.popular[0] == 0);
+    assert(model.shelf_count == 1 && model.shelf[0] == 0);
     const uint64_t pending_rows = browser.home_revision;
     render(&model, false, pixels);
     memcpy(previous, pixels, count * sizeof(*pixels));
@@ -80,14 +80,26 @@ static void check_late_home(enum X4Lang language, uint32_t *pixels, uint32_t *pr
     x4_catalog_browser_home_rebuild(&browser, &catalog, NULL, sigls);
     assert(browser.home_revision == pending_rows + 1);
     x4_ui2_home_model(&model, true, &catalog, NULL, &browser.home_rows);
-    assert(model.popular_count == 3 && model.popular[0] == 0 &&
-        model.popular[1] == 2 && model.popular[2] == 1);
+    assert(model.shelf_count == 3 && model.shelf[0] == 0 &&
+        model.shelf[1] == 2 && model.shelf[2] == 1);
+    const char *covers[X4_UI2_HOME_COVER_MAX];
+    uint32_t masks[X4_UI2_HOME_COVER_MAX];
+    assert(x4_ui2_home_cover_demand(&model, &catalog, covers, masks) == 3);
+    assert(masks[0] == ((1u << X4_COVER_HOME_FEATURE) | (1u << X4_COVER_ROW)));
+    assert(masks[1] == (1u << X4_COVER_ROW));
+    for (unsigned i = 0; i < model.shelf_count; ++i)
+        assert(!strcmp(covers[i], catalog.titles[model.shelf[i]].product_id));
+    assert(x4_ui2_home_activate(&model, X4_UI2_HOME_CONTINUE).action == X4_UI2_HOME_CATALOG);
+    int focus = x4_ui2_home_move(&model, X4_UI2_HOME_CONTINUE, X4_UI2_HOME_DOWN);
+    assert(focus == X4_UI2_HOME_TILE_FIRST);
+    assert(x4_ui2_home_activate(&model, focus).action == X4_UI2_HOME_FORTNITE);
+    assert(x4_ui2_home_move(&model, focus, X4_UI2_HOME_UP) == X4_UI2_HOME_CONTINUE);
     render(&model, true, pixels);
     assert(memcmp(previous, pixels, count * sizeof(*pixels)));
     memcpy(previous, pixels, count * sizeof(*pixels));
 
     /* The name then arrives without changing the list or the focus. */
-    memcpy(catalog.gamertag, "Jugador", sizeof("Jugador"));
+    memcpy(catalog.titles[2].name, "Fixture Platform Updated", sizeof("Fixture Platform Updated"));
     const uint64_t ready_rows = browser.home_revision;
     x4_catalog_browser_home_rebuild(&browser, &catalog, NULL, sigls);
     assert(browser.home_revision == ready_rows);
@@ -116,9 +128,10 @@ int main(void)
     uint32_t *previous = malloc(count * sizeof(*previous));
     assert(pixels && previous);
     assert(!x4_font_init("assets/fonts/inter.x4font"));
-    init_catalog();
-    for (enum X4Lang language = X4_LANG_ES; language < X4_LANG_COUNT; ++language)
+    for (enum X4Lang language = X4_LANG_ES; language < X4_LANG_COUNT; ++language) {
+        init_catalog();
         check_late_home(language, pixels, previous, count);
+    }
     x4_font_close();
     free(previous);
     free(pixels);

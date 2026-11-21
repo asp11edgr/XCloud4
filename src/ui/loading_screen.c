@@ -270,9 +270,9 @@ static void prepare_fixed(void)
     const int cloud_height=48;
     centered_text(loading.backdrop,242,64,X4_FONT_BOLD,loading.title,X4_UI2_TEXT);
     x4_apple_outer_glow(loading.backdrop,RING_CX-74,RING_CY-74,148,148,74,10,
-        X4_RGBA(54,246,135,36));
+        X4_RGBA(173,138,255,36));
     x4_apple_fill_round_rect(loading.backdrop,RING_CX-60,RING_CY-60,120,120,60,
-        X4_RGBA(6,18,26,222));
+        X4_UI2_TINT(222));
     paint_ring(loading.backdrop,0,RING_SEGMENTS,X4_UI2_BORDER);
     x4_ui2_cloud(loading.backdrop,RING_CX-x4_ui2_cloud_width(cloud_height)/2,
         RING_CY-cloud_height/2,cloud_height,X4_UI2_TEXT);

@@ -9,7 +9,7 @@
 #include <string.h>
 
 enum {
-    PANEL_RADIUS = 26, PANEL_MIN_H = 300, PANEL_MAX_H = 720, BODY_TOP = 112,
+    PANEL_RADIUS = X4_UI2_RADIUS_CARD, PANEL_MIN_H = 300, PANEL_MAX_H = 720, BODY_TOP = 112,
     BODY_PITCH = 36, ACTION_GAP = 24, BUTTON_H = 60,
 };
 #define BODY_W X4_UI2_MODAL_BODY_W
@@ -227,12 +227,13 @@ void x4_ui2_modal_actions(uint32_t *p, const X4Ui2ModalAction *actions, size_t c
         const X4Ui2ModalAction action = actions[i];
         const int w = widths[i].button, glyph_w = widths[i].glyph;
         if (action.primary)
-            x4_apple_fill_round_rect(p, x, y, w, BUTTON_H, BUTTON_H / 2, X4_UI2_ACCENT);
-        else x4_ui2_card(p, x, y, w, BUTTON_H, BUTTON_H / 2);
-        if (action.focused) x4_ui2_focus(p, x, y, w, BUTTON_H, BUTTON_H / 2);
+            x4_apple_fill_round_rect(p, x, y, w, BUTTON_H, X4_UI2_RADIUS_CONTROL, X4_UI2_TEXT);
+        else x4_ui2_card(p, x, y, w, BUTTON_H, X4_UI2_RADIUS_CONTROL);
+        if (action.focused) x4_ui2_focus(p, x, y, w, BUTTON_H, X4_UI2_RADIUS_CONTROL);
         const bool cross = action.focused && widths[i].cross;
         if (action.primary && (cross || widths[i].shortcut))
-            x4_apple_fill_round_rect(p, x + INSET - 4, y + 11, glyph_w + 10, 38, 19, X4_UI2_INK);
+            x4_apple_fill_round_rect(p, x + INSET - 4, y + 11, glyph_w + 10, 38,
+                X4_UI2_RADIUS_CONTROL, X4_UI2_INK);
         if (cross)
             (void)x4_ui2_pad_glyph(p, x + INSET, y + 16, X4_PAD_CROSS);
         if (widths[i].shortcut)
@@ -289,7 +290,7 @@ void x4_ui2_update_notice_draw(const X4UpdateNotice *notice, uint32_t *p)
     x4_ui2_modal_text(p, description, r.x, r.y + heading_h + GAP, LEFT_W, 5);
     x4_ui2_text_bounded(p, r.x, r.y + link_offset, X4_UI2_CAPTION, X4_FONT_SEMIBOLD,
         x4_tr(X4_TR_UI2_MODAL_UPDATE_LINK), LEFT_W, 28, 1, X4_UI2_ACCENT);
-    (void)x4_apple_draw_public_qr(p, r.x + r.w - QR_EDGE / 2, r.y + QR_EDGE / 2,
+    (void)x4_ui2_draw_qr(p, r.x + r.w - QR_EDGE / 2, r.y + QR_EDGE / 2,
         QR_EDGE, notice->url);
     x4_ui2_modal_actions(p, actions, 2);
 }
@@ -557,7 +558,7 @@ static void access_help(uint32_t *p, const X4AccessCountryUi *ui)
     const int warning_h = x4_ui2_modal_text_height(warning, BODY_W, 4);
     const X4UiRect r = x4_ui2_modal_panel(p, x4_tr(X4_TR_ACCESS_HELP),
         row_h + (warning_h ? GAP + warning_h : 0));
-    (void)x4_apple_draw_public_qr(p, r.x + QR_EDGE / 2, r.y + QR_EDGE / 2,
+    (void)x4_ui2_draw_qr(p, r.x + QR_EDGE / 2, r.y + QR_EDGE / 2,
         QR_EDGE, x4_region_qr_url(lang));
     x4_ui2_modal_text(p, caption, r.x + QR_COLUMN, r.y, r.w - QR_COLUMN, 5);
     x4_ui2_text_bounded(p, r.x + QR_COLUMN, r.y + link_offset, X4_UI2_CAPTION,

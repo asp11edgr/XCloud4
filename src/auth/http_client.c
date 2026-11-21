@@ -5,6 +5,7 @@
 #include "tls_conn.h"
 #include "../ui/lang.h"
 #include "../ui/home_rows.h"
+#include "../ui/product_metadata.h"
 #include "../ui/access_country.h"
 #include "../core/build_identity.h"
 #include <stdio.h>
@@ -286,6 +287,34 @@ static bool store_url(const char *url, size_t n)
         } else return false;
     }
     return true;
+}
+
+static bool public_store_search_url(const char *url, size_t length)
+{
+    static const char prefix[] = X4_STORE_SEARCH_PREFIX;
+    const size_t prefix_length = sizeof(prefix) - 1;
+    const char *market = x4_lang_market(), *locale = x4_lang_locale();
+    if (length <= prefix_length || memcmp(url, prefix, prefix_length) ||
+        !x4_sigl_locale_valid(market, locale)) return false;
+    char suffix[96];
+    int written = snprintf(suffix, sizeof(suffix), X4_STORE_SEARCH_SUFFIX, market, locale);
+    if (written <= 0 || (size_t)written >= sizeof(suffix) ||
+        length <= prefix_length + (size_t)written || strcmp(url + length - (size_t)written, suffix))
+        return false;
+
+    size_t letters = 0, characters = 0;
+    const char *end = url + length - (size_t)written;
+    for (const char *p = url + prefix_length; p < end; ++p) {
+        if (alphanumeric((unsigned char)*p)) {
+            ++letters;
+        } else if (end - p >= 3 && !memcmp(p, "%20", 3)) {
+            p += 2;
+        } else {
+            return false;
+        }
+        if (++characters > X4_STORE_SEARCH_QUERY_MAX) return false;
+    }
+    return letters >= 3;
 }
 
 static bool public_sigl_url(const char *url, size_t length)
@@ -1105,8 +1134,9 @@ static int public_request(X4Http *h, const char *url, char *body, size_t capacit
     size_t n = bounded_length(url, X4_HTTP_JSON_URL_MAX + 1);
     int rc = X4_HTTP_URL;
     bool sigl = !image && n <= X4_HTTP_JSON_URL_MAX && public_sigl_url(url, n);
+    bool search = !image && n <= X4_HTTP_JSON_URL_MAX && public_store_search_url(url, n);
     bool valid = image ? x4_http_public_image_url(url) != 0 :
-        n <= X4_HTTP_JSON_URL_MAX && (sigl || store_url(url, n));
+        n <= X4_HTTP_JSON_URL_MAX && (sigl || search || store_url(url, n));
     if (valid) {
         rc = X4_HTTP_UNUSABLE;
         if (!h->unusable) {
@@ -1114,6 +1144,7 @@ static int public_request(X4Http *h, const char *url, char *body, size_t capacit
             if (!o) rc = X4_HTTP_ALLOCATION;
             else {
                 if (image) o->accept = "image/jpeg,image/png";
+                if (search) o->deadline_us = 6ull * 1000 * 1000;
                 /* SIGLs are one-shot GETs on their own verified connection.
                  * The Store/cover pools retain their existing retry policy. */
                 rc = sigl ? transfer(h, o, body, capacity, length, status, cancel) :

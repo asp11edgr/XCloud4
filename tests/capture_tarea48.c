@@ -33,7 +33,7 @@ static void finish48(const char *name)
 {
     assert(!footer_depth && active_scene && !strcmp(name, active_scene));
     int max_content_y = -1;
-    for (size_t x = X4_UI2_SIDEBAR_W; x < X4_UI_SAFE_RIGHT; ++x) {
+    for (size_t x = X4_UI2_CONTENT_X; x < X4_UI_SAFE_RIGHT; ++x) {
         if (lowest_content_ink[x] > max_content_y) max_content_y = lowest_content_ink[x];
         if (lowest_content_ink[x] >= first_footer_ink[x]) {
             fprintf(stderr, "B_FOOTER_OVERLAP %s x=%zu text_bottom=%d footer_top=%d\n",
@@ -51,7 +51,7 @@ static void finish48(const char *name)
  * bounds so that descenders, antialiasing and clipped ellipses are measured. */
 static bool text_bounds(X4UiRect *bounds, int x, int y, int size, int width)
 {
-    if (!active_scene || footer_depth || x < X4_UI2_SIDEBAR_W ||
+    if (!active_scene || footer_depth || x < X4_UI2_CONTENT_X ||
         y < 840 || y >= HEIGHT || width <= 0) return false;
     int right = x + width + 4;
     if (right > WIDTH) right = WIDTH;
@@ -212,7 +212,7 @@ static void choose48(enum X4CatalogTab tab)
 static void tab48(const char *name, X4Ui2Section section, uint32_t *pixels)
 {
     x4_catalog_gui_home_invalidate();
-    x4_catalog_gui_sidebar_focused(false);
+    x4_catalog_gui_header_focused(false);
     x4_ui2_shell_set_section(&shell, section);
     begin48(name);
     draw_tab(pixels);

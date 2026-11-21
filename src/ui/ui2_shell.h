@@ -4,7 +4,7 @@
 
 typedef enum X4Ui2Section {
     X4_UI2_HOME, X4_UI2_DISCOVER, X4_UI2_CATALOG, X4_UI2_LIBRARY,
-    X4_UI2_SEARCH, X4_UI2_SETTINGS, X4_UI2_SUPPORT, X4_UI2_ABOUT,
+    X4_UI2_SEARCH, X4_UI2_SETTINGS, X4_UI2_SUPPORT, X4_UI2_ABOUT, X4_UI2_ACCOUNT,
     X4_UI2_SECTION_COUNT,
 } X4Ui2Section;
 
@@ -31,9 +31,8 @@ typedef struct {
     X4Ui2Section target;
 } X4Ui2NavResult;
 
-/* Caller routes target and sets section only after accepting the request.
- * at_left_edge preserves normal movement inside a content row. */
-X4Ui2NavResult x4_ui2_shell_handle(X4Ui2Shell *shell, unsigned flags, bool at_left_edge);
+/* Up enters navigation at the top of the content. Down or Circle returns. */
+X4Ui2NavResult x4_ui2_shell_handle(X4Ui2Shell *shell, unsigned flags, bool at_top_edge);
 void x4_ui2_shell_set_section(X4Ui2Shell *shell, X4Ui2Section section);
 
 typedef enum X4Ui2Network {
@@ -43,6 +42,7 @@ typedef enum X4Ui2Network {
 typedef struct {
     X4Ui2Network network;
     char quality[32];
+    char gamertag[64];
     int minute; /* Console-local minutes since midnight, -1 if unavailable. */
     char initial[5]; /* At most one complete UTF-8 codepoint. */
     bool valid;
@@ -53,17 +53,10 @@ bool x4_ui2_status_update(X4Ui2Status *status, X4Ui2Network network,
     unsigned height, unsigned fps, int minute, const char *gamertag);
 bool x4_ui2_status_set(X4Ui2Status *status, X4Ui2Network network,
     const char *quality, int minute, const char *gamertag);
-extern const X4UiRect x4_ui2_sidebar_rect, x4_ui2_status_rect;
-void x4_ui2_shell_draw_sidebar(uint32_t *pixels, const X4Ui2Shell *shell);
-/* Replace the first fresh_height rows with the newly drawn, untinted backdrop.
- * A value of zero redraws the sidebar from its retained backdrop. */
-void x4_ui2_shell_draw_sidebar_backdrop(uint32_t *pixels, const X4Ui2Shell *shell, int fresh_height);
-/* A retained sidebar can update only the rows whose highlight changed. */
-size_t x4_ui2_shell_draw_sidebar_delta(uint32_t *pixels, const X4Ui2Shell *previous,
-    const X4Ui2Shell *shell, X4UiRect damage[4]);
-/* Pass a fresh background after replacing the status area; otherwise the
- * same retained canvas must still contain the previous composition. */
-void x4_ui2_shell_draw_status(uint32_t *pixels, const X4Ui2Status *status, bool fresh_background);
+extern const X4UiRect x4_ui2_header_rect;
+/* A fresh background must include the whole header region. */
+void x4_ui2_shell_draw_header(uint32_t *pixels, const X4Ui2Shell *shell,
+    const X4Ui2Status *status, bool fresh_background);
 void x4_ui2_shell_draw(uint32_t *pixels, const X4Ui2Shell *shell, const X4Ui2Status *status);
 
 /* Phase 1 adapter for screens whose layouts belong to later phases. The

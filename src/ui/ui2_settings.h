@@ -21,8 +21,13 @@ static inline void x4_ui2_settings_chevron(uint32_t *p, int x, int y, uint32_t c
 static inline void x4_ui2_settings_row(uint32_t *p, int x, int y, int w, int h,
     const char *label, const char *value, bool focused, bool dropdown)
 {
-    x4_ui2_card(p, x, y, w, h, X4_UI2_RADIUS_CONTROL);
-    if (focused) x4_ui2_focus(p, x, y, w, h, X4_UI2_RADIUS_CONTROL);
+    x4_apple_fill_round_rect(p, x, y, w, h, X4_UI2_RADIUS_CONTROL,
+        focused ? X4_UI2_ACTIVE : X4_UI2_BACKGROUND);
+    x4_apple_stroke_round_rect(p, x, y, w, h, X4_UI2_RADIUS_CONTROL, 1.0f, X4_UI2_BORDER);
+    if (focused) {
+        x4_ui2_focus(p, x, y, w, h, X4_UI2_RADIUS_CONTROL);
+        x4_rect(p, x + 2, y + 13, 3, h - 26, X4_UI2_ACCENT);
+    }
     const int label_w = w * 44 / 100;
     const int right = x + w - 22 - (dropdown ? 26 : 0);
     const int value_w = right - (x + 22 + label_w + 18);

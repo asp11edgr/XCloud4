@@ -111,6 +111,23 @@ static void navigation_cases(void)
     action(&page, &model, X4_GAME_INPUT_SELECT, X4_GAME_ACTION_SIMILAR);
     assert(similar[page.similar_index].source_index == 9);
     action(&page, &model, X4_GAME_INPUT_BACK | X4_GAME_INPUT_SELECT, X4_GAME_ACTION_BACK);
+
+    /* A cloud entitlement can come from a subscription. Players should
+     * still be able to visit the Store and claim a free game. */
+    model.entitled = true;
+    model.free_in_store = true;
+    x4_game_page_init(&page);
+    action(&page, &model, X4_GAME_INPUT_RIGHT, X4_GAME_ACTION_NONE);
+    action(&page, &model, X4_GAME_INPUT_RIGHT, X4_GAME_ACTION_NONE);
+    assert(page.focus == X4_GAME_FOCUS_STORE);
+    action(&page, &model, X4_GAME_INPUT_SELECT, X4_GAME_ACTION_NONE);
+    assert(page.qr_open);
+    model.busy = true;
+    action(&page, &model, X4_GAME_INPUT_SELECT, X4_GAME_ACTION_NONE);
+    assert(page.qr_open);
+    model.busy = false;
+    action(&page, &model, X4_GAME_INPUT_SELECT, X4_GAME_ACTION_REFRESH);
+    assert(!page.qr_open);
     puts("PASS ficha: pestañas, Capturas, QR, Favorito, Similares y Jugar exclusivo");
 }
 

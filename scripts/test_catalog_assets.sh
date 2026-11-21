@@ -22,6 +22,7 @@ fi
   -idirafter "${OO_PS4_TOOLCHAIN:-$HOME/.local/share/xcloud4/OpenOrbis/PS4Toolchain}/include" \
   "$fixture_root/tests/catalog_assets_test.c" src/ui/screen.c src/ui/catalog_assets.c src/ui/lang.c src/ui/catalog_disk_cache.c src/ui/product_metadata.c \
   src/ui/home_rows.c src/ui/recent_games.c src/ui/catalog_browser.c src/ui/catalog_presentation.c src/ui/image_area.c \
+  src/ui/favorites.c \
   src/auth/json.c src/auth/public_image_policy.c -Wl,--gc-sections,--wrap=x4_product_surface_decode \
   -Wl,--wrap=x4_catalog_disk_cache_open,--wrap=x4_catalog_disk_cache_get_metadata,--wrap=x4_catalog_disk_cache_get_image \
   -Wl,--wrap=x4_catalog_disk_cache_put_metadata,--wrap=x4_catalog_disk_cache_put_image \

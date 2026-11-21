@@ -135,8 +135,8 @@ static void apply(void)
 static void test_home_to_fortnite(void)
 {
     reset(0);
-    const int focus=X4_UI2_HOME_POPULAR_FIRST;
-    X4Ui2HomeModel home={.mode=X4_UI2_HOME_EMPTY,.popular_count=1,.popular={X4_CATALOG_MAX}};
+    const int focus=X4_UI2_HOME_TILE_FIRST;
+    X4Ui2HomeModel home={.mode=X4_UI2_HOME_EMPTY,.shelf_count=1,.shelf={X4_CATALOG_MAX}};
     X4Ui2HomeRoute route=x4_ui2_home_activate(&home,focus);
     assert(route.action==X4_UI2_HOME_FORTNITE);
     home.popular[0]=0; /* Even when Fortnite was listed on the ordinary catalog. */

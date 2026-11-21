@@ -7,6 +7,8 @@
 #include <stdint.h>
 
 #define X4_CATALOG_ASSET_SLOTS 24u
+/* Keep a full catalog demand and Home's covers resident across navigation. */
+#define X4_CATALOG_RESIDENT_SLOTS 32u
 #define X4_CATALOG_IMAGE_DOWNLOADERS 3u
 #define X4_CATALOG_PRELOAD_PRODUCTS 16u
 #define X4_CATALOG_THUMBNAIL_BUDGET (24u * 1024u * 1024u)
@@ -91,6 +93,14 @@ void x4_catalog_assets_set_generation(X4CatalogAssets *assets, uint64_t generati
 void x4_catalog_assets_request(X4CatalogAssets *assets, const char *const *product_ids, size_t count);
 void x4_catalog_assets_request_surfaces(X4CatalogAssets *assets, const char *const *product_ids,
     const uint32_t *masks, size_t count);
+/* The initial visible_count entries have normal priority. The remaining
+ * entries can use disk and HTTP when foreground work is idle. */
+void x4_catalog_assets_request_surfaces_with_preload(X4CatalogAssets *assets,
+    const char *const *product_ids, const uint32_t *masks, size_t count, size_t visible_count);
+/* Update the public Store query and take any completed results for it.
+ * Passing NULL clears the query. The lookup is debounced on the worker. */
+size_t x4_catalog_assets_search(X4CatalogAssets *assets, const char *query,
+    X4StoreSearchTitle out[X4_STORE_SEARCH_RESULTS]);
 /* On the main menu only. A miss never starts HTTP or changes retry state.
  * Pass NULL/0 when leaving the menu. Foreground demand always wins.
  * Returns 1 if accepted and 0 if contended or invalid. */

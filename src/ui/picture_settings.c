@@ -742,9 +742,9 @@ bool x4_picture_settings_ui_handle(X4PictureSettingsUi *s, unsigned a, bool can_
 
 enum {
     PAGE_X = X4_UI2_CONTENT_X, PAGE_R = X4_UI_SAFE_RIGHT,
-    SECTION_X = PAGE_X, SECTION_Y = 177, SECTION_W = 320, SECTION_H = 738,
-    PANEL_X = 626, PANEL_W = PAGE_R - PANEL_X, PANEL_H = SECTION_H,
-    ROW_X = PANEL_X + 30, ROW_W = PANEL_W - 60,
+    SECTION_X = PAGE_X, SECTION_Y = 197, SECTION_W = 340, SECTION_H = 718,
+    PANEL_X = 476, PANEL_W = PAGE_R - PANEL_X, PANEL_H = SECTION_H,
+    ROW_X = PANEL_X + 34, ROW_W = PANEL_W - 68,
     ROW_Y = 338, ROW_H = 58, ROW_PITCH = 70,
     SERVER_VISIBLE = 6, SERVER_ROW_H = 48, SERVER_ROW_PITCH = 57,
 };
@@ -797,16 +797,16 @@ static const char *dropdown_value(const X4PictureSettingsUi *s, unsigned value)
 static void settings_draw_sections(const X4PictureSettingsUi *s, uint32_t *p)
 {
     x4_rect(p, sections_rect.x, sections_rect.y, sections_rect.w, sections_rect.h, X4_UI2_BACKGROUND);
-    x4_ui2_card(p, SECTION_X, SECTION_Y, SECTION_W, SECTION_H, X4_UI2_RADIUS_CARD);
+    x4_rect(p, SECTION_X + SECTION_W - 1, SECTION_Y, 1, SECTION_H, X4_UI2_BORDER);
     for (unsigned i = 0; i < X4_PIC_SECTION_COUNT; ++i) {
-        const int x = SECTION_X + 20, y = SECTION_Y + 31 + (int)i * 79, w = SECTION_W - 40;
+        const int x = SECTION_X + 10, y = SECTION_Y + 16 + (int)i * 79, w = SECTION_W - 20;
         const bool active = i == s->tab;
         if (active) {
             x4_apple_fill_round_rect(p, x, y, w, 58, X4_UI2_RADIUS_CONTROL, X4_UI2_ACTIVE);
-            x4_rect(p, x + 4, y + 15, 3, 28, X4_UI2_ACCENT);
+            x4_rect(p, x + 2, y + 13, 4, 32, X4_UI2_ACCENT);
             if (s->section_focused) x4_ui2_focus(p, x, y, w, 58, X4_UI2_RADIUS_CONTROL);
         }
-        const uint32_t color = active ? X4_UI2_ACCENT : X4_UI2_MUTED;
+        const uint32_t color = active ? X4_UI2_ACCENT_SOFT : X4_UI2_TEXT;
         if (i == X4_PIC_SECTION_INTERFACE)
             x4_text_px(p, x + 18, y + 19, 20, X4_FONT_SEMIBOLD, "Aa", color);
         else
@@ -983,7 +983,14 @@ static void settings_draw_panel(const X4PictureSettingsUi *s, uint32_t *p, bool 
     if (fresh) {
         x4_rect(p, panel_rect.x, panel_rect.y, panel_rect.w, panel_rect.h, X4_UI2_BACKGROUND);
         x4_ui2_card(p, PANEL_X, SECTION_Y, PANEL_W, PANEL_H, X4_UI2_RADIUS_CARD);
-        x4_ui2_heading(p, ROW_X, 199, x4_tr(section_labels[section]));
+        x4_apple_fill_round_rect(p, ROW_X, 213, 50, 50, X4_UI2_RADIUS_CONTROL, X4_UI2_ACTIVE);
+        if (section == X4_PIC_SECTION_INTERFACE)
+            x4_text_px(p, ROW_X + 11, 226, 22, X4_FONT_SEMIBOLD, "Aa", X4_UI2_ACCENT_SOFT);
+        else
+            x4_apple_draw_icon(p, ROW_X + 13, 226, section_icons[section], X4_UI2_ACCENT_SOFT);
+        x4_ui2_settings_line(p, ROW_X + 69, 216, 42, X4_FONT_BOLD,
+            x4_tr(section_labels[section]), ROW_W - 69, X4_UI2_TEXT);
+        x4_rect(p, ROW_X, 270, ROW_W, 1, X4_UI2_BORDER);
         x4_ui2_text_bounded(p, ROW_X, 277, 22, X4_FONT_REGULAR, x4_tr(section_help[section]),
             ROW_W, 28, 2, X4_UI2_MUTED);
     } else {
@@ -1039,7 +1046,7 @@ static void settings_draw_panel(const X4PictureSettingsUi *s, uint32_t *p, bool 
             x4_tr(s->language_saving ? X4_TR_50_SETTINGS_SAVING : X4_TR_UI2_SETTINGS_SAVE),
             !s->language_saving, s->save_focused && !s->language_saving, X4_ICON_NONE);
     else {
-        x4_apple_fill_round_rect(p, PAGE_R - 282, 840, 252, 54, 27, X4_UI2_BORDER);
+        x4_apple_fill_round_rect(p, PAGE_R - 282, 840, 252, 54, X4_UI2_RADIUS_CONTROL, X4_UI2_BORDER);
         x4_ui2_settings_line(p, PAGE_R - 255, 855, 24, X4_FONT_SEMIBOLD,
             x4_tr(X4_TR_UI2_SETTINGS_SAVE), 200, X4_UI2_MUTED);
     }
@@ -1049,7 +1056,7 @@ static void settings_draw_panel(const X4PictureSettingsUi *s, uint32_t *p, bool 
 static void settings_draw_static(uint32_t *p)
 {
     x4_rect(p, 0, 0, SETTINGS_W, SETTINGS_H, X4_UI2_BACKGROUND);
-    x4_ui2_heading(p, PAGE_X, 57, x4_tr(X4_TR_APPLE_PILL_SETTINGS));
+    x4_ui2_heading(p, PAGE_X, 119, x4_tr(X4_TR_APPLE_PILL_SETTINGS));
     const X4Ui2Hint hints[] = {
         {X4_PAD_L1, ""}, {X4_PAD_R1, x4_tr(X4_TR_UI2_SETTINGS_SECTION)},
         {X4_PAD_CROSS, x4_tr(X4_TR_APPLE_HINT_SELECT)},

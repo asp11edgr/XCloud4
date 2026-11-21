@@ -26,7 +26,8 @@ static void info_text(uint32_t *p, const char *role, int x, int y, int width,
 static void begin_page(uint32_t *p, enum X4TextId title)
 {
     x4_rect(p, 0, 0, X4_UI_WIDTH, X4_UI_HEIGHT, X4_UI2_BACKGROUND);
-    x4_ui2_heading(p, X, 56, x4_tr(title));
+    info_text(p, "information title", X, 112, 820, X4_UI2_HEADING,
+        X4_FONT_BOLD, x4_tr(title), 1, X4_UI2_TEXT);
 }
 
 static void end_page(uint32_t *p)
@@ -157,7 +158,7 @@ void x4_ui2_support_draw(uint32_t *p)
     const char *site = url + sizeof("https://") - 1;
     x4_ui2_chip(p, left, 592, 360, 46, site, true);
     x4_rect(p, 1236, 224, 1, 465, X4_UI2_BORDER);
-    (void)x4_apple_draw_public_qr(p, 1518, 431, 346, url);
+    (void)x4_ui2_draw_qr(p, 1518, 431, 346, url);
     const int caption_w = x4_text_width_px(X4_UI2_CAPTION, X4_FONT_REGULAR, x4_tr(X4_TR_U49_SUPPORT_SCAN));
     const int caption_x = 1518 - (caption_w < 460 ? caption_w : 460) / 2;
     info_text(p, "support scan help", caption_x, 635, 460, X4_UI2_CAPTION,

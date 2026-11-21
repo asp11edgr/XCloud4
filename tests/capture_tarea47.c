@@ -104,7 +104,7 @@ static X4Ui2Shell shell;
 static X4Ui2Status status47;
 static const char *const sidebar_scenes[X4_UI2_SECTION_COUNT] = {
     "barra-inicio", "barra-descubrir", "barra-catalogo", "barra-mis-juegos",
-    "barra-buscar", "barra-ajustes", "barra-apoyar", "barra-acerca"
+    "barra-buscar", "barra-ajustes", "barra-apoyar", "barra-acerca", "barra-cuenta"
 };
 
 static void safe47(const char *scene, X4UiRect rect)
@@ -127,22 +127,23 @@ static void cover47(const char *scene, X4UiRect rect, const X4CoverRaster *sourc
 static void nav47(void)
 {
     x4_ui2_shell_set_section(&shell, X4_UI2_HOME);
-    X4Ui2NavResult nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_LEFT, false);
+    X4Ui2NavResult nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, false);
     assert(!nav.consumed && !shell.focused);
-    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_LEFT, true);
+    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true);
     assert(nav.consumed && nav.changed && shell.focused && shell.selected == X4_UI2_HOME);
     for (unsigned i = 0; i < X4_UI2_SECTION_COUNT; ++i) {
         assert(shell.selected == (X4Ui2Section)i);
         nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_SELECT, true);
         assert(nav.consumed && nav.activate && nav.target == (X4Ui2Section)i);
-        nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_DOWN, true);
+        nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_RIGHT, true);
         assert(nav.changed);
     }
-    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true);
-    assert(nav.changed && shell.selected == X4_UI2_ABOUT);
+    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_LEFT, true);
+    assert(nav.changed && shell.selected == X4_UI2_ACCOUNT);
     nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_CIRCLE, true);
-    assert(!nav.consumed);
-    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_RIGHT, false);
+    assert(nav.consumed && !shell.focused);
+    assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true).changed);
+    nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_DOWN, false);
     assert(nav.changed && !shell.focused);
     const X4Ui2Section loop[] = {X4_UI2_HOME, X4_UI2_DISCOVER, X4_UI2_CATALOG, X4_UI2_LIBRARY};
     for (unsigned i = 0; i < sizeof(loop) / sizeof(loop[0]); ++i) {
@@ -156,7 +157,7 @@ static void nav47(void)
     nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_OPTIONS, false);
     assert(nav.consumed && nav.activate && nav.target == X4_UI2_SETTINGS);
     x4_ui2_shell_set_section(&shell, X4_UI2_HOME);
-    fputs("CAPTURE47 PASS sidebar cruceta, L1/R1, circle delegation, OPTIONS\n", stderr);
+    fputs("CAPTURE47 PASS header navigation, L1/R1, Circle, OPTIONS\n", stderr);
 }
 
 static void boot47(uint32_t *pixels, uint32_t *scratch)
@@ -192,16 +193,21 @@ static void home_render47(const X4Ui2HomeModel *model, int selection,
 {
     if (!canvas_valid) x4_rect(pixels, 0, 0, WIDTH, HEIGHT, X4_UI2_BACKGROUND);
     X4UiRect damage[2];
-    (void)x4_ui2_home_draw(model, &catalog, &assets, assets.revision,
+    const size_t count = x4_ui2_home_draw(model, &catalog, &assets, assets.revision,
         selection, canvas_valid, pixels, damage);
-    x4_ui2_shell_draw_sidebar(pixels, &shell);
-    x4_ui2_shell_draw_status(pixels, &status47, !canvas_valid);
+    bool fresh = count == SIZE_MAX;
+    for (size_t i = 0; count != SIZE_MAX && i < count; ++i)
+        if (!damage[i].x && !damage[i].y && damage[i].w == WIDTH &&
+            damage[i].h >= X4_UI2_HEADER_H) fresh = true;
+    x4_ui2_shell_draw_header(pixels, &shell, &status47, fresh);
 }
 
 static void home_geometry47(const char *scene, const X4Ui2HomeModel *model,
     const uint32_t *pixels)
 {
-    safe47(scene, x4_ui2_home_bounds());
+    X4UiRect action;
+    assert(x4_ui2_home_item_bounds(model, X4_UI2_HOME_CONTINUE, &action));
+    safe47(scene, action);
     for (int item = 0; item < X4_UI2_HOME_ITEM_COUNT; ++item) {
         X4UiRect rect;
         if (!x4_ui2_home_art_bounds(model, item, &rect)) continue;
@@ -210,10 +216,13 @@ static void home_geometry47(const char *scene, const X4Ui2HomeModel *model,
         unsigned index = asset_index(&assets, id);
         assert(index < assets.count);
         const X4CoverRaster *source = &assets.entries[index].surface[X4_COVER_ROW];
-        cover47(scene, rect, source);
+        if (item == X4_UI2_HOME_CONTINUE) {
+            assert(source->rgba && rect.x == 0 &&
+                rect.x + rect.w == X4_UI_WIDTH && rect.y == 0);
+        } else cover47(scene, rect, source);
     }
     uint32_t bg = pixels[(size_t)200 * WIDTH + 400];
-    uint32_t card = pixels[(size_t)485 * WIDTH + 393];
+    uint32_t card = pixels[(size_t)218 * WIDTH + 393];
     contrast47(scene, "titulo-inicio", luminance47(X4_UI2_TEXT), luminance47(bg), 3.0);
     contrast47(scene, "texto-tarjeta", luminance47(X4_UI2_MUTED), luminance47(card), 4.5);
     contrast47(scene, "boton-primario", luminance47(X4_UI2_INK), luminance47(X4_UI2_ACCENT), 4.5);
@@ -227,11 +236,12 @@ static void focus_cache47(const X4Ui2HomeModel *model, uint32_t *pixels, uint32_
     assert(x4_ui2_home_draw(model, &catalog, &assets, assets.revision,
         X4_UI2_HOME_CONTINUE, true, pixels, damage) == 0);
     int focus = x4_ui2_home_move(model, X4_UI2_HOME_CONTINUE, X4_UI2_HOME_DOWN);
-    assert(focus == X4_UI2_HOME_RECENT_FIRST);
+    assert(focus == X4_UI2_HOME_TILE_FIRST);
     assert(x4_ui2_home_draw(model, &catalog, &assets, assets.revision,
         focus, true, pixels, damage) == 2);
     assert(x4_ui2_home_draw(model, &catalog, &assets, assets.revision,
         focus, false, scratch, damage) == SIZE_MAX);
+    x4_ui2_shell_draw(scratch, &shell, &status47);
     X4UiRect bounds = x4_ui2_home_bounds();
     for (int y = bounds.y; y < bounds.y + bounds.h; ++y) {
         size_t at = (size_t)y * WIDTH + bounds.x;
@@ -245,13 +255,13 @@ static void extra_shell47(uint32_t *pixels, uint32_t *scratch)
     X4Ui2HomeModel model;
     x4_ui2_home_model(&model, true, &catalog, &recent, &browser.home_rows);
     x4_ui2_shell_set_section(&shell, X4_UI2_HOME);
-    assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_LEFT, true).changed);
+    assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true).changed);
     for (unsigned i = 0; i < X4_UI2_SECTION_COUNT; ++i) {
         assert(shell.selected == (X4Ui2Section)i);
         home_render47(&model, -1, i != 0, pixels);
-        safe47(sidebar_scenes[i], x4_ui2_status_rect);
+
         capture(sidebar_scenes[i], pixels);
-        assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_DOWN, true).changed);
+        assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_RIGHT, true).changed);
     }
     x4_ui2_shell_set_section(&shell, X4_UI2_HOME);
     const X4Ui2Network nets[] = {X4_UI2_NETWORK_CABLE, X4_UI2_NETWORK_WIFI, X4_UI2_NETWORK_UNKNOWN};
@@ -263,21 +273,21 @@ static void extra_shell47(uint32_t *pixels, uint32_t *scratch)
         assert(!x4_ui2_status_update(&status47, nets[i], 1080, 60, minute, sample_gamertag));
         assert(status47.minute == minute && !strcmp(status47.initial, "J"));
         home_render47(&model, X4_UI2_HOME_CONTINUE, i != 0, pixels);
-        safe47(names[i], x4_ui2_status_rect);
+
         capture(names[i], pixels);
     }
     assert(x4_ui2_status_update(&status47, X4_UI2_NETWORK_UNKNOWN, 1080, 60, minute + 1, sample_gamertag));
     assert(!x4_ui2_status_update(&status47, X4_UI2_NETWORK_UNKNOWN, 1080, 60, minute + 1, sample_gamertag));
     assert(x4_ui2_status_update(&status47, X4_UI2_NETWORK_WIFI, 1080, 60, minute, sample_gamertag));
-    const X4UiRect status_rect = x4_ui2_status_rect;
+    const X4UiRect status_rect = x4_ui2_header_rect;
     const uint32_t artwork = X4_RGB(122, 170, 204);
     x4_rect(pixels, status_rect.x, status_rect.y, status_rect.w, status_rect.h, artwork);
-    x4_ui2_shell_draw_status(pixels, &status47, true);
-    assert(pixels[(size_t)status_rect.y * WIDTH + status_rect.x] == artwork);
+    x4_ui2_shell_draw_header(pixels, &shell, &status47, true);
+    assert(pixels[(size_t)status_rect.y * WIDTH + status_rect.x] != artwork);
     assert(x4_ui2_status_update(&status47, X4_UI2_NETWORK_WIFI, 1080, 60, minute + 1, sample_gamertag));
-    x4_ui2_shell_draw_status(pixels, &status47, false);
+    x4_ui2_shell_draw_header(pixels, &shell, &status47, false);
     x4_rect(scratch, status_rect.x, status_rect.y, status_rect.w, status_rect.h, artwork);
-    x4_ui2_shell_draw_status(scratch, &status47, true);
+    x4_ui2_shell_draw_header(scratch, &shell, &status47, true);
     for (int y = status_rect.y; y < status_rect.y + status_rect.h; ++y) {
         size_t at = (size_t)y * WIDTH + status_rect.x;
         assert(!memcmp(pixels + at, scratch + at, (size_t)status_rect.w * sizeof(*pixels)));
@@ -329,16 +339,12 @@ static void home47(const char *data, uint32_t *pixels, uint32_t *scratch)
         };
         assert(model.mode == modes[i]);
         X4Ui2HomeRoute route = x4_ui2_home_activate(&model, X4_UI2_HOME_CONTINUE);
-        assert(route.action == (i == 0 ? X4_UI2_HOME_GAME : i == 4 ? X4_UI2_HOME_LOGIN : X4_UI2_HOME_RECENTS));
-        route = x4_ui2_home_activate(&model, X4_UI2_HOME_POPULAR_FIRST);
-        assert(route.action == (signed_in ? X4_UI2_HOME_GAME : X4_UI2_HOME_FORTNITE));
-        if (signed_in) assert(!strcmp(catalog.titles[route.source].product_id, fortnite));
-        assert(x4_ui2_home_activate(&model, X4_UI2_HOME_EXPLORE).action == X4_UI2_HOME_CATALOG);
-        if (!i) {
-            assert(model.recent_count == X4_UI2_HOME_RECENT_MAX);
-            assert(x4_ui2_home_activate(&model, X4_UI2_HOME_RECENT_ALL).action == X4_UI2_HOME_RECENTS);
-            focus_cache47(&model, pixels, scratch);
-        }
+        const enum X4Ui2HomeAction actions[] = {X4_UI2_HOME_GAME, X4_UI2_HOME_CATALOG,
+            X4_UI2_HOME_RECENTS, X4_UI2_HOME_RECENTS, X4_UI2_HOME_LOGIN};
+        assert(route.action == actions[i]);
+        route = x4_ui2_home_activate(&model, X4_UI2_HOME_TILE_FIRST);
+        assert(route.action == (model.recent_shelf ? X4_UI2_HOME_GAME : X4_UI2_HOME_FORTNITE));
+        if (!i) focus_cache47(&model, pixels, scratch);
         (void)x4_ui2_status_update(&status47, X4_UI2_NETWORK_WIFI, 1080, 60, 18 * 60 + 42,
             signed_in ? sample_gamertag : NULL);
         home_render47(&model, X4_UI2_HOME_CONTINUE, false, pixels);
@@ -426,7 +432,7 @@ static void tabs47(const char *data, uint32_t *pixels, uint32_t *scratch)
         x4_catalog_gui_home_invalidate();
         CAPTURE_SCENE(tab_scenes[i]);
 #if !X4_CAPTURE47_BEFORE
-        x4_catalog_gui_sidebar_focused(false);
+        x4_catalog_gui_header_focused(false);
         const X4Ui2Section sections[] = {X4_UI2_DISCOVER, X4_UI2_CATALOG, X4_UI2_LIBRARY};
         x4_ui2_shell_set_section(&shell, sections[i]);
 #endif

@@ -205,10 +205,10 @@ struct X4CatalogAssets {
     void *clock_context;
     char disk_root[256];
     uint64_t use_clock, revision;
-    Slot slots[X4_CATALOG_ASSET_SLOTS];
+    Slot slots[X4_CATALOG_RESIDENT_SLOTS];
     char demand[X4_CATALOG_ASSET_SLOTS][X4_PRODUCT_ID_CAP];
     uint32_t demand_masks[X4_CATALOG_ASSET_SLOTS];
-    size_t demand_count;
+    size_t demand_count, visible_count;
     Preload preload[X4_CATALOG_PRELOAD_PRODUCTS];
     size_t preload_count;
     uint64_t preload_revision;
@@ -221,6 +221,10 @@ struct X4CatalogAssets {
     X4SiglList sigls[X4_SIGL_COUNT];
     uint64_t sigl_session, sigl_revision;
     unsigned sigl_started;
+    char search_query[X4_STORE_SEARCH_QUERY_MAX + 1];
+    uint64_t search_revision, search_completed, search_due;
+    X4StoreSearchTitle search_results[X4_STORE_SEARCH_RESULTS];
+    size_t search_count;
     X4CatalogAssetStats stats;
     X4AssetEvent events[X4_ASSET_EVENT_CAP];
     unsigned event_next, event_count;
@@ -302,7 +306,7 @@ static int make_room(X4CatalogAssets *a,size_t bytes)
     while(a->stats.thumbnail_bytes+bytes>X4_CATALOG_THUMBNAIL_BUDGET){
         Slot *oldest=NULL;
         unsigned surface=0;
-        for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){
+        for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i){
             Slot *s=&a->slots[i];
             if(s->pins||(oldest&&s->used>=oldest->used))continue;
             for(unsigned j=0;j<X4_COVER_SURFACES;++j){
@@ -319,7 +323,7 @@ static int make_room(X4CatalogAssets *a,size_t bytes)
 }
 static int find(X4CatalogAssets *a,const char *id,uint64_t generation)
 {
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i)
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i)
         if(a->slots[i].occupied&&a->slots[i].generation==generation&&!strcmp(a->slots[i].metadata.product_id,id))return (int)i;
     return -1;
 }
@@ -327,7 +331,7 @@ static int allocate_slot(X4CatalogAssets *a)
 {
     int candidate=-1;
     uint64_t oldest=UINT64_MAX;
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i){
         Slot *s=&a->slots[i];
         if(!s->occupied)return (int)i;
         if(!s->busy&&!s->pins&&!s->wanted&&s->used<oldest){oldest=s->used;
@@ -350,7 +354,7 @@ static void occupy_slot(X4CatalogAssets *a,Slot *s,const char *id,uint64_t gener
 }
 static void fill_demand(X4CatalogAssets *a,uint64_t generation)
 {
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i)a->slots[i].wanted=0;
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i)a->slots[i].wanted=0;
     /* Protect requested public products before choosing an eviction. Rebind
      * generation only when no borrower or old worker owns the slot. */
     size_t background=a->background_id[0]?1u:0u;
@@ -365,7 +369,7 @@ static void fill_demand(X4CatalogAssets *a,uint64_t generation)
         const char *id=d<background?a->background_id:a->demand[d-background];
         uint32_t mask=d<background?BACKGROUND_MASK:a->demand_masks[d-background];
         int i=find(a,id,generation);
-        if(i<0)for(unsigned k=0;k<X4_CATALOG_ASSET_SLOTS;++k){
+        if(i<0)for(unsigned k=0;k<X4_CATALOG_RESIDENT_SLOTS;++k){
             Slot *s=&a->slots[k];
             if(s->occupied&&!s->busy&&!s->pins&&!strcmp(s->metadata.product_id,id)){
                 i=(int)k;
@@ -387,7 +391,7 @@ static void fill_demand(X4CatalogAssets *a,uint64_t generation)
         int i=find(a,id,generation);
         if(i<0){
             int owned=0;
-            for(unsigned k=0;k<X4_CATALOG_ASSET_SLOTS;++k)
+            for(unsigned k=0;k<X4_CATALOG_RESIDENT_SLOTS;++k)
                 if(a->slots[k].occupied&&!strcmp(a->slots[k].metadata.product_id,id)&&
                    (a->slots[k].pins||a->slots[k].busy))owned=1;
             if(owned)continue;
@@ -820,7 +824,7 @@ static int decode_image(X4CatalogAssets *a,X4CatalogDiskCache *disk,Job job,cons
     uint64_t start=now(a);
     int rc=x4_product_surface_decode(encoded,length,(enum X4CoverSurface)job.surface,&raster);
     if(!rc&&job.surface==X4_COVER_BACKGROUND)x4_product_compose_background(&raster);
-    else if(!rc&&(job.surface==X4_COVER_HOME_FEATURE||job.surface==X4_COVER_HOME_FORTNITE))
+    else if(!rc&&job.surface==X4_COVER_HOME_FORTNITE)
         x4_catalog_assets_compose_card(&raster);
     record(a,&job,X4_ASSET_DECODE,source,start,now(a));
     if(rc){
@@ -1230,12 +1234,14 @@ static int process_game_work(X4CatalogAssets *a,X4Http **http,X4CatalogDiskCache
     }
     return 1;
 }
-static unsigned select_jobs(X4CatalogAssets *a,uint64_t generation,uint64_t t,int allow_image,Job jobs[METADATA_BATCH])
+static unsigned select_jobs(X4CatalogAssets *a,uint64_t generation,uint64_t t,int allow_image,
+    int visible,Job jobs[METADATA_BATCH])
 {
     size_t background=a->background_id[0]?1u:0u;
-    size_t count=a->demand_count+background;
+    size_t first=visible?0:a->visible_count+background;
+    size_t end=(visible?a->visible_count:a->demand_count)+background;
     unsigned n=0;
-    for(size_t d=0;d<count&&n<METADATA_BATCH;++d){
+    for(size_t d=first;d<end&&n<METADATA_BATCH;++d){
         const char *id=d<background?a->background_id:a->demand[d-background];
         int i=find(a,id,generation);
         if(i<0||a->slots[i].busy)continue;
@@ -1308,6 +1314,42 @@ static int next_sigl(const X4CatalogAssets *a)
         if(!(a->sigl_started&(1u<<i)))return (int)i;
     return -1;
 }
+
+static void process_search(X4CatalogAssets *a, X4Http **http, uint64_t revision,
+    const char *query, char *json)
+{
+    char encoded[3 * X4_STORE_SEARCH_QUERY_MAX + 1];
+    size_t used = 0;
+    for (const char *p = query; *p; ++p) {
+        if (*p == ' ') {
+            memcpy(encoded + used, "%20", 3);
+            used += 3;
+        } else {
+            encoded[used++] = *p;
+        }
+    }
+    encoded[used] = 0;
+    char url[320];
+    int written = snprintf(url, sizeof(url), X4_STORE_SEARCH_PREFIX "%s" X4_STORE_SEARCH_SUFFIX,
+        encoded, MARKET, LANGUAGE);
+    size_t length = 0, count = 0;
+    int status = 0, open_error = 0;
+    X4StoreSearchTitle results[X4_STORE_SEARCH_RESULTS];
+    if (written > 0 && (size_t)written < sizeof(url) && !atomic_load(&a->cancel)) {
+        if (!*http) *http = open_http(a, &open_error);
+        if (*http && !x4_http_public_metadata_request(*http, url, json, METADATA_CAP, &length,
+            &status, &a->cancel) && status == 200)
+            count = x4_product_search_parse(json, length, results);
+    }
+    lock(&a->mutex);
+    if (revision == a->search_revision && !atomic_load(&a->cancel)) {
+        a->search_completed = revision;
+        a->search_count = count;
+        memcpy(a->search_results, results, count * sizeof(results[0]));
+    }
+    unlock(&a->mutex);
+}
+
 static void process_sigl(X4CatalogAssets *a,X4Http **http,int kind,uint64_t session,char *json,X4SiglList *parsed)
 {
     char url[160];
@@ -1502,7 +1544,6 @@ static void *asset_worker(void *argument)
         atomic_store(&a->run_gate,0);
         return NULL;
     }
-    int prefer_sigl=0;
     uint64_t protected_applied=0;
 #if !defined(X4_ASSETS_HOST_TEST) && !X4_PUBLIC
     CoverSummary summary={.next_us=add_sat(now(a),10000000u)};
@@ -1532,6 +1573,8 @@ static void *asset_worker(void *argument)
             process_game_work(a,&http,disk,json,encoded))continue;
 
         Job jobs[METADATA_BATCH];
+        char search_query[X4_STORE_SEARCH_QUERY_MAX + 1];
+        uint64_t search_revision = 0;
         unsigned n=0;
         uint64_t t=now(a);
         lock(&a->mutex);
@@ -1540,15 +1583,27 @@ static void *asset_worker(void *argument)
         int sigl=next_sigl(a);
         uint64_t sigl_session=a->sigl_session;
         int allow_image=free_downloader(a)!=NULL;
-        if(!prefer_sigl||sigl<0)n=select_jobs(a,generation,t,allow_image,jobs);
-        if(n)sigl=-1;
-        gate=atomic_load(&a->run_gate);
         int downloads_idle=a->game_downloader.state==DOWNLOAD_FREE;
         for(unsigned i=0;i<a->downloader_count;++i)
             if(a->downloaders[i].state!=DOWNLOAD_FREE)downloads_idle=0;
-        if(disk&&!n&&sigl<0&&(gate==1||gate==2)&&downloads_idle)
+        /* The same coordinator publishes decoded covers. Avoid holding it
+         * in a list or search request while a cover can finish. */
+        if (!downloads_idle) sigl = -1;
+        if (downloads_idle && a->search_query[0] &&
+            a->search_revision != a->search_completed && t >= a->search_due) {
+            search_revision = a->search_revision;
+            memcpy(search_query, a->search_query, sizeof(search_query));
+            sigl = -1;
+        } else {
+            n = select_jobs(a, generation, t, allow_image, 1, jobs);
+        }
+        if(n)sigl=-1;
+        gate=atomic_load(&a->run_gate);
+        if(disk&&!search_revision&&!n&&sigl<0&&(gate==1||gate==2)&&downloads_idle)
             n=select_preload(a,generation,&jobs[0]);
-        if(n||sigl>=0){
+        if(!search_revision&&!n&&sigl<0&&(gate==1||gate==2)&&downloads_idle)
+            n=select_jobs(a,generation,t,allow_image,0,jobs);
+        if(n||sigl>=0||search_revision){
             if(gate==1){
                 atomic_store(&a->cancel,0);
                 if(!atomic_load(&a->suspended)&&atomic_compare_exchange_strong(&a->run_gate,&gate,2))
@@ -1557,6 +1612,7 @@ static void *asset_worker(void *argument)
             if(gate!=2||atomic_load(&a->cancel)||atomic_load(&a->suspended)){
                 n=0;
                 sigl=-1;
+                search_revision=0;
             }else{
                 atomic_store(&a->busy,1);
                 if(sigl>=0){
@@ -1570,16 +1626,18 @@ static void *asset_worker(void *argument)
                 atomic_store(&a->busy,0);
         }
         unlock(&a->mutex);
+        if (search_revision) {
+            process_search(a, &http, search_revision, search_query, json);
+            continue;
+        }
         if(sigl>=0){
             process_sigl(a,&http,sigl,sigl_session,json,parsed);
-            prefer_sigl=0;
             continue;
         }
         if(!n){
             pause_worker();
             continue;
         }
-        prefer_sigl=1;
         for(unsigned i=0;i<n;++i){
             lock(&a->mutex);
             uint64_t queued=a->slots[jobs[i].slot].queued_us;
@@ -1733,12 +1791,16 @@ static void game_request_locked(X4CatalogAssets *a,const char *id,int fullscreen
 static void clear_demand_locked(X4CatalogAssets *a)
 {
     a->demand_count=0;
+    a->visible_count=0;
     a->preload_count=0;
     game_request_locked(a,"",-1);
     ++a->preload_revision;
     a->background_active=-1;
     a->background_id[0]=0;
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i)a->slots[i].wanted=0;
+    a->search_query[0] = 0;
+    ++a->search_revision;
+    a->search_count = 0;
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i)a->slots[i].wanted=0;
     ++a->revision;
 }
 void x4_catalog_assets_set_generation(X4CatalogAssets *a,uint64_t generation)
@@ -1754,20 +1816,58 @@ void x4_catalog_assets_request(X4CatalogAssets *a,const char *const *ids,size_t 
 {
     x4_catalog_assets_request_surfaces(a,ids,NULL,count);
 }
+size_t x4_catalog_assets_search(X4CatalogAssets *a, const char *query,
+    X4StoreSearchTitle out[X4_STORE_SEARCH_RESULTS])
+{
+    if (!a || !out || trylock(&a->mutex)) return 0;
+    if (!query) query = "";
+    while (*query == ' ') ++query;
+    size_t length = strnlen(query, X4_STORE_SEARCH_QUERY_MAX + 1);
+    while (length && query[length - 1] == ' ') --length;
+    size_t letters = 0;
+    for (size_t i = 0; i < length; ++i) {
+        const unsigned char c = (unsigned char)query[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9')) ++letters;
+        else if (c != ' ') { letters = 0; break; }
+    }
+    if (length > X4_STORE_SEARCH_QUERY_MAX || letters < 3) length = 0;
+    if (strncmp(a->search_query, query, length) || a->search_query[length]) {
+        memcpy(a->search_query, query, length);
+        a->search_query[length] = 0;
+        ++a->search_revision;
+        a->search_due = add_sat(now(a), 400000);
+        a->search_count = 0;
+    }
+    size_t count = a->search_count;
+    if (count) memcpy(out, a->search_results, count * sizeof(out[0]));
+    a->search_count = 0;
+    unlock(&a->mutex);
+    return count;
+}
+
 void x4_catalog_assets_request_surfaces(X4CatalogAssets *a,const char *const *ids,
     const uint32_t *masks,size_t count)
+{
+    x4_catalog_assets_request_surfaces_with_preload(a,ids,masks,count,count);
+}
+void x4_catalog_assets_request_surfaces_with_preload(X4CatalogAssets *a,
+    const char *const *ids,const uint32_t *masks,size_t count,size_t visible_count)
 {
     if(!a||(!ids&&count)||trylock(&a->mutex))return;
     char demand[X4_CATALOG_ASSET_SLOTS][X4_PRODUCT_ID_CAP]={{0}};
     uint32_t wanted[X4_CATALOG_ASSET_SLOTS]={0};
-    size_t n=0;
+    size_t n=0, visible=0;
     if(count>X4_CATALOG_ASSET_SLOTS)count=X4_CATALOG_ASSET_SLOTS;
     for(size_t i=0;i<count;++i){
         uint32_t mask=masks?masks[i]&THUMBNAIL_MASK:LEGACY_MASK;
         if(!mask||!x4_product_id_valid(ids[i]))continue;
         size_t d=0;
         while(d<n&&strcmp(demand[d],ids[i]))++d;
-        if(d==n)memcpy(demand[n++],ids[i],strlen(ids[i])+1u);
+        if(d==n){
+            memcpy(demand[n++],ids[i],strlen(ids[i])+1u);
+            if(i<visible_count)++visible;
+        }
         wanted[d]|=mask;
     }
     int changed=n!=a->demand_count;
@@ -1785,6 +1885,7 @@ void x4_catalog_assets_request_surfaces(X4CatalogAssets *a,const char *const *id
     memcpy(a->demand,demand,sizeof(demand));
     memcpy(a->demand_masks,wanted,sizeof(wanted));
     a->demand_count=n;
+    a->visible_count=visible;
     fill_demand(a,atomic_load(&a->generation));
     unlock(&a->mutex);
 }
@@ -2019,7 +2120,7 @@ void x4_catalog_assets_retry(X4CatalogAssets *a)
 {
     if(!a)return;
     lock(&a->mutex);
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){Slot *s=&a->slots[i];
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i){Slot *s=&a->slots[i];
         if(!s->wanted||s->busy)continue;
         if(!s->metadata_valid&&s->state==X4_ASSET_TEMPORARY_FAILURE){
             ++a->stats.retries;
@@ -2055,20 +2156,20 @@ int x4_catalog_assets_acquire(X4CatalogAssets *a,const char *id,X4CatalogAssetVi
 }
 void x4_catalog_assets_release(X4CatalogAssets *a,X4CatalogAssetView *view)
 {
-    if(!a||!view||view->slot>=X4_CATALOG_ASSET_SLOTS)return;
+    if(!a||!view||view->slot>=X4_CATALOG_RESIDENT_SLOTS)return;
     lock(&a->mutex);
     Slot *s=&a->slots[view->slot];
     if(s->occupied&&s->generation==view->generation&&!strcmp(s->metadata.product_id,view->metadata.product_id)&&s->pins)--s->pins;
     unlock(&a->mutex);
     memset(view,0,sizeof(*view));
-    view->slot=X4_CATALOG_ASSET_SLOTS;
+    view->slot=X4_CATALOG_RESIDENT_SLOTS;
 }
 size_t x4_catalog_assets_copy_metadata(X4CatalogAssets *a,X4ProductMetadata *out,size_t capacity,uint64_t *revision)
 {
     if(!a||!out||trylock(&a->mutex))return 0;
     size_t n=0;
     uint64_t generation=atomic_load(&a->generation);
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS&&n<capacity;++i){Slot *s=&a->slots[i];
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS&&n<capacity;++i){Slot *s=&a->slots[i];
     if(s->occupied&&s->generation==generation&&s->metadata_valid)out[n++]=s->metadata;
     }
     if(revision)*revision=a->revision;
@@ -2084,7 +2185,7 @@ void x4_catalog_assets_stats(X4CatalogAssets *a,X4CatalogAssetStats *out)
     out->revision=a->revision;
     out->busy=atomic_load(&a->busy);
     out->suspended=atomic_load(&a->suspended);
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){Slot *s=&a->slots[i];
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i){Slot *s=&a->slots[i];
     out->occupied+=s->occupied?1u:0u;
     out->pinned+=s->pins;
         if(s->metadata_valid){
@@ -2114,7 +2215,7 @@ void x4_catalog_assets_destroy(X4CatalogAssets *a)
     stop_downloaders(a,a->downloader_count+1u);
     game_reset_cache(&a->game);
     mutex_destroy(&a->http_open_mutex);
-    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i)x4_cover_rasters_free(&a->slots[i].cover);
+    for(unsigned i=0;i<X4_CATALOG_RESIDENT_SLOTS;++i)x4_cover_rasters_free(&a->slots[i].cover);
     for(unsigned i=0;i<BACKGROUND_SLOTS;++i)free(a->backgrounds[i].raster.rgba);
     mutex_destroy(&a->mutex);
     free(a);

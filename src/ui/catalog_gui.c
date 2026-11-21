@@ -26,14 +26,14 @@
 #define H 1080
 
 enum { CONTENT_LEFT = X4_UI2_CONTENT_X };
-static bool sidebar_focused;
+static bool header_focused;
 
-void x4_catalog_gui_sidebar_focused(bool focused) { sidebar_focused = focused; }
+void x4_catalog_gui_header_focused(bool focused) { header_focused = focused; }
 
 static const uint32_t C_WHITE = X4_UI2_TEXT;
 static const uint32_t C_MUTED = X4_UI2_MUTED;
-static const uint32_t C_SOFT  = X4_RGB(0xC5, 0xD0, 0xE0);
-static const uint32_t C_GREEN = X4_UI2_ACCENT;
+static const uint32_t C_SOFT  = X4_UI2_ACCENT_SOFT;
+static const uint32_t C_ACCENT = X4_UI2_ACCENT;
 
 static uint32_t *s_keyboard_backdrop;
 static bool s_keyboard_backdrop_valid = false;
@@ -186,8 +186,9 @@ static void draw_cover_rounded(uint32_t *p, X4CatalogAssets *a, const char *prod
     }
 }
 
-static void draw_top_bar(uint32_t *p, const X4CatalogBrowser *b)
+static void draw_legacy_heading(uint32_t *p, const X4CatalogBrowser *b)
 {
+    if (b->ui2_enabled) return;
     const char *title = b->active_tab == X4_CAT_TAB_DISCOVER ? x4_tr(X4_TR_APPLE_TAB_DISCOVER) :
         b->active_tab == X4_CAT_TAB_CATALOG ? x4_tr(X4_TR_APPLE_TAB_CATALOG) :
         b->active_tab == X4_CAT_TAB_SEARCH ? x4_tr(X4_TR_U49_SEARCH_LABEL) :
@@ -387,7 +388,7 @@ static void draw_discover_tab(uint32_t *p, const X4CatalogSnapshot *c,
             const char *acc = st->entitled ? x4_tr(X4_TR_CAT_FILTER_ENTITLED) : x4_tr(X4_TR_CAT_FILTER_UNCONFIRMED);
             int aw = x4_text_width_px(20, X4_FONT_SEMIBOLD, acc) + 32;
             x4_apple_glass_panel(p, 1836 - aw, 560, aw, 38, 19, 22u, 48u);
-            txt(p, 1836 - aw + 16, 567, 20, X4_FONT_SEMIBOLD, acc, aw - 32, st->entitled ? C_GREEN : C_SOFT);
+            txt(p, 1836 - aw + 16, 567, 20, X4_FONT_SEMIBOLD, acc, aw - 32, st->entitled ? C_ACCENT : C_SOFT);
         }
     }
 
@@ -414,7 +415,7 @@ static void draw_discover_tab(uint32_t *p, const X4CatalogSnapshot *c,
         const char *id   = ct ? ct->id : (rg ? rg->id : "");
         const char *name = ct ? (ct->name[0] ? ct->name : ct->id) : (rg ? (rg->name[0] ? rg->name : rg->id) : "");
 
-        bool focused = (!sidebar_focused && !b->top_bar_focused && !b->hero_focused && idx == row_sel);
+        bool focused = (!header_focused && !b->top_bar_focused && !b->hero_focused && idx == row_sel);
         int cx = CONTENT_LEFT + 8 + (int)slot * 288;
         int cy = 612;
         int cw = 256;
@@ -425,7 +426,7 @@ static void draw_discover_tab(uint32_t *p, const X4CatalogSnapshot *c,
         x4_apple_stroke_round_rect(p, cx, cy, cw, ch, cr, 1.2f, 0x2EFFFFFFu);
         txt(p, cx, cy + ch + 10, 22, X4_FONT_SEMIBOLD, name, cw, C_WHITE);
         const char *acc_txt = ct ? (ct->entitled ? x4_tr(X4_TR_CAT_FILTER_ENTITLED) : x4_tr(X4_TR_CAT_FILTER_UNCONFIRMED)) : "";
-        txt(p, cx, cy + ch + 36, 18, X4_FONT_REGULAR, acc_txt, cw, (ct && ct->entitled) ? C_GREEN : C_MUTED);
+        txt(p, cx, cy + ch + 36, 18, X4_FONT_REGULAR, acc_txt, cw, (ct && ct->entitled) ? C_ACCENT : C_MUTED);
 
         if (focused) {
             x4_apple_focus_ring(p, cx, cy, cw, ch, cr);
@@ -435,9 +436,9 @@ static void draw_discover_tab(uint32_t *p, const X4CatalogSnapshot *c,
 
 static void draw_search_keyboard_modal_frame(uint32_t *p)
 {
-    x4_apple_fill_round_rect(p, 0, 0, W, H, 0, X4_RGBA(0x06, 0x0A, 0x14, 0xA8));
+    x4_apple_fill_round_rect(p, 0, 0, W, H, 0, X4_UI2_TINT(168));
     const int mx = 420, my = 200, mw = 1080, mh = 680, mr = 28;
-    x4_apple_fill_round_rect(p, mx, my, mw, mh, mr, X4_RGBA(0x10, 0x18, 0x2C, 0xF6));
+    x4_apple_fill_round_rect(p, mx, my, mw, mh, mr, X4_UI2_ELEVATED);
     x4_apple_stroke_round_rect(p, mx, my, mw, mh, mr, 1.5f, 0x44FFFFFFu);
     txt(p, mx + 44, my + 32, 34, X4_FONT_BOLD, x4_tr(X4_TR_KB_TITLE), mw - 88, C_WHITE);
     txt(p, mx + 44, my + 566, 22, X4_FONT_REGULAR, x4_tr(X4_TR_KB_HELP1), mw - 88, C_WHITE);
@@ -454,7 +455,7 @@ static void draw_search_keyboard_interactive(uint32_t *p, const X4CatalogBrowser
 
     x4_apple_fill_round_rect(p, mx + 44, my + 92, mw - 88, 60, 18, X4_RGBA(0xFF, 0xFF, 0xFF, 0x18));
     x4_apple_stroke_round_rect(p, mx + 44, my + 92, mw - 88, 60, 18, 1.0f, 0x33FFFFFFu);
-    x4_apple_draw_icon(p, mx + 64, my + 110, X4_ICON_SEARCH, b->query[0] ? C_GREEN : C_MUTED);
+    x4_apple_draw_icon(p, mx + 64, my + 110, X4_ICON_SEARCH, b->query[0] ? C_ACCENT : C_MUTED);
     txt(p, mx + 102, my + 106, 26, X4_FONT_REGULAR,
         b->query[0] ? b->query : x4_tr(X4_TR_KB_PLACEHOLDER),
         mw - 160, b->query[0] ? C_WHITE : C_MUTED);
@@ -466,7 +467,7 @@ static void draw_search_keyboard_interactive(uint32_t *p, const X4CatalogBrowser
         char label[2] = { keys[i], 0 };
         bool active = (i == b->keyboard_cursor);
         if (active) {
-            x4_apple_fill_round_rect(p, kx, ky, 152, 50, 14, X4_RGB(0xF5, 0xF7, 0xFA));
+            x4_apple_fill_round_rect(p, kx, ky, 152, 50, 14, X4_UI2_ACCENT);
             x4_apple_focus_ring(p, kx, ky, 152, 50, 14);
         } else {
             x4_apple_fill_round_rect(p, kx, ky, 152, 50, 14, X4_RGBA(0xFF, 0xFF, 0xFF, 0x14));
@@ -474,7 +475,7 @@ static void draw_search_keyboard_interactive(uint32_t *p, const X4CatalogBrowser
         }
         int lw = x4_text_width_px(26, X4_FONT_BOLD, label);
         txt(p, kx + (152 - lw) / 2, ky + 9, 26, X4_FONT_BOLD, label, 80,
-            active ? X4_RGB(0x0B, 0x10, 0x20) : C_WHITE);
+            active ? X4_UI2_INK : C_WHITE);
     }
 }
 
@@ -617,15 +618,15 @@ static void cloud_home_draw(uint32_t *p, X4CloudTime value)
     const int x = cloud_region.x, y = cloud_region.y, width = cloud_region.w, height = cloud_region.h;
     char text[128];
     x4_cloud_time_label(value, text, sizeof(text));
-    uint32_t accent = value.unlimited || value.remaining_s >= 7200u ? C_GREEN :
+    uint32_t accent = value.unlimited || value.remaining_s >= 7200u ? C_ACCENT :
         value.remaining_s ? X4_RGB(0xFF, 0xB4, 0x5B) : X4_RGB(0xFF, 0x68, 0x7A);
-    x4_apple_fill_round_rect(p, x, y, width, height, 20, X4_RGBA(11, 16, 29, 236));
+    x4_apple_fill_round_rect(p, x, y, width, height, 20, X4_UI2_TINT(236));
     x4_apple_stroke_round_rect(p, x, y, width, height, 20, 1.5f, X4_RGBA(255, 255, 255, 65));
     x4_text_ellipsis_px(p, x + 22, y + (value.unlimited ? 30 : 17), 24, X4_FONT_SEMIBOLD,
         text, width - 44, C_WHITE);
     if (value.unlimited) return;
     const int track = width - 44;
-    x4_apple_fill_round_rect(p, x + 22, y + 56, track, 10, 5, X4_RGB(0x29, 0x35, 0x49));
+    x4_apple_fill_round_rect(p, x + 22, y + 56, track, 10, 5, X4_UI2_BORDER);
     int fill = value.max_s && value.remaining_s < value.max_s ?
         (int)((double)value.remaining_s / (double)value.max_s * track) : track;
     if (fill < 10) fill = 10; /* A red marker remains visible when the balance reaches zero. */
@@ -722,11 +723,11 @@ static void discover_prepare_art(bool transition)
     home.discover_art_index ^= 1u;
     uint32_t *art = discover_art[home.discover_art_index];
     if (!discover_column_weight_ready) {
-        /* Continue the dark left side of the hero under the sidebar. Keep
+        /* Keep the hero title readable over bright artwork. Keep
          * column weights on an 0..256 scale for the per-pixel multiply. */
         const unsigned text_shade = 64u;
-        const unsigned shade_start = X4_UI2_SIDEBAR_W + 736u;
-        const unsigned shade_end = X4_UI2_SIDEBAR_W + 1100u;
+        const unsigned shade_start = 870u;
+        const unsigned shade_end = 1250u;
         for (unsigned x = 0; x < DISCOVER_ART_W; ++x) {
             const unsigned shade = x < shade_start ? text_shade :
                 x < shade_end ? text_shade + (x - shade_start) * (255u - text_shade) /
@@ -864,8 +865,8 @@ enum {
     TAB_COLUMNS = X4_CATALOG_UI2_COLUMNS, TAB_PAGE = X4_CATALOG_UI2_PAGE_SIZE,
     HOME_SOURCE_CARD_H = 216,
     HOME_FULL_CARD_X = HOME_LEFT + 8, HOME_FULL_CARD_W = 352, HOME_FULL_CARD_H = 198,
-    HOME_TAB_CARD_W = 288, HOME_TAB_CARD_H = 162,
-    HOME_DISCOVER_CARD_PITCH = 398, TAB_CARD_PITCH = 315,
+    HOME_TAB_CARD_W = 320, HOME_TAB_CARD_H = 180,
+    HOME_DISCOVER_CARD_PITCH = 429, TAB_CARD_PITCH = 351,
     CATALOG_FIRST_Y = 346, CATALOG_SECOND_Y = 614,
     SEARCH_FIRST_Y = 316, SEARCH_SECOND_Y = 590,
     LIBRARY_FIRST_Y = 328, LIBRARY_SECOND_Y = 594,
@@ -1103,7 +1104,7 @@ static void discover_draw_button(uint32_t *p, const char *label, bool secondary,
     const bool green = !secondary && !waiting;
     const uint32_t color = green ? X4_UI2_INK : X4_UI2_TEXT;
     if (green)
-        x4_apple_fill_round_rect(p, x, HOME_PLAY_Y, width, HOME_PLAY_H, X4_UI2_RADIUS_CONTROL, C_GREEN);
+        x4_apple_fill_round_rect(p, x, HOME_PLAY_Y, width, HOME_PLAY_H, X4_UI2_RADIUS_CONTROL, C_ACCENT);
     else x4_ui2_card(p, x, HOME_PLAY_Y, width, HOME_PLAY_H, X4_UI2_RADIUS_CONTROL);
     if (waiting && !secondary) x4_apple_spinner(p, x + 20, HOME_PLAY_Y + 11, 3);
     else discover_action_icon(p, x + 21, HOME_PLAY_Y + 15, !secondary, favorite, color);
@@ -1193,7 +1194,7 @@ static void home_draw_card(uint32_t *p, const HomeCard *t, X4CatalogAssets *a,
     bool drawn = acquired && home_blit_full_card(p, x, cy, &view.surface[X4_COVER_ROW],
         t->product_id, tab);
     if (!drawn) {
-        x4_apple_fill_round_rect(p, x, cy, width, height, 12, X4_RGB(23, 32, 42));
+        x4_apple_fill_round_rect(p, x, cy, width, height, 12, X4_UI2_ELEVATED);
         enum X4CatalogAssetState state = acquired ? view.state :
             t->product_id[0] ? X4_ASSET_PENDING : X4_ASSET_MISSING;
         if (state == X4_ASSET_READY) state = X4_ASSET_MISSING;
@@ -1247,7 +1248,7 @@ static void discover_continue_history(uint32_t *p, const X4History *history,
     const int height = 12 + (int)count * pitch;
     const int top = y + HOME_FULL_CARD_H - height - inset;
     x4_apple_fill_round_rect(p, x + inset, top, width + 2 * pad, height, X4_UI2_RADIUS_CONTROL,
-        X4_RGBA(7, 14, 24, 228));
+        X4_UI2_TINT(228));
     for (unsigned i = 0; i < count; ++i)
         catalog_text(p, "discover-history", x + inset + pad, top + 5 + (int)i * pitch,
             size, X4_FONT_SEMIBOLD, labels[i], width, C_WHITE);
@@ -1276,7 +1277,7 @@ static void library_history_badge(uint32_t *p, const X4Ui2LibraryCard *card,
     const int width = x4_text_width_px(18, X4_FONT_SEMIBOLD, label);
     int w = width + 24;
     if (w > HOME_TAB_CARD_W - 62) w = HOME_TAB_CARD_W - 62;
-    x4_apple_fill_round_rect(p, x + 10, y + HOME_TAB_CARD_H - 43, w, 33, 10, X4_RGB(12, 22, 34));
+    x4_apple_fill_round_rect(p, x + 10, y + HOME_TAB_CARD_H - 43, w, 33, 10, X4_UI2_BACKGROUND);
     catalog_text(p, "library-history", x + 22, y + HOME_TAB_CARD_H - 37, 18,
         X4_FONT_SEMIBOLD, label, w - 24, C_WHITE);
 }
@@ -1286,14 +1287,14 @@ static void library_heart(uint32_t *p, int x, int y, bool favorite)
     if (favorite) {
         /* Interior spans of the existing 24 px outline. */
         static const unsigned char inset[] = {5, 4, 4, 5, 5, 6, 7, 8, 9, 10, 11};
-        x4_rect(p, x + 7, y + 5, 2, 1, C_GREEN);
-        x4_rect(p, x + 15, y + 5, 2, 1, C_GREEN);
-        x4_rect(p, x + 5, y + 6, 6, 1, C_GREEN);
-        x4_rect(p, x + 13, y + 6, 6, 1, C_GREEN);
+        x4_rect(p, x + 7, y + 5, 2, 1, C_ACCENT);
+        x4_rect(p, x + 15, y + 5, 2, 1, C_ACCENT);
+        x4_rect(p, x + 5, y + 6, 6, 1, C_ACCENT);
+        x4_rect(p, x + 13, y + 6, 6, 1, C_ACCENT);
         for (unsigned row = 0; row < sizeof(inset); ++row)
-            x4_rect(p, x + inset[row], y + 7 + (int)row, 24 - 2 * inset[row], 1, C_GREEN);
+            x4_rect(p, x + inset[row], y + 7 + (int)row, 24 - 2 * inset[row], 1, C_ACCENT);
     }
-    x4_apple_draw_icon(p, x, y, X4_ICON_HEART, favorite ? C_GREEN : C_WHITE);
+    x4_apple_draw_icon(p, x, y, X4_ICON_HEART, favorite ? C_ACCENT : C_WHITE);
 }
 
 static void library_draw_row(uint32_t *p, const X4CatalogSnapshot *c, const X4CatalogBrowser *b,
@@ -1329,11 +1330,11 @@ static void library_draw_row(uint32_t *p, const X4CatalogSnapshot *c, const X4Ca
             library_history_badge(p, &card, x, y, now, false);
         } else {
             const int icon_x = x + HOME_TAB_CARD_W - 44;
-            x4_apple_fill_round_rect(p, icon_x, y + 10, 34, 34, 17, X4_RGB(12, 22, 34));
+            x4_apple_fill_round_rect(p, icon_x, y + 10, 34, 34, 17, X4_UI2_BACKGROUND);
             library_heart(p, icon_x + 5, y + 15, card.favorite);
             if (card.source < c->count) {
                 const int bottom = y + HOME_TAB_CARD_H - 42;
-                x4_apple_fill_round_rect(p, x + 10, bottom, 42, 32, 13, X4_RGB(12, 22, 34));
+                x4_apple_fill_round_rect(p, x + 10, bottom, 42, 32, 13, X4_UI2_BACKGROUND);
                 x4_ui2_cloud(p, x + 17, bottom + 8, 17, C_WHITE);
             }
             library_history_badge(p, &card, x + 42, y, now, true);
@@ -1667,7 +1668,7 @@ static void draw_catalog_selectors(uint32_t *p, const X4CatalogBrowser *b, bool 
             }
             selector_value(b, kind, index, value);
             catalog_text(p, "catalog-dropdown-option", x + 20, y + 6, 20, X4_FONT_SEMIBOLD,
-                value, SELECTOR_W - 60, index == selected ? C_GREEN : C_WHITE);
+                value, SELECTOR_W - 60, index == selected ? C_ACCENT : C_WHITE);
         }
     }
 }
@@ -1682,8 +1683,8 @@ static void draw_library_tabs(uint32_t *p, const X4CatalogBrowser *b, const Home
         if (active && !top && b->ui2_library_tabs)
             x4_ui2_focus(p, x, LIBRARY_TAB_Y, LIBRARY_TAB_W - 20, LIBRARY_TAB_H, 12);
         catalog_text(p, "library-tab", x + 12, LIBRARY_TAB_Y + 6, 26, X4_FONT_SEMIBOLD,
-            labels[i], LIBRARY_TAB_W - 44, active ? C_GREEN : C_MUTED);
-        if (active) x4_rect(p, x + 12, LIBRARY_TAB_Y + 41, width, 3, C_GREEN);
+            labels[i], LIBRARY_TAB_W - 44, active ? C_ACCENT : C_MUTED);
+        if (active) x4_rect(p, x + 12, LIBRARY_TAB_Y + 41, width, 3, C_ACCENT);
     }
 }
 
@@ -1712,7 +1713,7 @@ static void library_control(uint32_t *p, int x, int y, int w, const char *label,
     else x4_ui2_card(p, x, y, w, LIBRARY_CONTROL_H, X4_UI2_RADIUS_CONTROL);
     if (focused) x4_ui2_focus(p, x, y, w, LIBRARY_CONTROL_H, X4_UI2_RADIUS_CONTROL);
     if (icon != X4_ICON_NONE)
-        x4_apple_draw_icon(p, x + 14, y + 9, icon, active ? C_GREEN : C_SOFT);
+        x4_apple_draw_icon(p, x + 14, y + 9, icon, active ? C_ACCENT : C_SOFT);
     const int offset = icon != X4_ICON_NONE ? 49 : 17;
     catalog_text(p, "library-control", x + offset, y + 10, 20, X4_FONT_SEMIBOLD,
         label, w - offset - 16, C_WHITE);
@@ -1954,13 +1955,13 @@ static void discover_draw_dots(uint32_t *p, const X4CatalogBrowser *b)
     const unsigned count = b->featured_count <= X4_CATALOG_FEATURED_MAX ? b->featured_count : 0;
     if (count < 2) return;
     const int width = (int)count * 20 + 68, x = HOME_RIGHT - width;
-    x4_apple_fill_round_rect(p, x, 374, width, 38, 19, X4_RGBA(9, 16, 27, 193));
+    x4_apple_fill_round_rect(p, x, 374, width, 38, 19, X4_UI2_TINT(193));
     x4_apple_stroke_round_rect(p, x, 374, width, 38, 19, 1.0f, X4_UI2_BORDER);
     discover_caret(p, x + 21, 393, false);
     discover_caret(p, HOME_RIGHT - 24, 393, true);
     for (unsigned i = 0; i < count; ++i)
         x4_apple_fill_round_rect(p, x + 39 + (int)i * 20, 388, 10, 10, 5,
-            i == b->featured_index ? C_GREEN : C_SOFT);
+            i == b->featured_index ? C_ACCENT : C_SOFT);
 }
 
 static void home_draw_feature(uint32_t *p, const X4CatalogBrowser *b, const HomeCard *hero,
@@ -2113,7 +2114,7 @@ static void home_draw_footer(uint32_t *p, const X4CatalogBrowser *b, const X4Cat
     const X4Ui2LibraryCard card = x4_catalog_browser_ui2_library_selection(b);
     const bool manage = b->active_tab == X4_CAT_TAB_RECENTS && b->library.manage;
     const bool library = b->active_tab == X4_CAT_TAB_RECENTS && card.product_id &&
-        card.product_id[0] && !manage && !sidebar_focused;
+        card.product_id[0] && !manage && !header_focused;
     X4Ui2Hint hints[5] = {{X4_GLYPH_CROSS, x4_tr(X4_TR_APPLE_HINT_SELECT)}};
     size_t count = 1;
     if (library) {
@@ -2146,7 +2147,7 @@ static void home_draw_footer(uint32_t *p, const X4CatalogBrowser *b, const X4Cat
         snprintf(success, sizeof(success), x4_tr(X4_TR_ACCESS_SUCCESS_FMT),
             x4_access_country_label(country.selected));
         label = success;
-        color = C_GREEN;
+        color = C_ACCENT;
     }
     txt(p, HOME_LEFT, X4_UI_FOOTER_Y + 2, 20, X4_FONT_REGULAR, label, 510, color);
 #ifdef X4_UI46_CAPTURE
@@ -2195,7 +2196,7 @@ static void draw_home(uint32_t *p, const X4CatalogSnapshot *c, const X4CatalogBr
     if (a) x4_catalog_assets_stats(a, &stats);
     tile_revision = stats.revision;
     const bool assets_changed = stats.revision && home.asset_revision != stats.revision;
-    const bool top = b->top_bar_focused || sidebar_focused;
+    const bool top = b->top_bar_focused || header_focused;
     const X4Ui2LibraryCard library_card = library3 ? x4_catalog_browser_ui2_library_selection(b) :
         (X4Ui2LibraryCard){0};
     const bool library_actions = !top && library_card.product_id && library_card.product_id[0];
@@ -2341,11 +2342,11 @@ static void draw_home(uint32_t *p, const X4CatalogSnapshot *c, const X4CatalogBr
             home.rects[home.count++] = regions[i];
         }
         switch (i) {
-        case 0: draw_top_bar(p, b); break;
+        case 0: draw_legacy_heading(p, b); break;
         case 1:
             if (tab) home_draw_tab_tools(p, b, tab, notice, top);
             else {
-                if (!full && (background_changed || fade_redraw)) draw_top_bar(p, b);
+                if (!full && (background_changed || fade_redraw)) draw_legacy_heading(p, b);
                 home_draw_feature(p, b, &hero, hero_source, a, s, favorite, button_focus);
             }
             break;
@@ -2452,7 +2453,7 @@ static void catalog_gui_draw(const X4CatalogSnapshot *c, const X4CatalogBrowser 
         if (!b->editing) return;
     } else {
         x4_apple_bg_draw(p);
-        draw_top_bar(p, b);
+        draw_legacy_heading(p, b);
 
         if (!c || c->state != X4_CATALOG_READY) {
             draw_non_ready_state(p, c);

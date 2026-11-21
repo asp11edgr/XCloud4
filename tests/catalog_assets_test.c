@@ -41,6 +41,7 @@ static _Atomic int bound_screenshots;
 static int trace_disk;
 static const char *disk_phase = "cold";
 static _Atomic unsigned sigl_calls[X4_SIGL_COUNT];
+static _Atomic unsigned search_calls;
 static _Atomic uint64_t fake_now_us, fake_retry_ms;
 static char metadata_order[128][256], image_order[128][32];
 static char image_queries[128][64];
@@ -84,6 +85,20 @@ int x4_http_public_metadata_request(X4Http *h,const char *url,
     char *body,size_t capacity,size_t *length,int *status,const _Atomic int *cancel)
 {
     CHECK(cancel);begin_request(h);
+    if (!strncmp(url, X4_STORE_SEARCH_PREFIX, sizeof(X4_STORE_SEARCH_PREFIX) - 1)) {
+        CHECK(!strcmp(url, X4_STORE_SEARCH_PREFIX "WAR%20THUNDER"
+            "&market=MX&languages=es-MX&productFamilyNames=Games&topProducts=24"));
+        const char results[] = "{\"Results\":[{\"Products\":["
+            "{\"ProductId\":\"BX1DTCBD1HXJ\",\"Title\":\"War Thunder\"},"
+            "{\"ProductId\":\"OUTSIDECLOUD\",\"Title\":\"War Thunder Pack\"}]}]}";
+        CHECK(sizeof(results) <= capacity);
+        memcpy(body, results, sizeof(results));
+        *length = sizeof(results) - 1;
+        *status = 200;
+        atomic_fetch_add(&search_calls, 1);
+        end_request(h);
+        return 0;
+    }
     if(!strncmp(url,X4_SIGL_URL_PREFIX,strlen(X4_SIGL_URL_PREFIX))){
         unsigned kind=0;
         for(;kind<X4_SIGL_COUNT;++kind){
@@ -402,6 +417,42 @@ static void test_text(void)
     CHECK(!x4_json_parse("\"ñüa\"",strlen("\"ñüa\""),&s));CHECK(!x4_json_display_text(s,out,4));CHECK(!strcmp(out,"ñ"));
     CHECK(x4_json_parse("\"\\uD800\"",8,&s)<0);CHECK(x4_json_parse("\"\xc0\xaf\"",4,&s)<0);
 }
+#ifndef X4_ASSETS_TEST_BASELINE31D
+static void test_search_unnamed_cloud_game(void)
+{
+    fake_reset();
+    atomic_store(&search_calls, 0);
+    X4CatalogAssets *a = create_with_clock(NULL, NULL);
+    X4StoreSearchTitle matches[X4_STORE_SEARCH_RESULTS];
+    const char *query = " WAR THUNDER ";
+    CHECK(!x4_catalog_assets_search(a, query, matches));
+    x4_catalog_assets_resume(a);
+    size_t count = 0;
+    for (unsigned i = 0; i < 2000 && !count; ++i) {
+        count = x4_catalog_assets_search(a, query, matches);
+        if (!count) sleep_ms(1);
+    }
+    CHECK(count == 2 && atomic_load(&search_calls) == 1);
+    static X4CatalogSnapshot catalog;
+    catalog.state = X4_CATALOG_READY;
+    catalog.count = 1;
+    catalog.titles[0] = (X4CatalogTitle){.id = "CLOUD-123", .product_id = "bx1dtcbd1hxj"};
+    X4CatalogBrowser browser;
+    x4_catalog_browser_init(&browser);
+    for (const char *p = query; *p; ++p) CHECK(x4_catalog_browser_query_append(&browser, *p));
+    x4_catalog_browser_rebuild(&browser, &catalog);
+    CHECK(!browser.filtered_count);
+    CHECK(x4_catalog_presentation_search_names(&catalog, matches, count));
+    x4_catalog_browser_rebuild(&browser, &catalog);
+    CHECK(browser.filtered_count == 1 && catalog.count == 1 && !catalog.titles[0].entitled);
+    unsigned selected;
+    CHECK(x4_catalog_browser_selected_index(&browser, &catalog, &selected) && selected == 0);
+    CHECK(!strcmp(catalog.titles[0].name, "War Thunder"));
+    CHECK(!x4_catalog_assets_search(a, query, matches));
+    close_assets(a);
+    puts("PASS search resolves War Thunder by Store product ID without adding store-only games");
+}
+#endif
 static void test_policy_metadata(const char *fixture)
 {
     size_t n;unsigned char *j=read_file(fixture,&n);X4ProductMetadata m;
@@ -465,6 +516,61 @@ static void test_priority_metadata_before_cover(void)
         CHECK(events[i].end_us>=events[i].start_us);CHECK(x4_product_id_valid(events[i].product_id));stage_bits|=1u<<events[i].stage;}
     CHECK(stage_bits==(1u<<X4_ASSET_STAGE_COUNT)-1u);close_assets(a);
 }
+#ifndef X4_ASSETS_TEST_BASELINE31D
+static void test_home_preload_and_catalog_return(void)
+{
+    fake_reset();
+    atomic_store(&block_image,1);
+    X4CatalogAssets *a=create_assets(NULL);
+    const char *opening[]={"HOME1","CATALOG0"};
+    const uint32_t opening_masks[]={1u<<X4_COVER_HOME_FEATURE,1u<<X4_COVER_ROW};
+    x4_catalog_assets_request_surfaces_with_preload(a,opening,opening_masks,2,1);
+    x4_catalog_assets_resume(a);
+    wait_flag(&image_entered);
+    CHECK(atomic_load(&json_calls)==1);
+    CHECK(!strcmp(metadata_order[0],"HOME1"));
+    CHECK(!strcmp(image_order[0],"HOME1"));
+    atomic_store(&block_image,0);
+    wait_ready(a,2);
+    CHECK(!strcmp(metadata_order[1],"CATALOG0"));
+
+    const char *ids[X4_CATALOG_ASSET_SLOTS];
+    char names[X4_CATALOG_ASSET_SLOTS][X4_PRODUCT_ID_CAP];
+    uint32_t masks[X4_CATALOG_ASSET_SLOTS];
+    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){
+        snprintf(names[i],sizeof(names[i]),"CATALOG%u",i);
+        ids[i]=names[i];
+        masks[i]=1u<<X4_COVER_ROW;
+    }
+    x4_catalog_assets_request_surfaces(a,ids,masks,X4_CATALOG_ASSET_SLOTS);
+    wait_ready(a,1+X4_CATALOG_ASSET_SLOTS);
+    const char *home[]={"HOME1","HOME2","HOME3","HOME4","HOME5","HOME6"};
+    const uint32_t home_masks[]={1u<<X4_COVER_HOME_FEATURE,1u<<X4_COVER_ROW,
+        1u<<X4_COVER_ROW,1u<<X4_COVER_ROW,1u<<X4_COVER_ROW,1u<<X4_COVER_ROW};
+    x4_catalog_assets_suspend(a);
+    wait_idle(a);
+    x4_catalog_assets_request_surfaces(a,home,home_masks,6);
+    x4_catalog_assets_resume(a);
+    wait_ready(a,6+X4_CATALOG_ASSET_SLOTS);
+    x4_catalog_assets_suspend(a);
+    wait_idle(a);
+    unsigned queries=atomic_load(&json_calls),images=atomic_load(&image_calls),
+        decodes=atomic_load(&decode_calls);
+    x4_catalog_assets_request_surfaces(a,ids,masks,X4_CATALOG_ASSET_SLOTS);
+    for(unsigned i=0;i<X4_CATALOG_ASSET_SLOTS;++i){
+        X4CatalogAssetView view;
+        CHECK(wait_acquire(a,ids[i],&view));
+        CHECK(view.surface[X4_COVER_ROW].rgba);
+        x4_catalog_assets_release(a,&view);
+    }
+    x4_catalog_assets_resume(a);
+    wait_idle(a);
+    CHECK(atomic_load(&json_calls)==queries&&atomic_load(&image_calls)==images&&
+        atomic_load(&decode_calls)==decodes);
+    CHECK(stats(a).thumbnail_peak_bytes<=X4_CATALOG_THUMBNAIL_BUDGET);
+    close_assets(a);
+}
+#endif
 static void test_batches_large_and_partial(void)
 {
     const char*ids[]={"ID1","ID2","ID3","ID4"};
@@ -525,7 +631,12 @@ static void test_ram_eviction_pinning_generation(void)
     x4_catalog_assets_release(a,&v);CHECK(stats(a).pinned==0);
     char names[30][32];const char*many[30];for(unsigned i=0;i<30;++i){snprintf(names[i],32,"PROD%u",i);many[i]=names[i];}
     x4_catalog_assets_request(a,many,30);wait_ready(a,26);X4CatalogAssetStats s=stats(a);
-    CHECK(s.occupied==24);CHECK(s.thumbnail_bytes==24u*(356u*200u+524u*295u+96u*96u)*4u);
+#ifdef X4_ASSETS_TEST_BASELINE31D
+    const unsigned resident=24;
+#else
+    const unsigned resident=26;
+#endif
+    CHECK(s.occupied==resident);CHECK(s.thumbnail_bytes==resident*(356u*200u+524u*295u+96u*96u)*4u);
     CHECK(s.thumbnail_bytes<X4_CATALOG_THUMBNAIL_BUDGET);CHECK(s.events_omitted>0);
     CHECK(!x4_catalog_assets_acquire(a,"PROD29",&v));
     CHECK(wait_acquire(a,"PROD0",&v));uint32_t*held=v.surface[0].rgba;
@@ -1561,6 +1672,10 @@ int main(int argc,char **argv)
     test_auth_boundary_waits_for_cleanup();test_disk_reopen_and_corrupt_fallback();
     test_cleanup_fault_is_fail_closed_and_destroyable();test_lowercase_disk_reopen_preserves_job_identity();
     test_six_card_loading_comparison();test_two_backgrounds_and_pins();test_one_sigl_per_account();
+#ifndef X4_ASSETS_TEST_BASELINE31D
+    test_search_unnamed_cloud_game();
+    test_home_preload_and_catalog_return();
+#endif
     test_parallel_assets();free(fake_image);
     printf("catalog assets PASS: legacy and three-download tests, %u checks (fake public HTTP; no real network)\n",atomic_load(&checks));return 0;
 }

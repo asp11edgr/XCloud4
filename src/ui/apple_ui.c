@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "apple_ui.h"
+#include "ui2_theme.h"
 #include "font.h"
 #include "../core/app_identity.h"
 #include "../../third_party/qrcodegen/qrcodegen.h"
@@ -118,12 +119,12 @@ static void update_notice_qr(uint32_t *pixels, int x, int y, const char *url)
 void x4_apple_update_notice_draw(const X4UpdateNotice *notice,uint32_t *p)
 {
     if(!notice||!notice->open||!p)return;
-    x4_apple_fill_round_rect(p,0,0,X4_WIDTH,X4_HEIGHT,0,X4_RGBA(3,7,15,185));
+    x4_apple_fill_round_rect(p,0,0,X4_WIDTH,X4_HEIGHT,0,X4_UI2_TINT(185));
     x4_apple_glass_panel(p,300,218,1320,644,32,70,78);
     x4_text_ellipsis_px(p,362,274,42,X4_FONT_BOLD,x4_tr(X4_TR_UPDATE_NOTICE_TITLE),1196,X4_RGB(245,248,252));
     char version[192];
     snprintf(version,sizeof(version),x4_tr(X4_TR_UPDATE_NOTICE_VERSION_FMT),notice->version,X4_PRODUCT_VERSION);
-    x4_apple_text_wrap(p,362,362,30,X4_FONT_SEMIBOLD,version,700,42,4,X4_RGB(76,230,151));
+    x4_apple_text_wrap(p,362,362,30,X4_FONT_SEMIBOLD,version,700,42,4,X4_UI2_ACCENT);
     update_notice_qr(p,1180,376,notice->url);
     x4_apple_text_wrap(p,1138,728,20,X4_FONT_REGULAR,x4_tr(X4_TR_UPDATE_NOTICE_DESCRIPTION),420,28,3,X4_RGB(197,209,225));
     x4_text_ellipsis_px(p,1138,824,18,X4_FONT_REGULAR,"github.com/asp11edgr/XCloud4/releases",420,X4_RGB(171,188,209));
@@ -361,9 +362,9 @@ static void init_background_once(void)
     for (int qy = 0; qy < 270; ++qy) {
         float fy = (float)qy / 269.0f;
         /* Midnight blue vertical progression: #0B1020 -> #141C33 -> #090E1C */
-        uint32_t top_c = X4_RGB(0x0B, 0x10, 0x20);
-        uint32_t mid_c = X4_RGB(0x14, 0x1C, 0x33);
-        uint32_t bot_c = X4_RGB(0x09, 0x0E, 0x1C);
+        uint32_t top_c = X4_UI2_BACKGROUND;
+        uint32_t mid_c = X4_UI2_SURFACE;
+        uint32_t bot_c = X4_UI2_BACKGROUND;
         uint32_t base_v = (fy < 0.58f)
             ? lerp_rgb(top_c, mid_c, (unsigned)(fy / 0.58f * 256.0f))
             : lerp_rgb(mid_c, bot_c, (unsigned)((fy - 0.58f) / 0.42f * 256.0f));
@@ -380,14 +381,14 @@ static void init_background_once(void)
             float g2 = d2 < 0.38f ? (1.0f - d2 / 0.38f) : 0.0f;
             g2 = g2 * g2 * 0.38f;
 
-            uint32_t col = lerp_rgb(base_v, X4_RGB(0x20, 0x31, 0x5C), (unsigned)(g1 * 256.0f));
-            col = lerp_rgb(col, X4_RGB(0x1A, 0x2A, 0x4E), (unsigned)(g2 * 256.0f));
+            uint32_t col = lerp_rgb(base_v, X4_UI2_ACTIVE, (unsigned)(g1 * 256.0f));
+            col = lerp_rgb(col, X4_UI2_ELEVATED, (unsigned)(g2 * 256.0f));
 
             float ridge1 = 0.74f + 0.045f * sinf(fx * 5.2f + 0.6f) + 0.025f * cosf(fx * 11.0f);
             if (fy > ridge1) {
                 float depth = (fy - ridge1) / (1.0f - ridge1);
                 if (depth > 1.0f) depth = 1.0f;
-                col = lerp_rgb(col, X4_RGB(0x08, 0x0C, 0x18), (unsigned)(depth * 180.0f));
+                col = lerp_rgb(col, X4_UI2_BACKGROUND, (unsigned)(depth * 180.0f));
             }
             q_raw[qy * 480 + qx] = col;
         }
@@ -425,7 +426,7 @@ static void init_background_once(void)
                 cnt++;
             }
             uint32_t blurred = X4_RGB(sr / cnt, sg / cnt, sb / cnt);
-            s_bg_blur_q[y * 480 + x] = lerp_rgb(blurred, X4_RGB(0x24, 0x32, 0x54), 32u);
+            s_bg_blur_q[y * 480 + x] = lerp_rgb(blurred, X4_UI2_ELEVATED, 32u);
         }
     }
 
@@ -710,7 +711,7 @@ void x4_apple_vertical_gradient_round_rect(uint32_t *pixels, int x, int y, int w
 
 void x4_apple_focus_ring(uint32_t *pixels, int x, int y, int w, int h, int radius)
 {
-    x4_apple_outer_glow(pixels, x, y, w, h, radius, 14, X4_RGBA(0x90, 0xB8, 0xFF, 82));
+    x4_apple_outer_glow(pixels, x, y, w, h, radius, 14, X4_RGBA(123, 218, 77, 82));
     x4_apple_stroke_round_rect(pixels, x, y, w, h, radius, 3.0f, X4_RGBA(0xFF, 0xFF, 0xFF, 245));
 }
 
@@ -841,12 +842,11 @@ void x4_apple_pill_button(uint32_t *pixels, int x, int y, int w, int h,
             x4_apple_outer_glow(pixels, x, y, w, h, r, 12, X4_RGBA(0xFF, 0xFF, 0xFF, 96));
         }
         x4_apple_fill_round_rect(pixels, x, y, w, h, r,
-                                 focused ? X4_RGBA(0xFF, 0xFF, 0xFF, 255)
-                                         : X4_RGBA(0xF5, 0xF7, 0xFA, 248));
+                                 focused ? X4_UI2_ACCENT : X4_UI2_ACCENT_SOFT);
         if (focused) {
             x4_apple_focus_ring(pixels, x, y, w, h, r);
         }
-        txt_col = X4_RGB(0x0B, 0x10, 0x20);
+        txt_col = X4_UI2_INK;
     } else {
         x4_apple_glass_panel(pixels, x, y, w, h, r,
                              focused ? 32u : 20u,
@@ -1036,7 +1036,7 @@ static void blit_image_policy(uint32_t *pixels, int dst_x, int dst_y, int dst_w,
                 uint32_t top = lerp_rgb(c00, c10, fx);
                 uint32_t bot = lerp_rgb(c01, c11, fx);
                 sample = lerp_rgb(top, bot, fy);
-                sample = lerp_rgb(sample, X4_RGB(0x06, 0x0A, 0x14), 185);
+                sample = lerp_rgb(sample, X4_UI2_BACKGROUND, 185);
             } else {
                 int dx_in = contain_mode ? (px - fit_x) : dx_dst;
                 int dy_in = contain_mode ? (py - fit_y) : dy_dst;
@@ -1071,7 +1071,7 @@ static void blit_image_policy(uint32_t *pixels, int dst_x, int dst_y, int dst_w,
                 }
             }
             if (dark > 0u) {
-                sample = lerp_rgb(sample, X4_RGB(0x09, 0x0E, 0x1D), dark);
+                sample = lerp_rgb(sample, X4_UI2_BACKGROUND, dark);
             }
             if (cov == 255u) {
                 row[px] = sample;
@@ -1123,6 +1123,12 @@ bool x4_apple_blit_image_exact(uint32_t *p,int x,int y,int w,int h,int radius,
 void x4_apple_blit_card_rounded(uint32_t *p,int x,int y,int w,int h,int radius,
     const X4CoverRaster *r,enum X4ImageGradientMode g)
 { blit_image_policy(p,x,y,w,h,radius,r,g,0.10f); }
+
+void x4_apple_blit_banner(uint32_t *pixels, int x, int y, int w, int h,
+    const X4CoverRaster *raster)
+{
+    blit_image_policy(pixels, x, y, w, h, 0, raster, X4_GRAD_NONE, 1.0f);
+}
 
 void x4_apple_draw_hero_banner(uint32_t *pixels, int x, int y, int w, int h, int radius,
                                const X4CoverRaster *raster)
@@ -1394,11 +1400,11 @@ void x4_apple_draw_brand_logo(uint32_t *pixels, int x, int y)
 {
     const char *brand = "XCloud4";
     uint32_t white = X4_RGB(0xF5, 0xF7, 0xFA);
-    uint32_t green = X4_RGB(0x4A, 0xDE, 0x80);
+    uint32_t accent = X4_UI2_ACCENT;
     x4_text_px(pixels, x, y, 32, X4_FONT_BOLD, brand, white);
     int bw = x4_text_width_px(32, X4_FONT_BOLD, brand);
     draw_aa_line(pixels, (float)(x + bw + 12), (float)(y + 6),
-                 (float)(x + bw + 4), (float)(y + 32), 3.4f, green);
+                 (float)(x + bw + 4), (float)(y + 32), 3.4f, accent);
 }
 
 void x4_apple_draw_account_pill(uint32_t *pixels, int x, int y, int h,
@@ -1416,7 +1422,7 @@ void x4_apple_draw_account_pill(uint32_t *pixels, int x, int y, int h,
         x4_apple_focus_ring(pixels, x, y, w, h, h / 2);
     }
 
-    uint32_t icon_col = signed_in ? X4_RGB(0x4A, 0xDE, 0x80) : X4_RGB(0xD8, 0xE2, 0xF2);
+    uint32_t icon_col = signed_in ? X4_UI2_ACCENT : X4_UI2_MUTED;
     uint32_t txt_col = X4_RGB(0xF5, 0xF7, 0xFA);
     int c_sz = h - 14;
     int cx = x + 8;
@@ -1473,7 +1479,7 @@ void x4_apple_draw_region_qr_block(uint32_t *pixels, int x, int y, int w, int h,
         int total_px = qr_size * scale;
         int ox = qx + (qr_box - total_px) / 2;
         int oy = qy + (qr_box - total_px) / 2;
-        uint32_t dark = X4_RGB(0x0B, 0x10, 0x20);
+        uint32_t dark = X4_UI2_INK;
         for (int ry = 0; ry < qr_size; ++ry) {
             for (int rx = 0; rx < qr_size; ++rx) {
                 if (!qrcodegen_getModule(qr_data, rx, ry)) continue;

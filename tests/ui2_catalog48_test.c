@@ -74,7 +74,7 @@ static void collections_and_similar(void)
     x4_catalog_browser_rebuild_featured(&browser, &catalog, NULL);
     x4_catalog_browser_home_apply(&browser, &catalog, &rows);
     assert(browser.featured_count == 4 && browser.featured_index == 0);
-    assert(!x4_catalog_browser_ui2_left_edge(&browser));
+    assert(x4_catalog_browser_ui2_top_edge(&browser));
     assert(!x4_catalog_browser_ui2_carousel_tick(&browser, &catalog, 1, false));
     assert(!x4_catalog_browser_ui2_carousel_tick(&browser, &catalog, 10000000, false));
     assert(x4_catalog_browser_ui2_carousel_tick(&browser, &catalog, 10000001, false));
@@ -218,7 +218,7 @@ static void library_focus(void)
     favorites.items[0] = favorites.items[1];
     favorites.count = 1;
     x4_catalog_browser_ui2_favorites(&browser, &favorites);
-    assert(browser.ui2_favorite_selected == 0 && x4_catalog_browser_ui2_left_edge(&browser));
+    assert(browser.ui2_favorite_selected == 0 && !x4_catalog_browser_ui2_top_edge(&browser));
     assert(x4_catalog_browser_ui2_favorite(&browser) == &favorites.items[0]);
     assert(x4_catalog_browser_apple_nav(&browser, &catalog, NULL, 0, -1, 0));
     assert(!x4_catalog_browser_ui2_favorite(&browser));
@@ -243,7 +243,7 @@ static void five_column_catalog(void)
         assert(x4_catalog_browser_apple_nav(&browser, &catalog, NULL, 1, 0, 0));
         assert(browser.selected == col);
     }
-    assert(browser.selected == 4 && !x4_catalog_browser_ui2_left_edge(&browser));
+    assert(browser.selected == 4 && !x4_catalog_browser_ui2_top_edge(&browser));
     assert(!x4_catalog_browser_apple_nav(&browser, &catalog, NULL, 1, 0, 0));
     assert(x4_catalog_browser_apple_nav(&browser, &catalog, NULL, 0, 1, 0));
     assert(browser.selected == 9);

@@ -90,6 +90,31 @@ static int same_id(const char *a, const char *b)
     }
     return *a == *b;
 }
+
+size_t x4_product_search_parse(const char *json, size_t length,
+    X4StoreSearchTitle out[X4_STORE_SEARCH_RESULTS])
+{
+    X4JsonSpan root, results, family, products, product, id;
+    if (!out || x4_json_parse(json, length, &root) ||
+        x4_json_member(root, "Results", &results) != 1) return 0;
+    size_t count = 0, next_family = 0;
+    while (count < X4_STORE_SEARCH_RESULTS && x4_json_item(results, &next_family, &family) == 1) {
+        if (x4_json_member(family, "Products", &products) != 1) continue;
+        size_t next_product = 0;
+        while (count < X4_STORE_SEARCH_RESULTS && x4_json_item(products, &next_product, &product) == 1) {
+            X4StoreSearchTitle title = {0};
+            if (x4_json_member(product, "ProductId", &id) != 1 ||
+                x4_json_token(id, title.product_id, sizeof(title.product_id)) ||
+                !x4_product_id_valid(title.product_id)) continue;
+            display(product, "Title", title.name, sizeof(title.name));
+            if (!title.name[0]) continue;
+            size_t i = 0;
+            while (i < count && !same_id(out[i].product_id, title.product_id)) ++i;
+            if (i == count) out[count++] = title;
+        }
+    }
+    return count;
+}
 static int image_rank(const char *purpose)
 {
     if (!strcmp(purpose, "TitledHeroArt")) return 4;

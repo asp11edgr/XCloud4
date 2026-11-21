@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "catalog_presentation.h"
+#include "catalog_assets.h"
 #include <string.h>
 
-_Static_assert(sizeof(X4CatalogPresentation)<=736u*1024,"public name/genre overlay budget is 736 KiB");
+_Static_assert(sizeof(X4CatalogPresentation) <= X4_PRESENTATION_BUDGET_BYTES,
+    "public name/genre overlay budget is 736 KiB");
 enum { TOMBSTONE=UINT16_MAX };
 static unsigned fold(unsigned c) { return c>='a'&&c<='z'?c-32:c; }
 static bool product_valid(const char *id)
@@ -86,7 +88,7 @@ void x4_catalog_presentation_set_generation(X4CatalogPresentation *p,uint64_t ge
 size_t x4_catalog_presentation_ingest(X4CatalogPresentation *p,uint64_t generation,uint64_t revision,
     const X4ProductMetadata *metadata,size_t count)
 {
-    if(!p||(!metadata&&count)||count>X4_PRESENTATION_DEMAND_MAX)return 0;
+    if(!p||(!metadata&&count)||count>X4_CATALOG_RESIDENT_SLOTS)return 0;
     if(!generation||generation!=p->generation){++p->stale_results;return 0;}
     if(!revision||revision<=p->last_revision)return 0;
     p->last_revision=revision;size_t changed=0;
@@ -120,6 +122,26 @@ bool x4_catalog_presentation_apply_names(X4CatalogPresentation *p,X4CatalogSnaps
     }
     return changed;
 }
+bool x4_catalog_presentation_search_names(X4CatalogSnapshot *c,
+    const X4StoreSearchTitle *titles, size_t count)
+{
+    if (!c || !titles || !count || c->state != X4_CATALOG_READY || c->count > X4_CATALOG_MAX ||
+        count > X4_STORE_SEARCH_RESULTS) return false;
+    bool changed = false;
+    for (unsigned i = 0; i < c->count; ++i) {
+        X4CatalogTitle *title = &c->titles[i];
+        if (title->name[0] || !product_valid(title->product_id)) continue;
+        for (size_t j = 0; j < count; ++j) {
+            if (!product_valid(titles[j].product_id) || !same(title->product_id, titles[j].product_id) ||
+                !x4_recent_display_name_valid(titles[j].name)) continue;
+            memcpy(title->name, titles[j].name, sizeof(title->name));
+            changed = true;
+            break;
+        }
+    }
+    return changed;
+}
+
 bool x4_catalog_presentation_ingest_detail(X4CatalogPresentation *p,
     const char *id, const X4GameDetails *details)
 {

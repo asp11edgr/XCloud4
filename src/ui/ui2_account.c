@@ -349,7 +349,8 @@ static void code_qr(uint32_t *p, const X4AuthSnapshot *auth, int x, int y, int e
     const int modules_w = qrcodegen_getSize(modules);
     const int scale = edge / (modules_w + 8);
     const int inset = (edge - scale * modules_w) / 2;
-    x4_apple_fill_round_rect(p, x, y, edge, edge, 14, X4_UI2_TEXT);
+    x4_ui2_qr_frame(p, x, y, edge);
+    x4_rect(p, x, y, edge, edge, X4_RGB(255, 255, 255));
     for (int row = 0; row < modules_w; ++row) {
         for (int col = 0; col < modules_w; ++col)
             if (qrcodegen_getModule(modules, col, row))
@@ -562,7 +563,8 @@ size_t x4_ui2_account_draw(const X4Ui2Account *account, const X4Ui2AccountModel 
         return count;
     }
     x4_rect(pixels, 0, 0, W, H, X4_UI2_BACKGROUND);
-    x4_ui2_heading(pixels, LEFT, 56, x4_tr(X4_TR_U49_ACCOUNT_TITLE));
+    line(pixels, "account title", LEFT, 112, 680, X4_UI2_HEADING,
+        X4_FONT_BOLD, x4_tr(X4_TR_U49_ACCOUNT_TITLE), X4_UI2_TEXT);
     if (authorized) draw_authorized(pixels, model, focus);
     else draw_signed_out(pixels, model);
     previous.canvas = pixels;

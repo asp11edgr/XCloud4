@@ -422,16 +422,15 @@ static void add_art(X4CatalogArtDemand demand[X4_CATALOG_PRELOAD_PRODUCTS],size_
     entry->mask=mask;
 }
 static void menu_art(X4CatalogArtDemand demand[X4_CATALOG_PRELOAD_PRODUCTS],size_t *count,
-    const X4CatalogBrowser *browser,const X4CatalogSnapshot *catalog)
+    const X4CatalogBrowser *browser,const X4CatalogSnapshot *catalog,const X4RecentGames *recent,
+    bool signed_in)
 {
-    const char *ids[2];
-    uint32_t masks[2];
-    const char *featured=NULL;
-    if(catalog->state==X4_CATALOG_READY&&browser->featured_count&&
-        browser->featured_sources[0]<catalog->count)
-        featured=catalog->titles[browser->featured_sources[0]].product_id;
-    size_t n=x4_screen_cover_demand(0,featured,ids,masks);
-    for(size_t i=0;i<n;++i)add_art(demand,count,ids[i],masks[i]);
+    X4Ui2HomeModel model;
+    const char *ids[X4_UI2_HOME_COVER_MAX];
+    uint32_t masks[X4_UI2_HOME_COVER_MAX];
+    x4_ui2_home_model(&model, signed_in, catalog, recent, &browser->home_rows);
+    size_t n = x4_ui2_home_cover_demand(&model, catalog, ids, masks);
+    for (size_t i = 0; i < n; ++i) add_art(demand, count, ids[i], masks[i]);
 }
 static void discover_art(X4CatalogArtDemand demand[X4_CATALOG_PRELOAD_PRODUCTS],size_t *count,
     const X4CatalogBrowser *browser,const X4CatalogSnapshot *catalog,unsigned first,
@@ -461,11 +460,11 @@ static const char *discover_opening_background(const X4CatalogBrowser *browser,
 enum CoverScreen { COVER_SCREEN_NONE, COVER_SCREEN_MENU, COVER_SCREEN_DISCOVER, COVER_SCREEN_CATALOG };
 static bool cover_screen_ready(X4CatalogAssets *assets,enum CoverScreen screen,uint64_t shown_at,
     const X4CatalogBrowser *browser,const X4CatalogSnapshot *catalog,const X4RecentGames *recent,
-    X4CatalogArtReady *ready)
+    bool signed_in, X4CatalogArtReady *ready)
 {
     X4CatalogArtDemand art[X4_CATALOG_PRELOAD_PRODUCTS]={0};
     size_t count=0;
-    if(screen==COVER_SCREEN_MENU)menu_art(art,&count,browser,catalog);
+    if(screen==COVER_SCREEN_MENU)menu_art(art,&count,browser,catalog,recent,signed_in);
     else if(catalog->state!=X4_CATALOG_READY)return false;
     else if(screen==COVER_SCREEN_DISCOVER){
         discover_art(art,&count,browser,catalog,browser->home_first_row,false,
@@ -801,6 +800,7 @@ static X4Ui2Section ui2_section_for(const X4Screen *screen, const X4CatalogBrows
 {
     switch (screen->page) {
     case 2: return X4_UI2_ABOUT;
+    case 4: return X4_UI2_ACCOUNT;
     case 7: return X4_UI2_SUPPORT;
     case 5:
         if (browser->active_tab == X4_CAT_TAB_SEARCH) return X4_UI2_SEARCH;
@@ -930,6 +930,7 @@ int main(void)
     bool home_canvas_valid = false, menu_canvas_valid = false;
     bool home_background_requested = false;
     bool cover_preload_active = false;
+    bool catalog_opened = false;
     enum X4CatalogTab background_request_tab = X4_CAT_TAB_COUNT;
 #if !X4_PUBLIC
     bool home_first_frame_pending = true;
@@ -1827,6 +1828,9 @@ reopen_interface:;
                 !update_notice.open && !catalog_browser.editing && !closing &&
                 (screen.page == 0 || screen.page == 2 || screen.page == 5 || screen.page == 7 ||
                  (screen.page == 4 && !x4_auth_busy(auth)));
+            if (screen.page == 5)
+                shell_input = shell_input && !catalog_browser.ui2_selector_open &&
+                    !catalog_browser.library.popup && !catalog_browser.library.manage;
 #if X4_STREAM_PROFILE && !X4_PUBLIC
             shell_input = shell_input && !stream_settings_consumed && !stream_settings_ui.open;
 #endif
@@ -1846,11 +1850,9 @@ reopen_interface:;
                 if (ui_pressed & ORBIS_PAD_BUTTON_L1) nav_flags |= X4_UI2_NAV_PREVIOUS;
                 if (ui_pressed & ORBIS_PAD_BUTTON_R1) nav_flags |= X4_UI2_NAV_NEXT;
                 if (ui_pressed & ORBIS_PAD_BUTTON_CIRCLE) nav_flags |= X4_UI2_NAV_CIRCLE;
-                /* Circle follows the existing page/modal return path. */
-                bool at_edge = screen.page == 0 ?
-                    x4_ui2_home_move(&model, home_choice, X4_UI2_HOME_LEFT) == home_choice :
-                    screen.page == 5 ? x4_catalog_browser_ui2_left_edge(&catalog_browser) :
-                    screen.page == 4 ? account_ui.row < X4_UI2_ACCOUNT_HISTORY_FIRST : true;
+                bool at_edge = screen.page == 0 ? home_choice == X4_UI2_HOME_CONTINUE :
+                    screen.page == 5 ? x4_catalog_browser_ui2_top_edge(&catalog_browser) :
+                    screen.page == 4 ? account_ui.row == 0 : true;
                 X4Ui2NavResult nav = x4_ui2_shell_handle(&ui2_shell, nav_flags, at_edge);
                 X4Ui2HomeRoute route = {0};
                 if (!nav.consumed && screen.page == 0 && !ui2_shell.focused &&
@@ -1884,6 +1886,15 @@ reopen_interface:;
                         break;
                     case X4_UI2_SUPPORT: screen.page = 7; break;
                     case X4_UI2_ABOUT: screen.page = 2; break;
+                    case X4_UI2_ACCOUNT:
+                        if (screen.page != 4) {
+                            account_return_page = screen.page;
+                            account_return_shell = before_nav;
+                            account_return_settings = false;
+                            screen.auto_catalog_after_login = 0;
+                            screen.page = 4;
+                        }
+                        break;
                     default: break;
                     }
                     x4_ui2_shell_set_section(&ui2_shell, nav.target);
@@ -1902,8 +1913,11 @@ reopen_interface:;
                     break;
                 case X4_UI2_HOME_GAME:
                     if (route.source < catalog.count && !x4_auth_busy(auth)) {
+                        const X4CatalogTitle *title = &catalog.titles[route.source];
                         ui_notice[0] = 0;
-                        game_page_open(&game_page_ui, 0, route.source, &catalog.titles[route.source], NULL);
+                        game_page_open(&game_page_ui, 0, route.source, title, NULL);
+                        if (home_choice == X4_UI2_HOME_CONTINUE && (title->entitled || title->f2p_only))
+                            game_play = true;
                     }
                     break;
                 case X4_UI2_HOME_FORTNITE: screen.page = 8; break;
@@ -1912,9 +1926,9 @@ reopen_interface:;
                 if (enter_tab && previous_page == 5 && screen.signed_in)
                     x4_catalog_browser_ui2_select(&catalog_browser, login_tab);
                 else if (enter_tab) screen.explore_catalog_requested = 1;
-                if (!(ui_pressed & ORBIS_PAD_BUTTON_CIRCLE) &&
-                    (nav.consumed || ui2_shell.focused || route.action != X4_UI2_HOME_NONE ||
-                     (previous_page == 0 && (nav_flags || (ui_pressed & ORBIS_PAD_BUTTON_TRIANGLE))))) {
+                if (nav.consumed || (!(ui_pressed & ORBIS_PAD_BUTTON_CIRCLE) &&
+                    (ui2_shell.focused || route.action != X4_UI2_HOME_NONE ||
+                     (previous_page == 0 && (nav_flags || (ui_pressed & ORBIS_PAD_BUTTON_TRIANGLE)))))) {
                     controller.pressed = ui_pressed = 0;
                 }
             }
@@ -2262,22 +2276,30 @@ reopen_interface:;
         if (home_rows_changed)
             x4_catalog_browser_home_rebuild(&catalog_browser, &catalog, &recent, home_sigls);
         bool metadata_changed = false;
+        bool search_catalog = !closing && !game_page_ui.open && screen.page == 5 &&
+            catalog.state == X4_CATALOG_READY && !x4_auth_busy(auth) && pending_auth < 0 &&
+            !pending_launch && (catalog_browser.active_tab == X4_CAT_TAB_SEARCH ||
+                catalog_browser.active_tab == X4_CAT_TAB_CATALOG);
+        static X4StoreSearchTitle matches[X4_STORE_SEARCH_RESULTS];
+        size_t matches_count = x4_catalog_assets_search(catalog_assets,
+            search_catalog ? catalog_browser.query : NULL, matches);
+        metadata_changed = x4_catalog_presentation_search_names(&catalog, matches, matches_count);
         if ((screen.page == 0 || screen.page == 5) && !x4_auth_busy(auth)) {
-            static X4ProductMetadata completed[X4_CATALOG_ASSET_SLOTS];
+            static X4ProductMetadata completed[X4_CATALOG_RESIDENT_SLOTS];
             uint64_t revision = metadata_revision; /* A busy worker leaves it unchanged. */
-            size_t n = x4_catalog_assets_copy_metadata(catalog_assets, completed, X4_CATALOG_ASSET_SLOTS, &revision);
+            size_t n = x4_catalog_assets_copy_metadata(catalog_assets, completed, X4_CATALOG_RESIDENT_SLOTS, &revision);
             if (revision != metadata_revision) {
                 metadata_revision = revision;
                 x4_catalog_presentation_ingest(&presentation, ui_generation, revision, completed, n);
-                metadata_changed = x4_catalog_presentation_apply_names(&presentation, &catalog);
+                metadata_changed |= x4_catalog_presentation_apply_names(&presentation, &catalog);
                 if (x4_catalog_presentation_apply_genres(&presentation, &catalog_browser, &catalog))
                     metadata_changed = true;
-                if (metadata_changed) {
-                    x4_catalog_browser_rebuild(&catalog_browser, &catalog);
-                    x4_recent_refresh_catalog(&recent, &catalog);
-                    x4_catalog_browser_rebuild_featured(&catalog_browser, &catalog, &recent);
-                }
             }
+        }
+        if (metadata_changed) {
+            x4_catalog_browser_rebuild(&catalog_browser, &catalog);
+            x4_recent_refresh_catalog(&recent, &catalog);
+            x4_catalog_browser_rebuild_featured(&catalog_browser, &catalog, &recent);
         }
         x4_auth_session_snapshot(auth, &session);
         bool cloud_active = screen.page == 6 && x4_auth_busy(auth);
@@ -2548,7 +2570,7 @@ reopen_interface:;
                     x4_catalog_browser_apple_nav(&catalog_browser, &catalog, &recent, 0, 0, -1);
                 if (pressed & ORBIS_PAD_BUTTON_R1)
                     x4_catalog_browser_apple_nav(&catalog_browser, &catalog, &recent, 0, 0, 1);
-                /* The old header has no interactive targets in UI 2.0. */
+                /* Header navigation is owned by the console shell. */
                 catalog_browser.top_bar_focused = false;
                 if (catalog_browser.open_fortnite_requested) {
                     catalog_browser.open_fortnite_requested = false;
@@ -2728,24 +2750,14 @@ reopen_interface:;
             catalog.state == X4_CATALOG_READY;
         bool asset_menu_ready = !closing && screen.page==0 && !x4_auth_busy(auth) &&
             pending_auth<0 && !pending_launch && !game_page_ui.open;
-        if (asset_menu_ready) {
+        if (screen.page == 5) catalog_opened = true;
+        bool warm_opening = asset_menu_ready && !catalog_opened && screen.signed_in &&
+            catalog.state == X4_CATALOG_READY && catalog.count <= X4_CATALOG_MAX;
+        if (warm_opening) {
             X4CatalogArtDemand art[X4_CATALOG_PRELOAD_PRODUCTS]={0};
             size_t count=0;
-            menu_art(art,&count,&catalog_browser,&catalog);
-            X4Ui2HomeModel visible_home;
-            x4_ui2_home_model(&visible_home, screen.signed_in, &catalog, &recent, &catalog_browser.home_rows);
-            if (visible_home.continuation < catalog.count)
-                add_art(art, &count, catalog.titles[visible_home.continuation].product_id, 1u<<X4_COVER_ROW);
-            for (unsigned i = 0; i < visible_home.recent_count; ++i)
-                if (visible_home.recent[i] < catalog.count)
-                    add_art(art, &count, catalog.titles[visible_home.recent[i]].product_id, 1u<<X4_COVER_ROW);
-            for (unsigned i = 0; i < visible_home.popular_count; ++i)
-                if (visible_home.popular[i] < catalog.count)
-                    add_art(art, &count, catalog.titles[visible_home.popular[i]].product_id, 1u<<X4_COVER_ROW);
-            if(catalog.state==X4_CATALOG_READY)
-                discover_art(art,&count,&catalog_browser,&catalog,catalog_browser.home_first_row,false,
-                    discover_opening_background(&catalog_browser,&catalog,catalog_browser.home_row,
-                        catalog_browser.discover_row_selected));
+            add_art(art, &count, discover_opening_background(&catalog_browser, &catalog, 0, 0),
+                1u << X4_COVER_BACKGROUND);
             if(x4_catalog_assets_preload(catalog_assets,art,count))cover_preload_active=count!=0;
         } else if(cover_preload_active&&x4_catalog_assets_preload(catalog_assets,NULL,0)) {
             cover_preload_active=false;
@@ -2753,10 +2765,7 @@ reopen_interface:;
         if ((asset_menu_ready||screen.page==5)&&catalog.state==X4_CATALOG_READY) {
             X4CatalogArtDemand art[X4_CATALOG_PRELOAD_PRODUCTS]={0};
             size_t count=0;
-            menu_art(art,&count,&catalog_browser,&catalog);
-            unsigned last;
-            if (screen.page == 0 && x4_home_continue_index(&catalog,&recent,&last))
-                add_art(art,&count,catalog.titles[last].product_id,1u<<X4_COVER_ROW);
+            menu_art(art,&count,&catalog_browser,&catalog,&recent,screen.signed_in);
             discover_art(art,&count,&catalog_browser,&catalog,0,true,
                 discover_opening_background(&catalog_browser,&catalog,0,0));
             x4_catalog_assets_protect(catalog_assets,art,count);
@@ -2804,15 +2813,36 @@ reopen_interface:;
                 background_request_tab = browse_tab;
             }
             x4_catalog_assets_resume(catalog_assets);
-        } else if (!closing && (screen.page == 0 || screen.page == 8) && !x4_auth_busy(auth) && pending_auth < 0 && !pending_launch) {
+        } else if (asset_menu_ready) {
+            X4Ui2HomeModel model;
+            x4_ui2_home_model(&model, screen.signed_in, &catalog, &recent, &catalog_browser.home_rows);
+            const char *ids[X4_CATALOG_ASSET_SLOTS];
+            uint32_t masks[X4_CATALOG_ASSET_SLOTS];
+            size_t count = x4_ui2_home_cover_demand(&model, &catalog, ids, masks);
+            const size_t visible_count = count;
+            X4CatalogArtDemand discover[X4_CATALOG_PRELOAD_PRODUCTS];
+            if (warm_opening) {
+                _Static_assert(X4_UI2_HOME_COVER_MAX + X4_CATALOG_UI2_PAGE_SIZE +
+                    2 * X4_CATALOG_UI2_DISCOVER_VISIBLE <= X4_CATALOG_ASSET_SLOTS,
+                    "the startup cover plan fits the catalog demand");
+                /* Catalog initially uses Featured order with no filters. */
+                for (unsigned i = 0; i < X4_CATALOG_UI2_PAGE_SIZE && i < catalog.count; ++i) {
+                    ids[count] = catalog.titles[i].product_id;
+                    masks[count++] = 1u << X4_COVER_ROW;
+                }
+                size_t discover_count = 0;
+                discover_art(discover, &discover_count, &catalog_browser, &catalog, 0, true, NULL);
+                for (size_t i = 0; i < discover_count; ++i) {
+                    ids[count] = discover[i].id;
+                    masks[count++] = discover[i].mask;
+                }
+            }
+            x4_catalog_assets_request_surfaces_with_preload(catalog_assets, ids, masks, count, visible_count);
+            x4_catalog_assets_resume(catalog_assets);
+        } else if (!closing && screen.page == 8 && !x4_auth_busy(auth) && pending_auth < 0 && !pending_launch) {
             const char *home_ids[2];
             uint32_t home_masks[2];
-            const char *featured_id = NULL;
-            if (screen.page == 0 && catalog.state == X4_CATALOG_READY && catalog_browser.featured_count > 0) {
-                unsigned fsrc = catalog_browser.featured_sources[0];
-                if (fsrc < catalog.count) featured_id = catalog.titles[fsrc].product_id;
-            }
-            size_t home_count = x4_screen_cover_demand(screen.page, featured_id, home_ids, home_masks);
+            size_t home_count = x4_screen_cover_demand(screen.page, NULL, home_ids, home_masks);
             x4_catalog_assets_request_surfaces(catalog_assets, home_ids, home_masks, home_count);
             x4_catalog_assets_resume(catalog_assets);
         } else x4_catalog_assets_suspend(catalog_assets);
@@ -3241,10 +3271,7 @@ reopen_interface:;
                 UI_HASH(recent_cursor.revision);
                 UI_HASH(home_sigl_revision);
                 UI_HASH(play_history.revision);
-                /* The status avatar tracks only the initial; the greeting uses the whole name. */
-                if (screen.signed_in)
-                    for (size_t i = 0; i < sizeof(catalog.gamertag) && catalog.gamertag[i]; ++i)
-                        UI_HASH((unsigned char)catalog.gamertag[i]);
+                UI_HASH(screen.signed_in);
             }
             UI_HASH(recent.state);
             UI_HASH(recent.generation);
@@ -3423,7 +3450,7 @@ reopen_interface:;
         X4CatalogArtReady screen_art;
         bool screen_art_complete=cover_screen_visible&&!cover_screen_reported&&!ui_reuse_work&&
             cover_screen_ready(catalog_assets,cover_screen,cover_screen_shown?cover_screen_shown:ui_draw_begin,
-                &catalog_browser,&catalog,&recent,&screen_art);
+                &catalog_browser,&catalog,&recent,screen.signed_in,&screen_art);
 #endif
         bool loading_visible=false,loading_full_damage=false;
         bool keyboard_ready=x4_catalog_gui_keyboard_cache_ready(&catalog_browser);
@@ -3433,9 +3460,7 @@ reopen_interface:;
         enum X4UiScreen ui_metric=X4_UI_OTHER;bool ui_navigation=false;
         X4UiRect home_damage[12];
         X4UiRect game_damage[X4_GAME_PAGE_DAMAGE_MAX + 5];
-        X4UiRect shell_rects[4];
-        size_t shell_count = 0;
-        bool status_damage = false, ui2_full_reset = false;
+        bool header_damage = false, ui2_full_reset = false;
         bool drew_own_page = false;
         X4UiRect own_damage[8];
         size_t own_damage_count = SIZE_MAX;
@@ -3598,7 +3623,7 @@ reopen_interface:;
             drew_own_page = true;
         }
         else if (screen.page == 5 && !game_page_ui.open) {
-            x4_catalog_gui_sidebar_focused(ui2_shell.focused);
+            x4_catalog_gui_header_focused(ui2_shell.focused);
             X4CatalogGuiStatus gui = {controller.data.connected, x4_auth_busy(auth),
                 pending_launch || pending_auth >= 0, ui_notice};
             if (browse_tab == X4_CAT_TAB_DISCOVER && !catalog_browser.editing)
@@ -3632,41 +3657,19 @@ reopen_interface:;
                 (drew_game_page && game_damage_count == SIZE_MAX) ||
                 (drew_menu && menu_damage_count == SIZE_MAX && !shell_presented) ||
                 (drew_tabs && home_damage_count == SIZE_MAX);
-            int sidebar_fresh = 0;
-            if (full_ui || (drew_game_page && game_damage_count == SIZE_MAX) ||
-                (drew_tabs && home_damage_count == SIZE_MAX))
-                sidebar_fresh = 1080;
-            if (drew_tabs && home_damage_count != SIZE_MAX) {
-                for (size_t i = 0; i < home_damage_count; ++i) {
+            bool header_fresh = full_ui || (drew_menu && menu_damage_count == SIZE_MAX);
+            const size_t artwork_damage = drew_menu ? menu_damage_count : drew_tabs ? home_damage_count : 0;
+            if (artwork_damage != SIZE_MAX)
+                for (size_t i = 0; i < artwork_damage; ++i) {
                     const X4UiRect r = home_damage[i];
-                    if (r.x == 0 && r.y == 0 && r.w >= x4_ui2_sidebar_rect.w && r.h > sidebar_fresh)
-                        sidebar_fresh = r.h;
+                    if (r.x == 0 && r.y == 0 && r.w == X4_UI_WIDTH && r.h >= X4_UI2_HEADER_H)
+                        header_fresh = true;
                 }
-            }
-            if (sidebar_fresh) {
-                x4_ui2_shell_draw_sidebar_backdrop(work, &ui2_shell, sidebar_fresh);
-                if (sidebar_fresh < 1080 && (!shell_presented ||
-                    shown_shell.section != ui2_shell.section || shown_shell.selected != ui2_shell.selected ||
-                    shown_shell.focused != ui2_shell.focused))
-                    shell_rects[shell_count++] = x4_ui2_sidebar_rect;
-            } else if (full_ui || !shell_presented) {
-                x4_ui2_shell_draw_sidebar(work, &ui2_shell);
-                shell_rects[shell_count++] = x4_ui2_sidebar_rect;
-            } else {
-                shell_count = x4_ui2_shell_draw_sidebar_delta(work, &shown_shell, &ui2_shell, shell_rects);
-            }
-            bool status_backdrop_changed = full_ui || !shell_presented;
-            if (drew_tabs && home_damage_count != SIZE_MAX) {
-                const X4UiRect status = x4_ui2_status_rect;
-                for (size_t i = 0; i < home_damage_count; ++i) {
-                    const X4UiRect r = home_damage[i];
-                    if (r.x <= status.x && r.y <= status.y &&
-                        r.x + r.w >= status.x + status.w && r.y + r.h >= status.y + status.h)
-                        status_backdrop_changed = true;
-                }
-            }
-            status_damage = status_backdrop_changed || shown_status_revision != status_revision;
-            if (status_damage) x4_ui2_shell_draw_status(work, &ui2_status, status_backdrop_changed);
+            header_damage = header_fresh || !shell_presented || shown_status_revision != status_revision ||
+                shown_shell.section != ui2_shell.section || shown_shell.selected != ui2_shell.selected ||
+                shown_shell.focused != ui2_shell.focused;
+            if (header_damage)
+                x4_ui2_shell_draw_header(work, &ui2_shell, &ui2_status, header_fresh || !shell_presented);
             shown_shell = ui2_shell;
             shown_status_revision = status_revision;
             shell_presented = true;
@@ -3745,20 +3748,16 @@ reopen_interface:;
                 menu_damage_count = 1;
             }
             if (drew_menu) {
-                for (size_t i = 0; i < shell_count; ++i) home_damage[menu_damage_count++] = shell_rects[i];
-                if (status_damage) home_damage[menu_damage_count++] = x4_ui2_status_rect;
+                if (header_damage) home_damage[menu_damage_count++] = x4_ui2_header_rect;
             }
             if (drew_tabs && home_damage_count != SIZE_MAX) {
-                for (size_t i = 0; i < shell_count; ++i) home_damage[home_damage_count++] = shell_rects[i];
-                if (status_damage) home_damage[home_damage_count++] = x4_ui2_status_rect;
+                if (header_damage) home_damage[home_damage_count++] = x4_ui2_header_rect;
             }
             if (drew_own_page && own_damage_count != SIZE_MAX) {
-                for (size_t i = 0; i < shell_count; ++i) own_damage[own_damage_count++] = shell_rects[i];
-                if (status_damage) own_damage[own_damage_count++] = x4_ui2_status_rect;
+                if (header_damage) own_damage[own_damage_count++] = x4_ui2_header_rect;
                 x4_display_set_damage(&display, own_damage, own_damage_count);
             } else if (drew_game_page && game_page_frame && game_damage_count != SIZE_MAX) {
-                for (size_t i = 0; i < shell_count; ++i) game_damage[game_damage_count++] = shell_rects[i];
-                if (status_damage) game_damage[game_damage_count++] = x4_ui2_status_rect;
+                if (header_damage) game_damage[game_damage_count++] = x4_ui2_header_rect;
                 x4_display_set_damage(&display, game_damage, game_damage_count);
             } else if(drew_tabs&&home_damage_count!=SIZE_MAX)
                 x4_display_set_damage(&display,home_damage,home_damage_count);
@@ -3777,8 +3776,7 @@ reopen_interface:;
                 if(!cache.last_draw_full){
                     X4UiRect rects[6]={{420,200,1080,680}};
                     size_t count = 1;
-                    for (size_t i = 0; i < shell_count; ++i) rects[count++] = shell_rects[i];
-                    if (status_damage) rects[count++] = x4_ui2_status_rect;
+                    if (header_damage) rects[count++] = x4_ui2_header_rect;
                     x4_display_set_damage(&display,rects,count);
                 }
             }

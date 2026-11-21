@@ -5,6 +5,18 @@
 
 #define X4_PRODUCT_ID_CAP 32
 #define X4_PUBLIC_COVER_URL_CAP 512
+#define X4_STORE_SEARCH_QUERY_MAX 48u
+#define X4_STORE_SEARCH_RESULTS 24u
+#define X4_STORE_SEARCH_PREFIX "https://displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest?query="
+#define X4_STORE_SEARCH_SUFFIX "&market=%s&languages=%s&productFamilyNames=Games&topProducts=24"
+typedef struct {
+    char product_id[X4_PRODUCT_ID_CAP];
+    char name[128];
+} X4StoreSearchTitle;
+
+size_t x4_product_search_parse(const char *json, size_t length,
+    X4StoreSearchTitle out[X4_STORE_SEARCH_RESULTS]);
+
 typedef struct {
     char product_id[X4_PRODUCT_ID_CAP];
     char name[128], publisher[128], developer[128], category[64], description[512];

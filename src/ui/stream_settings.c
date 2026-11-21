@@ -670,7 +670,7 @@ static void draw_lab_settings(const X4StreamSettingsUi *s,uint32_t *p)
         X4_TR_LAB_CONTROLLER_SCRIPT_NONE,recovery_values[recover<=2u?recover:0u],loss_values[loss==3u?2u:loss==1u?1u:0u],
         nack_policy==X4_NACK_POLICY_T46B?X4_TR_COUNT:nack_values[nack_policy],rr_values[rr]};
     x4_rect(p, 0, 0, X4_UI_WIDTH, X4_UI_HEIGHT, X4_UI2_BACKGROUND);
-    x4_ui2_heading(p, x, 57, x4_tr(X4_TR_LAB_TITLE));
+    x4_text_px(p, x, 112, X4_UI2_HEADING, X4_FONT_BOLD, x4_tr(X4_TR_LAB_TITLE), X4_UI2_TEXT);
     x4_ui2_card(p, x, 150, w, 764, X4_UI2_RADIUS_CARD);
     char range[96];
     snprintf(range, sizeof(range), x4_tr(X4_TR_LAB_ROWS_FMT), first + 1u,

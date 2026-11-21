@@ -66,7 +66,9 @@ static void reply(const X4TfRequest *request,X4TfResponse *response)
  }
  if(request->keepalive){
   CHECK(request->method==0&&!request->body_size);
-  CHECK(!strncmp(request->url,store_prefix,sizeof(store_prefix)-1)||x4_http_public_image_url(request->url));
+  CHECK(!strncmp(request->url,store_prefix,sizeof(store_prefix)-1)||
+      !strncmp(request->url,X4_STORE_SEARCH_PREFIX,sizeof(X4_STORE_SEARCH_PREFIX)-1)||
+      x4_http_public_image_url(request->url));
   CHECK(!x4tf_header(request,"Authorization")&&!x4tf_header(request,"X-MS-Device-Info"));
   for(size_t i=0;i<request->header_count;++i){
    const char *name=request->headers[i].name;
@@ -163,11 +165,16 @@ static void test_policy_and_owner(void)
   "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=ID1,,ID2&market=MX&languages=es-MX&fieldsTemplate=Details",
   "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8,I9&market=MX&languages=es-MX&fieldsTemplate=Details",
   "https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=../bad&market=MX&languages=es-MX&fieldsTemplate=Details",
+  X4_STORE_SEARCH_PREFIX "WAR%26THUNDER&market=MX&languages=es-MX&productFamilyNames=Games&topProducts=24",
+  X4_STORE_SEARCH_PREFIX "WAR%20THUNDER&market=US&languages=en-US&productFamilyNames=Games&topProducts=24",
   "https://region.gssv-play-prod.xboxlive.com/v2/titles","https://login.live.com/oauth20_token.srf"};
  for(size_t i=0;i<sizeof(bad)/sizeof(*bad);++i)CHECK(x4_http_public_metadata_request(h,bad[i],body,sizeof(body),&length,&status,NULL)==X4_HTTP_URL);
  CHECK(x4tf.connections==before);
  const char *batch="https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=I1,I2,I3,I4,I5,I6,I7,I8&market=MX&languages=es-MX&fieldsTemplate=Details";
  CHECK(!x4_http_public_metadata_request(h,batch,body,sizeof(body),&length,&status,NULL));
+ CHECK(!x4_http_public_metadata_request(h,
+     X4_STORE_SEARCH_PREFIX "WAR%20THUNDER&market=MX&languages=es-MX&productFamilyNames=Games&topProducts=24",
+     body,sizeof(body),&length,&status,NULL));
  CHECK(x4_http_public_image_request(h,store,(unsigned char *)body,sizeof(body),&length,&status,NULL)==X4_HTTP_URL);
  reentry_http=h;exercise_reentry=true;public_exchange(h,false);CHECK(!exercise_reentry);
  response_status=302;before=x4tf.requests;public_exchange(h,false);

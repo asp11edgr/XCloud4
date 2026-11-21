@@ -200,7 +200,7 @@ X4Ui2CatalogAction x4_catalog_browser_ui2_activate(X4CatalogBrowser *browser,
     const X4CatalogSnapshot *catalog);
 bool x4_catalog_browser_ui2_cycle_chip(X4CatalogBrowser *browser,
     const X4CatalogSnapshot *catalog, int direction);
-bool x4_catalog_browser_ui2_left_edge(const X4CatalogBrowser *browser);
+bool x4_catalog_browser_ui2_top_edge(const X4CatalogBrowser *browser);
 bool x4_catalog_browser_ui2_close_selector(X4CatalogBrowser *browser);
 unsigned x4_catalog_browser_ui2_selector_count(const X4CatalogBrowser *browser,
     X4Ui2CatalogFocus selector);

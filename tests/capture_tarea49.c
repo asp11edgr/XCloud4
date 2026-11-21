@@ -53,7 +53,7 @@ static void inspect49(uint32_t *pixels, int x, int y, int size, int width, uint3
         fprintf(stderr, "T49 BOUNDS %s x=%d y=%d w=%d size=%d\n", active_scene,x,y,width,size);
         assert(x >= X4_UI_SAFE_LEFT && x + width <= X4_UI_SAFE_RIGHT && y >= 0 && bottom <= X4_UI_SAFE_BOTTOM);
     }
-    if (x >= X4_UI2_SIDEBAR_W && !footer_depth && bottom > last_content)
+    if (x >= X4_UI2_CONTENT_X && !footer_depth && bottom > last_content)
         last_content = bottom;
     if (width < 12 || y >= 945 || x < X4_UI2_CONTENT_X) return;
     /* Sample the actual fill behind the text before glyph rendering. */

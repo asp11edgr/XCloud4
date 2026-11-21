@@ -101,6 +101,8 @@ void x4_apple_blit_image_rounded(uint32_t *pixels, int dst_x, int dst_y, int dst
 /* Home cards only: up to 10% crop; covers/detail retain the 5% entry point. */
 void x4_apple_blit_card_rounded(uint32_t *pixels, int x, int y, int w, int h,
     int radius, const X4CoverRaster *raster, enum X4ImageGradientMode gradient);
+void x4_apple_blit_banner(uint32_t *pixels, int x, int y, int w, int h,
+    const X4CoverRaster *raster);
 /* Draw a pre-sized image. Only the right edge can be clipped by the caller. */
 bool x4_apple_blit_image_exact(uint32_t *pixels,int x,int y,int w,int h,
     int radius,int right,const X4CoverRaster *raster);
