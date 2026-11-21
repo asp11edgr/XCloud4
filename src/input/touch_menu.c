@@ -1,7 +1,32 @@
 /* Basado en PsBox (C) 2026 RafaelNGP, GPL-3.0-or-later */
 /* SPDX-License-Identifier: GPL-3.0-only */
 #include "touch_menu.h"
+#include "../ui/motion.h"
 #include <string.h>
+
+int x4_touch_menu_visibility(const X4TouchMenu *menu, uint64_t now_us)
+{
+    if (!menu) return 0;
+    const int target = menu->is_open ? X4_MOTION_SCALE : 0;
+    const int remaining = x4_motion_remaining(now_us, menu->panel_motion_us,
+        menu->is_open ? 235000u : 200000u);
+    return target + (menu->panel_from - target) * remaining / X4_MOTION_SCALE;
+}
+
+int x4_touch_menu_focus(const X4TouchMenu *menu, uint64_t now_us)
+{
+    const int target = menu->selected_index * X4_MOTION_SCALE;
+    const int remaining = x4_motion_remaining(now_us, menu->focus_motion_us, 165000u);
+    return target + (menu->focus_from - target) * remaining / X4_MOTION_SCALE;
+}
+
+static void animate_close(X4TouchMenu *menu, uint32_t held, uint64_t now_us)
+{
+    menu->panel_from = x4_touch_menu_visibility(menu, now_us);
+    menu->panel_motion_us = now_us;
+    menu->is_open = false;
+    menu->suppress_mask = held;
+}
 
 void x4_touch_menu_init(X4TouchMenu *menu, bool is_public)
 {
@@ -35,9 +60,12 @@ bool x4_touch_menu_feed_touch(X4TouchMenu *menu, bool game_input, uint8_t finger
     }
 
     if (now_us - menu->touch_start_us >= X4_TOUCH_MENU_HOLD_US) {
+        menu->panel_from = x4_touch_menu_visibility(menu, now_us);
+        menu->panel_motion_us = now_us;
         menu->is_open = true;
         menu->waiting_release = true;
         menu->selected_index = 0;
+        menu->focus_motion_us = 0;
         menu->last_activity_us = now_us;
         menu->touch_start_us = 0;
         return true;
@@ -55,24 +83,24 @@ X4TouchMenuAction x4_touch_menu_update(X4TouchMenu *menu, uint32_t pressed, uint
     /* 15-second inactivity timeout */
     if (now_us >= menu->last_activity_us &&
         now_us - menu->last_activity_us >= X4_TOUCH_MENU_TIMEOUT_US) {
-        menu->is_open = false;
-        menu->suppress_mask = held;
+        animate_close(menu, held, now_us);
         return X4_TOUCH_MENU_ACTION_NONE;
     }
 
     if (pressed & (ORBIS_PAD_BUTTON_UP | ORBIS_PAD_BUTTON_DOWN)) {
         menu->last_activity_us = now_us;
-        if (pressed & ORBIS_PAD_BUTTON_UP) {
-            menu->selected_index = (menu->selected_index - 1 + menu->item_count) % menu->item_count;
-        }
-        if (pressed & ORBIS_PAD_BUTTON_DOWN) {
-            menu->selected_index = (menu->selected_index + 1) % menu->item_count;
+        const int delta = !!(pressed & ORBIS_PAD_BUTTON_DOWN) - !!(pressed & ORBIS_PAD_BUTTON_UP);
+        if (delta) {
+            const int previous = menu->selected_index;
+            menu->focus_from = x4_touch_menu_focus(menu, now_us);
+            menu->selected_index = (previous + delta + menu->item_count) % menu->item_count;
+            /* Wrapping selection follows the input without crossing every row. */
+            menu->focus_motion_us = previous + delta == menu->selected_index ? now_us : 0;
         }
     }
 
     if (pressed & ORBIS_PAD_BUTTON_CIRCLE) {
-        menu->is_open = false;
-        menu->suppress_mask = held;
+        animate_close(menu, held, now_us);
         return X4_TOUCH_MENU_ACTION_CANCEL;
     }
 
@@ -89,8 +117,7 @@ X4TouchMenuAction x4_touch_menu_update(X4TouchMenu *menu, uint32_t pressed, uint
             menu->suppress_mask = held;
             return X4_TOUCH_MENU_ACTION_NET_HUD;
         }
-        menu->is_open = false;
-        menu->suppress_mask = held;
+        animate_close(menu, held, now_us);
         if (menu->is_public) {
             switch (idx) {
             case 0: return X4_TOUCH_MENU_ACTION_BACK_TO_CATALOG;
@@ -126,6 +153,9 @@ uint32_t x4_touch_menu_filter_buttons(X4TouchMenu *m, uint32_t buttons)
 void x4_touch_menu_close(X4TouchMenu *menu)
 {
     menu->is_open = false;
+    menu->panel_motion_us = menu->focus_motion_us = 0;
+    menu->touch_start_us = 0;
+    menu->waiting_release = false;
     menu->suppress_mask = 0;
 }
 

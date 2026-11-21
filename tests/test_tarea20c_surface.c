@@ -4,6 +4,7 @@
 #include "ui_surface_test_trap.h"
 #include <assert.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,33 @@ int main(void)
     assert(!x4_ui_surface_publish(surface,dest[1],1,&stats));assert(stats.bytes==PIXELS*4);
     assert(!memcmp(shown[1],canvas,PIXELS*4));
     puts("PASS legacy pixels getter defaults to full damage without losing the other scanout's backlog");
+
+    const X4UiSlide slides[] = {
+        {{99, 127, 249, 93}, 31, 0, UINT32_C(0xff428751)},
+        {{911, 205, 123, 107}, -11, 17, UINT32_C(0xff1c2523)},
+    };
+    for (unsigned b = 0; b < 2; ++b) {
+        const X4UiSlide slide = slides[b];
+        const X4UiRect r = slide.bounds;
+        assert(!x4_ui_surface_publish_slide(surface, dest[b], b, &stats, &slide));
+        assert(stats.bytes == (uint64_t)r.w * r.h * 4);
+        for (int y = 0; y < X4_UI_HEIGHT; ++y) for (int x = 0; x < X4_UI_WIDTH; ++x) {
+            size_t at = (size_t)y * X4_UI_WIDTH + x;
+            if (x < r.x || x >= r.x + r.w || y < r.y || y >= r.y + r.h) {
+                assert(shown[b][at] == canvas[at]);
+                continue;
+            }
+            const int sx = x - slide.dx, sy = y - slide.dy;
+            const bool covered = sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h;
+            assert(shown[b][at] == (covered ? canvas[(size_t)sy * X4_UI_WIDTH + sx] : slide.fill));
+        }
+    }
+    for (unsigned b = 0; b < 2; ++b) {
+        assert(!x4_ui_surface_publish(surface, dest[b], b, &stats));
+        assert(!memcmp(shown[b], canvas, PIXELS * 4));
+        assert(!x4_ui_surface_publish(surface, dest[b], b, &stats) && !stats.bytes);
+    }
+    puts("PASS slides are clipped, leave the canonical canvas intact, and repair both scanouts");
     /* Exercise the same copy leaf's scalar prefix/tail and unaligned source,
      * not just the aligned, multiple-of-four tile spans used by publish(). */
     uint32_t source[40];

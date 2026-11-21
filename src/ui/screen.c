@@ -4,6 +4,7 @@
 #include "cloud_time_ui.h"
 #include "apple_ui.h"
 #include "ui2_theme.h"
+#include "motion.h"
 #include "canvas.h"
 #include "font.h"
 #include "lang.h"
@@ -1157,7 +1158,7 @@ static struct {
     int selected, items;
     enum X4Lang language;
     unsigned short inset[MENU_MAX_H];
-    int height;
+    int height, focus_y;
     X4TouchMenuCacheStats stats;
 } menu_cache;
 
@@ -1234,6 +1235,7 @@ static void touch_menu_prerender(const X4TouchMenu *menu, int muted)
     fx+=x4_apple_draw_footer_hint(p,fx,fy,X4_PAD_CROSS,x4_tr(X4_TR_AUTH_REMEMBER_WARNING_ACCEPT))+34;
     x4_apple_draw_footer_hint(p,fx,fy,X4_PAD_CIRCLE,x4_tr(X4_TR_UPDATE_NOTICE_CLOSE));
     menu_cache.height=mh;
+    menu_cache.focus_y=0;
     for(int y=0;y<mh;++y) {
         /* Pixel-centre circle spans preserve the same 28 px outer radius.
          * Edge antialiasing is flattened against the opaque backing too. */
@@ -1244,9 +1246,9 @@ static void touch_menu_prerender(const X4TouchMenu *menu, int muted)
     }
 }
 
-bool x4_touch_menu_prepare(const X4TouchMenu *menu, int muted)
+static bool touch_menu_prepare(const X4TouchMenu *menu, int muted, bool visible)
 {
-    if(!menu || !menu->is_open || menu->item_count<1 || menu->item_count>8) {
+    if(!menu || !visible || menu->item_count<1 || menu->item_count>8) {
         menu_cache.was_open=false;
         menu_cache.ready=false;
         return false;
@@ -1270,24 +1272,56 @@ bool x4_touch_menu_prepare(const X4TouchMenu *menu, int muted)
     return true;
 }
 
+bool x4_touch_menu_prepare(const X4TouchMenu *menu, int muted)
+{
+    return touch_menu_prepare(menu, muted, menu && (menu->is_open ||
+        x4_touch_menu_visibility(menu, sceKernelGetProcessTime()) > 0));
+}
+
 void x4_touch_menu_draw(const X4TouchMenu *menu, int muted, uint32_t *p)
 {
-    if(!p || !x4_touch_menu_prepare(menu,muted))return;
+    const uint64_t now = sceKernelGetProcessTime();
+    const int visible = x4_touch_menu_visibility(menu, now);
+    if (!p || !touch_menu_prepare(menu, muted, visible > 0 || (menu && menu->is_open)) || !visible)
+        return;
+    const int pitch = MENU_ROW_H + (menu->item_count == 8 ? 6 : MENU_GAP);
+    const int focus_y = MENU_Y + 190 + (MENU_ROW_H - 30) / 2 +
+        x4_touch_menu_focus(menu, now) * pitch / X4_MOTION_SCALE;
+    if (focus_y != menu_cache.focus_y) {
+        if (menu_cache.focus_y)
+            x4_rect(menu_canvas, MENU_X + 22, menu_cache.focus_y, 4, 30, X4_UI2_BACKGROUND);
+        x4_rect(menu_canvas, MENU_X + 22, focus_y, 4, 30, X4_UI2_ACCENT);
+        menu_cache.focus_y = focus_y;
+    }
+    const int slide = MENU_W * (X4_MOTION_SCALE - visible) / X4_MOTION_SCALE;
     uint64_t bytes=0;
     for(int row=0;row<menu_cache.height;++row) {
-        size_t inset=menu_cache.inset[row];
-        size_t count=MENU_W-inset*2;
-        size_t offset=(size_t)(MENU_Y+row)*X4_WIDTH+MENU_X+inset;
-        x4_touch_menu_copy_opaque_row(p+offset,menu_canvas+offset,count);
+        const int inset = menu_cache.inset[row];
+        const int start = inset > slide ? inset : slide;
+        const int count = MENU_W - inset - start;
+        if (count <= 0) continue;
+        const size_t offset = (size_t)(MENU_Y + row) * X4_WIDTH + MENU_X + start;
+        x4_touch_menu_copy_opaque_row(p + offset - slide, menu_canvas + offset, (size_t)count);
         bytes+=count*sizeof(uint32_t);
     }
     ++menu_cache.stats.frames;
     menu_cache.stats.copied_bytes+=bytes;
 }
 
+void x4_touch_menu_draw_mic_hint(const X4TouchMenu *menu, bool muted, uint32_t *pixels)
+{
+    const int visible = x4_touch_menu_visibility(menu, sceKernelGetProcessTime());
+    const int slide = MENU_W * (X4_MOTION_SCALE - visible) / X4_MOTION_SCALE;
+    if (slide <= 40)
+        x4_apple_draw_footer_hint(pixels, MENU_X + 40 - slide, MENU_Y + 160,
+            X4_PAD_SQUARE, x4_tr(muted ? X4_TR_MIC_UNMUTE : X4_TR_MIC_MUTE));
+}
+
 void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, int muted,
                      const X4TouchMenu *touch_menu, bool show_banner, uint32_t *p)
 {
+    const bool menu_visible = touch_menu && (touch_menu->is_open ||
+        x4_touch_menu_visibility(touch_menu, sceKernelGetProcessTime()) > 0);
     /* Fixed-size notices are UI-only; the session state remains STREAMING. */
     if (s) {
         uint64_t now=sceKernelGetProcessTime();
@@ -1301,14 +1335,14 @@ void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, i
             snprintf(notice,sizeof(notice),x4_tr(X4_TR_INACTIVITY_FMT),seconds);
         }
         if(notice[0]) {
-            int y=touch_menu&&touch_menu->is_open?30:438;
+            int y=menu_visible?30:438;
             x4_apple_fill_round_rect(p,420,y,1080,120,24,X4_RGB(11,16,29));
             x4_apple_stroke_round_rect(p,420,y,1080,120,24,1.5f,X4_RGBA(255,255,255,70));
             x4_text_ellipsis_px(p,456,y+42,30,X4_FONT_SEMIBOLD,notice,1008,INK);
         }
     }
     /* 6-second banner when video playback starts */
-    if (show_banner && (!touch_menu || !touch_menu->is_open)) {
+    if (show_banner && !menu_visible) {
         x4_rect(p, 0, X4_HEIGHT - 44, X4_WIDTH, 44, BG);
         const char *server_disp = x4_server_settings_active_display_name();
         char banner[256];
@@ -1351,7 +1385,7 @@ void x4_live_overlay(const X4LiveMediaSnapshot *m, const X4SessionSnapshot *s, i
         x4_rect(p, 20, 20, 620, 36, BG);
         x4_text(p, 32, 29, 2, line, WHITE);
     }
-    if (touch_menu && touch_menu->is_open) {
+    if (menu_visible) {
         x4_touch_menu_draw(touch_menu, muted, p);
     }
 }

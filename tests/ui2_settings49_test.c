@@ -48,6 +48,28 @@ int main(int argc, char **argv)
     step(&settings, X4_PIC_SETTINGS_CANCEL);
     assert(!settings.open);
 
+    step(&settings, X4_PIC_SETTINGS_OPEN);
+    step(&settings, X4_PIC_SETTINGS_NEXT_PAGE);
+    assert(!settings.open && settings.route == X4_PIC_ROUTE_NEXT_PAGE);
+    step(&settings, X4_PIC_SETTINGS_OPEN);
+    step(&settings, X4_PIC_SETTINGS_RIGHT);
+    const X4PictureQualityOption saved = x4_picture_settings_get();
+    step(&settings, X4_PIC_SETTINGS_PREV_PAGE);
+    assert(settings.open && settings.leave_pending && settings.leave_route == X4_PIC_ROUTE_PREV_PAGE);
+    step(&settings, X4_PIC_SETTINGS_NEXT_PAGE);
+    assert(settings.leave_pending && settings.leave_route == X4_PIC_ROUTE_PREV_PAGE);
+    step(&settings, X4_PIC_SETTINGS_CANCEL);
+    assert(settings.open && !settings.leave_pending && x4_picture_settings_ui_dirty(&settings));
+    step(&settings, X4_PIC_SETTINGS_PREV_PAGE);
+    step(&settings, X4_PIC_SETTINGS_RIGHT);
+    step(&settings, X4_PIC_SETTINGS_CONFIRM);
+    assert(!settings.open && settings.route == X4_PIC_ROUTE_PREV_PAGE && x4_picture_settings_get() == saved);
+    step(&settings, X4_PIC_SETTINGS_OPEN);
+    step(&settings, X4_PIC_SETTINGS_RIGHT);
+    step(&settings, X4_PIC_SETTINGS_NEXT_PAGE);
+    step(&settings, X4_PIC_SETTINGS_CONFIRM);
+    assert(!settings.open && settings.route == X4_PIC_ROUTE_NEXT_PAGE && x4_picture_settings_get() != saved);
+
     const bool original_pad = x4_picture_settings_multiplayer();
     x4_picture_settings_ui_open_section(&settings, X4_PIC_SECTION_PADS);
     step(&settings, X4_PIC_SETTINGS_CONFIRM);

@@ -29,7 +29,9 @@ enum {
     X4_PIC_SETTINGS_PREV_TAB = 32u,
     X4_PIC_SETTINGS_NEXT_TAB = 64u,
     X4_PIC_SETTINGS_LEFT = 128u,
-    X4_PIC_SETTINGS_RIGHT = 256u
+    X4_PIC_SETTINGS_RIGHT = 256u,
+    X4_PIC_SETTINGS_PREV_PAGE = 512u,
+    X4_PIC_SETTINGS_NEXT_PAGE = 1024u,
 };
 
 typedef struct {
@@ -43,7 +45,10 @@ typedef enum {
     X4_PIC_SECTION_PADS, X4_PIC_SECTION_MIC, X4_PIC_SECTION_ACCOUNT,
     X4_PIC_SECTION_ABOUT, X4_PIC_SECTION_INTERFACE, X4_PIC_SECTION_COUNT
 } X4PictureSettingsSection;
-typedef enum { X4_PIC_ROUTE_NONE, X4_PIC_ROUTE_ACCOUNT, X4_PIC_ROUTE_ABOUT } X4PictureSettingsRoute;
+typedef enum {
+    X4_PIC_ROUTE_NONE, X4_PIC_ROUTE_ACCOUNT, X4_PIC_ROUTE_ABOUT,
+    X4_PIC_ROUTE_PREV_PAGE, X4_PIC_ROUTE_NEXT_PAGE,
+} X4PictureSettingsRoute;
 
 typedef struct {
     bool open;
@@ -118,6 +123,7 @@ void x4_picture_settings_ui_open_section(X4PictureSettingsUi *, X4PictureSetting
 bool x4_picture_settings_ui_dirty(const X4PictureSettingsUi *);
 bool x4_picture_settings_ui_has_modal(const X4PictureSettingsUi *);
 void x4_picture_settings_ui_draw_page(const X4PictureSettingsUi *, uint32_t *);
+X4UiRect x4_picture_settings_panel_bounds(void);
 void x4_picture_settings_ui_draw_modal(const X4PictureSettingsUi *, uint32_t *);
 /* Cached ordinary page redraws at most the section strip and the right panel.
  * SIZE_MAX means the background was repainted; otherwise damage has 0..2 rects. */

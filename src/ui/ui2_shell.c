@@ -28,9 +28,11 @@ X4Ui2NavResult x4_ui2_shell_handle(X4Ui2Shell *shell, unsigned flags, bool at_to
     if (flags & X4_UI2_NAV_OPTIONS)
         return (X4Ui2NavResult){.consumed = true, .activate = true, .target = X4_UI2_SETTINGS};
     if (flags & (X4_UI2_NAV_PREVIOUS | X4_UI2_NAV_NEXT)) {
-        if ((unsigned)shell->section > X4_UI2_LIBRARY) return result;
-        unsigned delta = flags & X4_UI2_NAV_NEXT ? 1u : X4_UI2_LIBRARY;
-        X4Ui2Section target = (X4Ui2Section)((shell->section + delta) % (X4_UI2_LIBRARY + 1u));
+        const bool next = (flags & X4_UI2_NAV_NEXT) != 0;
+        const unsigned count = X4_UI2_SETTINGS + 1u;
+        X4Ui2Section target = (unsigned)shell->section < count ?
+            (X4Ui2Section)((shell->section + (next ? 1u : count - 1u)) % count) :
+            (next ? X4_UI2_HOME : X4_UI2_SETTINGS);
         return (X4Ui2NavResult){.consumed = true, .activate = true, .target = target};
     }
     if (!shell->focused) {
@@ -263,7 +265,11 @@ void x4_ui2_shell_draw_header(uint32_t *pixels, const X4Ui2Shell *shell,
         }
     }
     memcpy(pixels, header.backdrop, sizeof(header.backdrop));
-    x4_ui2_brand(pixels, X4_UI_SAFE_LEFT, NAV_Y + 11, 36);
+    x4_ui2_brand(pixels, X4_UI_SAFE_LEFT, NAV_Y + 3, 36);
+    const int glyph_x = X4_UI_SAFE_LEFT + 1;
+    const int glyph_y = NAV_Y + 43;
+    const int l1_width = x4_ui2_pad_glyph(pixels, glyph_x, glyph_y, X4_PAD_L1);
+    x4_ui2_pad_glyph(pixels, glyph_x + l1_width + 8, glyph_y, X4_PAD_R1);
     const unsigned active = shell && valid_section(shell->section) ? (unsigned)shell->section : X4_UI2_HOME;
     const unsigned focus = shell && shell->focused ? (unsigned)shell->selected : X4_UI2_SECTION_COUNT;
     for (unsigned i = 0; i < X4_UI2_ACCOUNT; ++i)

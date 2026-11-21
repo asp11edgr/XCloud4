@@ -5,7 +5,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
-uint64_t sceKernelGetProcessTime(void) { return 10000000; }
+static uint64_t render_time = 10000000;
+uint64_t sceKernelGetProcessTime(void) { return render_time; }
 const char *x4_server_settings_active_display_name(void) { return ""; }
 const char *x4_picture_settings_active_quality_label(void) { return "1080p"; }
 const char *x4_access_country_label(X4AccessCountry c) { (void)c; return ""; }
@@ -127,11 +128,49 @@ static void mic_toggle(void)
     }
     puts("PASS T34 Square toggles microphone only in open opted-in menu, without changing existing rows");
 }
+
+static void animation(void)
+{
+    X4TouchMenu m;
+    open_menu(&m, true);
+    assert(x4_touch_menu_visibility(&m, 2000000) == 0);
+    const uint64_t halfway = 2080000;
+    const int visible = x4_touch_menu_visibility(&m, halfway);
+    assert(visible > 0 && visible < X4_MOTION_SCALE);
+    assert(x4_touch_menu_update(&m, ORBIS_PAD_BUTTON_CIRCLE, ORBIS_PAD_BUTTON_CIRCLE,
+        halfway) == X4_TOUCH_MENU_ACTION_CANCEL);
+    assert(!m.is_open && x4_touch_menu_visibility(&m, halfway) == visible);
+    assert(x4_touch_menu_visibility(&m, halfway + 80000) < visible);
+    assert(x4_touch_menu_visibility(&m, halfway + 200000) == 0);
+    open_menu(&m, true);
+    assert(x4_touch_menu_visibility(&m, 2300000) == X4_MOTION_SCALE);
+    (void)x4_touch_menu_update(&m, ORBIS_PAD_BUTTON_DOWN, 0, 2300000);
+    const int focus = x4_touch_menu_focus(&m, 2350000);
+    assert(m.selected_index == 1 && focus > 0 && focus < X4_MOTION_SCALE);
+    (void)x4_touch_menu_update(&m, ORBIS_PAD_BUTTON_DOWN, 0, 2350000);
+    assert(m.selected_index == 2 && x4_touch_menu_focus(&m, 2350000) == focus);
+    assert(x4_touch_menu_focus(&m, 2600000) == 2 * X4_MOTION_SCALE);
+
+    const size_t size = (size_t)X4_WIDTH * X4_HEIGHT;
+    uint32_t *frame = calloc(size, sizeof(*frame));
+    assert(frame);
+    render_time = halfway;
+    x4_touch_menu_draw(&m, 0, frame);
+    const size_t at = (size_t)(MENU_Y + 56) * X4_WIDTH + MENU_X;
+    const int drawn = MENU_W - MENU_W * (X4_MOTION_SCALE - visible) / X4_MOTION_SCALE;
+    assert(!frame[at - 1] && frame[at] && frame[at + drawn - 1] && !frame[at + drawn]);
+    x4_touch_menu_close(&m);
+    assert(x4_touch_menu_visibility(&m, render_time) == 0);
+    render_time = 10000000;
+    free(frame);
+    puts("PASS touch menu slides in and out; focus can change mid-transition");
+}
+
 int main(int argc,char **argv)
 {
     assert(argc==2);x4_lang_set(X4_LANG_ES,"es-MX","MX");
     assert(!x4_font_init("assets/fonts/inter.x4font"));x4_apple_set_animation_phase(0);
-    actions();touch_and_nexus();cycle_keeps_open(argv[1]);render_bounds();mic_toggle();x4_font_close();
+    actions();touch_and_nexus();cycle_keeps_open(argv[1]);render_bounds();mic_toggle();animation();x4_font_close();
     puts("PASS touch_menu_test: public 6/Lab 8, old actions, circular HUD mode keeps menu open, opaque rows bounded; Lab bottom y=1030");
     return 0;
 }

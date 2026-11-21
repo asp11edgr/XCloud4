@@ -48,6 +48,15 @@ int main(void)
         assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_CIRCLE, false).consumed && !shell.focused);
         assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true).changed);
         assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_DOWN, true).consumed && !shell.focused);
+        for (unsigned tab = X4_UI2_HOME; tab <= X4_UI2_SETTINGS; ++tab) {
+            const unsigned count = X4_UI2_SETTINGS + 1u;
+            x4_ui2_shell_set_section(&shell, (X4Ui2Section)tab);
+            X4Ui2NavResult next = x4_ui2_shell_handle(&shell, X4_UI2_NAV_NEXT, false);
+            X4Ui2NavResult prev = x4_ui2_shell_handle(&shell, X4_UI2_NAV_PREVIOUS, false);
+            assert(next.consumed && next.activate && (unsigned)next.target == (tab + 1u) % count);
+            assert(prev.consumed && prev.activate && (unsigned)prev.target == (tab + count - 1u) % count);
+        }
+        x4_ui2_shell_set_section(&shell, X4_UI2_HOME);
         assert(x4_ui2_status_set(&status, X4_UI2_NETWORK_CABLE, "720p", 701, "Player 2"));
         x4_ui2_shell_draw_header(retained, &shell, &status, false);
         x4_ui2_shell_draw(reference, &shell, &status);

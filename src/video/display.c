@@ -55,12 +55,14 @@ void x4_display_set_damage(X4Display *d,const X4UiRect *rects,size_t count)
 {if(d)x4_ui_surface_set_damage(d->ui,rects,count);}
 void x4_display_copy_stats(const X4Display *d,X4UiCopyStats *stats)
 {if(stats)*stats=d?d->copy_stats:(X4UiCopyStats){0};}
-static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh)
+static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh,
+                   const X4UiSlide *slide)
 {
     if(!d||d->handle<0||!d->ui||d->index<0||d->index>=X4_UI_SCANOUTS||
         !d->buffers[d->index])return -9001;
     uint64_t copy_begin=sceKernelGetProcessTime();
-    int copied=x4_ui_surface_publish(d->ui,d->buffers[d->index],(unsigned)d->index,&d->copy_stats);
+    int copied=x4_ui_surface_publish_slide(d->ui,d->buffers[d->index],
+        (unsigned)d->index,&d->copy_stats,slide);
     d->copy_stats.elapsed_us=sceKernelGetProcessTime()-copy_begin;
     if(copied)return copied;
     uint16_t flags = fresh ? X4_TRACE_F_NEW : X4_TRACE_F_REPEAT;
@@ -110,10 +112,14 @@ static int present(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh
                     generation, (uint32_t)-1);
     return -1;
 }
-int x4_display_present(X4Display *d) { return present(d, NULL, 0, false); }
+int x4_display_present(X4Display *d) { return present(d, NULL, 0, false, NULL); }
+int x4_display_present_slide(X4Display *d,const X4UiSlide *slide)
+{
+    return present(d, NULL, 0, false, slide);
+}
 int x4_display_present_trace(X4Display *d, X4Trace *trace, uint64_t generation, bool fresh)
 {
-    return present(d, trace, generation, fresh);
+    return present(d, trace, generation, fresh, NULL);
 }
 void x4_display_close(X4Display *d)
 {

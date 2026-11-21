@@ -45,27 +45,29 @@ void x4_ui_surface_mark_full(X4UiSurface *s)
 uint32_t *x4_ui_surface_pixels(X4UiSurface *s)
 {if(!s)return NULL;x4_ui_surface_mark_full(s);return s->pixels;}
 
+static void mark_rect(uint64_t bits[WORDS], X4UiRect r)
+{
+    if (r.w <= 0 || r.h <= 0) return;
+    /* 64-bit addition makes clipping defined even for INT_MIN/INT_MAX. */
+    int64_t x0=r.x,y0=r.y,x1=x0+(int64_t)r.w,y1=y0+(int64_t)r.h;
+    if(x0<0)x0=0;
+    if(y0<0)y0=0;
+    if(x1>X4_UI_WIDTH)x1=X4_UI_WIDTH;
+    if(y1>X4_UI_HEIGHT)y1=X4_UI_HEIGHT;
+    if(x0>=x1||y0>=y1)return;
+    unsigned tx0=(unsigned)x0/X4_UI_TILE,ty0=(unsigned)y0/X4_UI_TILE;
+    unsigned tx1=(unsigned)(x1-1)/X4_UI_TILE,ty1=(unsigned)(y1-1)/X4_UI_TILE;
+    for(unsigned y=ty0;y<=ty1;++y)for(unsigned x=tx0;x<=tx1;++x){
+        unsigned tile=y*COLS+x;bits[tile/64]|=UINT64_C(1)<<(tile%64);
+    }
+}
+
 void x4_ui_surface_set_damage(X4UiSurface *s,const X4UiRect *rects,size_t count)
 {
     if(!s)return;
     memset(s->damage,0,sizeof(s->damage));
     if(count&&!rects){fill_damage(s->damage);return;}
-    for(size_t i=0;i<count;++i){
-        const X4UiRect *r=&rects[i];
-        if(r->w<=0||r->h<=0)continue;
-        /* 64-bit addition makes clipping defined even for INT_MIN/INT_MAX. */
-        int64_t x0=r->x,y0=r->y,x1=x0+(int64_t)r->w,y1=y0+(int64_t)r->h;
-        if(x0<0)x0=0;
-        if(y0<0)y0=0;
-        if(x1>X4_UI_WIDTH)x1=X4_UI_WIDTH;
-        if(y1>X4_UI_HEIGHT)y1=X4_UI_HEIGHT;
-        if(x0>=x1||y0>=y1)continue;
-        unsigned tx0=(unsigned)x0/X4_UI_TILE,ty0=(unsigned)y0/X4_UI_TILE;
-        unsigned tx1=(unsigned)(x1-1)/X4_UI_TILE,ty1=(unsigned)(y1-1)/X4_UI_TILE;
-        for(unsigned y=ty0;y<=ty1;++y)for(unsigned x=tx0;x<=tx1;++x){
-            unsigned tile=y*COLS+x;s->damage[tile/64]|=UINT64_C(1)<<(tile%64);
-        }
-    }
+    for(size_t i=0;i<count;++i)mark_rect(s->damage, rects[i]);
 }
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -153,5 +155,40 @@ int x4_ui_surface_publish(X4UiSurface *s,uint32_t *destination,
     if(result.bytes)x4_ui_surface_finish_writes();
     memset(s->pending[buffer_index],0,sizeof(s->pending[buffer_index]));
     if(stats)*stats=result;
+    return 0;
+}
+
+int x4_ui_surface_publish_slide(X4UiSurface *s,uint32_t *destination,
+    unsigned buffer_index,X4UiCopyStats *stats,const X4UiSlide *slide)
+{
+    const int rc = x4_ui_surface_publish(s, destination, buffer_index, stats);
+    if (rc || !slide || (!slide->dx && !slide->dy)) return rc;
+    const X4UiRect r = slide->bounds;
+    if (r.x < 0 || r.y < 0 || r.w <= 0 || r.h <= 0 ||
+        r.w > X4_UI_WIDTH - r.x || r.h > X4_UI_HEIGHT - r.y ||
+        slide->dx <= -r.w || slide->dx >= r.w || slide->dy <= -r.h || slide->dy >= r.h)
+        return rc;
+
+    /* Each scanout gets the canonical tiles back on its next publish. This
+     * also repairs the old region if a new transition interrupts this one. */
+    mark_rect(s->pending[buffer_index], r);
+    uint32_t fill[X4_UI_WIDTH];
+    const int left = slide->dx > 0 ? slide->dx : 0;
+    const int right = slide->dx < 0 ? r.w + slide->dx : r.w;
+    for (int x = 0; x < r.w; ++x) fill[x] = slide->fill;
+    for (int y = 0; y < r.h; ++y) {
+        uint32_t *dst = destination + (size_t)(r.y + y) * X4_UI_WIDTH + r.x;
+        const int sy = y - slide->dy;
+        if (sy < 0 || sy >= r.h) {
+            x4_ui_surface_copy_row_nt(dst, fill, (size_t)r.w);
+            continue;
+        }
+        const uint32_t *src = s->pixels + (size_t)(r.y + sy) * X4_UI_WIDTH + r.x;
+        if (left) x4_ui_surface_copy_row_nt(dst, fill, (size_t)left);
+        x4_ui_surface_copy_row_nt(dst + left, src + (left - slide->dx), (size_t)(right - left));
+        if (right < r.w) x4_ui_surface_copy_row_nt(dst + right, fill, (size_t)(r.w - right));
+    }
+    x4_ui_surface_finish_writes();
+    if (stats) stats->bytes += (uint64_t)r.w * r.h * sizeof(uint32_t);
     return 0;
 }

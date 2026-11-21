@@ -145,7 +145,8 @@ static void nav47(void)
     assert(x4_ui2_shell_handle(&shell, X4_UI2_NAV_UP, true).changed);
     nav = x4_ui2_shell_handle(&shell, X4_UI2_NAV_DOWN, false);
     assert(nav.changed && !shell.focused);
-    const X4Ui2Section loop[] = {X4_UI2_HOME, X4_UI2_DISCOVER, X4_UI2_CATALOG, X4_UI2_LIBRARY};
+    const X4Ui2Section loop[] = {X4_UI2_HOME, X4_UI2_DISCOVER, X4_UI2_CATALOG,
+        X4_UI2_LIBRARY, X4_UI2_SEARCH, X4_UI2_SETTINGS};
     for (unsigned i = 0; i < sizeof(loop) / sizeof(loop[0]); ++i) {
         unsigned n = (unsigned)(sizeof(loop) / sizeof(loop[0]));
         x4_ui2_shell_set_section(&shell, loop[i]);

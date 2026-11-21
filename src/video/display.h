@@ -26,6 +26,7 @@ uint32_t *x4_display_pixels(X4Display *display);
 void x4_display_set_damage(X4Display *display,const X4UiRect *rects,size_t count);
 void x4_display_copy_stats(const X4Display *display,X4UiCopyStats *stats);
 int x4_display_present(X4Display *display);
+int x4_display_present_slide(X4Display *display,const X4UiSlide *slide);
 /* Optional live-only numeric observations; the native flip/wait path is the
  * same as present(). The tag belongs to this call and is never retained. */
 int x4_display_present_trace(X4Display *display, X4Trace *trace,

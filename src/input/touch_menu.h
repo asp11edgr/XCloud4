@@ -48,6 +48,8 @@ typedef struct {
     uint64_t last_activity_us;
     uint64_t nexus_until_us;
     bool mic_enabled; /* Current launch snapshot, not the saved preference. */
+    uint64_t panel_motion_us, focus_motion_us;
+    int panel_from, focus_from;
 } X4TouchMenu;
 
 void x4_touch_menu_init(X4TouchMenu *menu, bool is_public);
@@ -56,5 +58,7 @@ X4TouchMenuAction x4_touch_menu_update(X4TouchMenu *menu, uint32_t pressed, uint
 uint32_t x4_touch_menu_filter_buttons(X4TouchMenu *m, uint32_t buttons);
 void x4_touch_menu_close(X4TouchMenu *menu);
 bool x4_touch_menu_is_open(const X4TouchMenu *menu);
+int x4_touch_menu_visibility(const X4TouchMenu *menu, uint64_t now_us);
+int x4_touch_menu_focus(const X4TouchMenu *menu, uint64_t now_us);
 void x4_touch_menu_trigger_nexus(X4TouchMenu *menu, uint64_t now_us);
 bool x4_touch_menu_is_nexus_active(const X4TouchMenu *menu, uint64_t now_us);

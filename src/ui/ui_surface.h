@@ -6,6 +6,7 @@
 enum { X4_UI_WIDTH=1920, X4_UI_HEIGHT=1080, X4_UI_TILE=32,
     X4_UI_SCANOUTS=2 };
 typedef struct { int x,y,w,h; } X4UiRect;
+typedef struct { X4UiRect bounds; int dx, dy; uint32_t fill; } X4UiSlide;
 typedef struct {
     uint64_t bytes;
     uint64_t elapsed_us; /* supplied by the display owner, zero in the core */
@@ -29,6 +30,9 @@ void x4_ui_surface_set_damage(X4UiSurface *surface,const X4UiRect *rects,size_t 
  * for the union of changes since its last copy. No destination pixel is read. */
 int x4_ui_surface_publish(X4UiSurface *surface,uint32_t *destination,
     unsigned buffer_index,X4UiCopyStats *stats);
+/* Compose a short slide into scanout while keeping the cached UI stationary. */
+int x4_ui_surface_publish_slide(X4UiSurface *surface,uint32_t *destination,
+    unsigned buffer_index,X4UiCopyStats *stats,const X4UiSlide *slide);
 size_t x4_ui_surface_heap_bytes(void);
 
 /* Separate uninlined leaves for native/host disassembly. The low-level row

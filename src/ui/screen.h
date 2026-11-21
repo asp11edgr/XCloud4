@@ -64,6 +64,7 @@ void x4_touch_menu_cache_snapshot(X4TouchMenuCacheStats *out);
 void x4_touch_menu_copy_opaque_row(uint32_t *restrict dst,
                                  const uint32_t *restrict src, size_t pixels);
 void x4_touch_menu_draw(const X4TouchMenu *menu, int muted, uint32_t *pixels);
+void x4_touch_menu_draw_mic_hint(const X4TouchMenu *menu, bool muted, uint32_t *pixels);
 void x4_live_overlay(const X4LiveMediaSnapshot *media, const X4SessionSnapshot *session, int muted,
                      const X4TouchMenu *touch_menu, bool show_banner, uint32_t *pixels);
 void x4_fortnite_summary_draw(const X4Screen *screen, const X4CatalogSnapshot *catalog, int busy, uint32_t *pixels);

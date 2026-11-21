@@ -9,6 +9,7 @@
 #include "../ui/apple_ui.h"
 #include "../ui/net_hud.h"
 #include "../ui/loading_screen.h"
+#include "../ui/motion.h"
 #include "../ui/ui_perf.h"
 #include "../ui/ui_draw_metrics.h"
 #include "../ui/ui2_boot.h"
@@ -245,9 +246,7 @@ static void mic_draw(uint32_t *pixels,const X4TouchMenu *menu,
     const X4MicSnapshot *mic,const char *notice,bool show_level)
 {
     if (!mic) return;
-    if (menu->is_open)
-        x4_apple_draw_footer_hint(pixels,112,282,X4_PAD_SQUARE,
-            x4_tr(mic->muted?X4_TR_MIC_UNMUTE:X4_TR_MIC_MUTE));
+    x4_touch_menu_draw_mic_hint(menu, mic->muted, pixels);
     if (!mic->active && !notice) return;
     int level = 0;
 #if !X4_PUBLIC
@@ -811,6 +810,79 @@ static X4Ui2Section ui2_section_for(const X4Screen *screen, const X4CatalogBrows
 }
 
 typedef struct {
+    int page;
+    X4Ui2Section section;
+    unsigned settings_tab, detail_tab, library_tab;
+    bool modal, keyboard, dropdown, qr, game_details, game_overlay;
+} UiMotionView;
+
+typedef struct {
+    UiMotionView view;
+    uint64_t started;
+    unsigned duration;
+    int dx, dy;
+    X4UiRect bounds;
+    bool ready, modal, settling;
+} UiMotion;
+
+static X4UiSlide ui_slide(UiMotion *motion, UiMotionView next, uint64_t now,
+    bool enabled, int nav_direction)
+{
+    const UiMotionView prev = motion->view;
+    motion->view = next;
+    if (!motion->ready || !enabled) {
+        motion->ready = enabled;
+        motion->started = 0;
+    } else {
+        const X4UiRect body = {0, X4_UI2_HEADER_H, X4_UI_WIDTH, X4_UI_HEIGHT - X4_UI2_HEADER_H};
+        int dx = 0, dy = 0;
+        X4UiRect bounds = body;
+        unsigned duration = 210000u;
+        bool modal = false;
+        if (next.modal && (!prev.modal || next.page != prev.page)) {
+            modal = true;
+            dy = 30;
+        } else if (next.keyboard && !prev.keyboard) {
+            bounds = (X4UiRect){420, 200, 1080, 680};
+            dy = 26;
+        } else if (!next.modal && (next.page != prev.page || next.section != prev.section)) {
+            if (next.section != prev.section) {
+                int direction = nav_direction;
+                if (!direction) direction = next.section > prev.section ? 1 : -1;
+                dx = 64 * direction;
+            } else dy = 38;
+            duration = 250000u;
+        } else if (!next.modal && next.section == X4_UI2_SETTINGS &&
+                (next.settings_tab != prev.settings_tab || (next.dropdown && !prev.dropdown))) {
+            bounds = x4_picture_settings_panel_bounds();
+            dy = next.settings_tab >= prev.settings_tab ? 32 : -32;
+        } else if (!next.modal && ((next.qr && !prev.qr) || (next.game_overlay && !prev.game_overlay))) {
+            dy = 28;
+        } else if (!next.modal && !next.game_overlay && next.game_details && prev.game_details &&
+                   next.detail_tab != prev.detail_tab) {
+            dy = 24;
+        } else if (!next.modal && !next.game_details && next.section == X4_UI2_LIBRARY &&
+                   next.library_tab != prev.library_tab) {
+            dx = next.library_tab > prev.library_tab ? 40 : -40;
+        }
+        if (dx || dy) {
+            motion->started = now;
+            motion->bounds = bounds;
+            motion->dx = dx;
+            motion->dy = dy;
+            motion->duration = duration;
+            motion->modal = modal;
+        } else if ((motion->modal && !next.modal) || (prev.keyboard && !next.keyboard) ||
+                   (prev.dropdown && !next.dropdown) || (prev.game_overlay && !next.game_overlay)) {
+            motion->started = 0;
+        }
+    }
+    const int remaining = x4_motion_remaining(now, motion->started, motion->duration);
+    return (X4UiSlide){motion->bounds, motion->dx * remaining / X4_MOTION_SCALE,
+        motion->dy * remaining / X4_MOTION_SCALE, X4_UI2_BACKGROUND};
+}
+
+typedef struct {
     bool called;
 #if !X4_PUBLIC
     UiBootDiag *diag;
@@ -884,6 +956,7 @@ int main(void)
     X4Ui2Shell ui2_shell = {0};
     X4Ui2Status ui2_status = {0};
     X4Ui2Shell shown_shell = {0};
+    UiMotion ui_motion = {0};
     uint64_t status_revision = 0, shown_status_revision = 0;
     X4Ui2Account account_ui = {0};
     X4Ui2AccountSummary account_history = {0};
@@ -1105,6 +1178,7 @@ reopen_interface:;
     x4_catalog_gui_home_invalidate();
     x4_screen_home_invalidate();
     home_canvas_valid = menu_canvas_valid = false;
+    ui_motion = (UiMotion){0};
     home_sigl_revision = 0;
     memset(home_sigls, 0, sizeof(home_sigls));
 #if !X4_PUBLIC
@@ -1175,6 +1249,7 @@ reopen_interface:;
         bool stream_settings_consumed=false;
 #endif
         uint64_t input_at = sceKernelGetProcessTime();
+        int shell_direction = 0;
 #if !X4_PUBLIC
         (void)ui_boot_diag_save(&boot_diag, input_at, ui_dirty_skips, false);
         for (unsigned tab = 0; tab < X4_CAT_TAB_COUNT; ++tab) {
@@ -1610,8 +1685,8 @@ reopen_interface:;
             if (controller.pressed & ORBIS_PAD_BUTTON_RIGHT) pic_actions |= X4_PIC_SETTINGS_RIGHT;
             if (controller.pressed & ORBIS_PAD_BUTTON_CROSS) pic_actions |= X4_PIC_SETTINGS_CONFIRM;
             if (controller.pressed & ORBIS_PAD_BUTTON_CIRCLE) pic_actions |= X4_PIC_SETTINGS_CANCEL;
-            if (controller.pressed & ORBIS_PAD_BUTTON_L1) pic_actions |= X4_PIC_SETTINGS_PREV_TAB;
-            if (controller.pressed & ORBIS_PAD_BUTTON_R1) pic_actions |= X4_PIC_SETTINGS_NEXT_TAB;
+            if (controller.pressed & ORBIS_PAD_BUTTON_L1) pic_actions |= X4_PIC_SETTINGS_PREV_PAGE;
+            if (controller.pressed & ORBIS_PAD_BUTTON_R1) pic_actions |= X4_PIC_SETTINGS_NEXT_PAGE;
             const bool settings_was_open = picture_settings_ui.open && !picture_settings_ui.first_time_mode;
             const X4Ui2Shell before_settings = ui2_shell;
             bool pic_consumed;
@@ -1648,8 +1723,12 @@ reopen_interface:;
                 ui2_shell = settings_return_shell;
                 settings_return_valid = false;
             }
-            if (picture_settings_ui.route != X4_PIC_ROUTE_NONE) {
-                const int target_page = picture_settings_ui.route == X4_PIC_ROUTE_ACCOUNT ? 4 : 2;
+            const X4PictureSettingsRoute settings_route = picture_settings_ui.route;
+            picture_settings_ui.route = X4_PIC_ROUTE_NONE;
+            const unsigned settings_nav = settings_route == X4_PIC_ROUTE_PREV_PAGE ? X4_UI2_NAV_PREVIOUS :
+                settings_route == X4_PIC_ROUTE_NEXT_PAGE ? X4_UI2_NAV_NEXT : 0;
+            if (settings_route == X4_PIC_ROUTE_ACCOUNT || settings_route == X4_PIC_ROUTE_ABOUT) {
+                const int target_page = settings_route == X4_PIC_ROUTE_ACCOUNT ? 4 : 2;
                 if (target_page != screen.page) {
                     if (target_page == 4) {
                         if (screen.page == 2 && about_return_settings && about_return_page == 4) {
@@ -1672,7 +1751,6 @@ reopen_interface:;
                     }
                     screen.page = target_page;
                 }
-                picture_settings_ui.route = X4_PIC_ROUTE_NONE;
                 ui2_shell.focused = false;
             }
             if(picture_settings_ui.open&&picture_settings_ui.tab==3)
@@ -1834,14 +1912,14 @@ reopen_interface:;
 #if X4_STREAM_PROFILE && !X4_PUBLIC
             shell_input = shell_input && !stream_settings_consumed && !stream_settings_ui.open;
 #endif
-            if (shell_input && ui_pressed) {
+            if ((shell_input && ui_pressed) || settings_nav) {
                 const X4Ui2Shell before_nav = ui2_shell;
                 X4Ui2HomeModel model;
                 if (screen.page == 0) {
                     x4_ui2_home_model(&model, screen.signed_in, &catalog, &recent, &catalog_browser.home_rows);
                     home_choice = x4_ui2_home_normalize(&model, home_choice);
                 }
-                unsigned nav_flags = 0;
+                unsigned nav_flags = settings_nav;
                 if (ui_pressed & ORBIS_PAD_BUTTON_LEFT) nav_flags |= X4_UI2_NAV_LEFT;
                 if (ui_pressed & ORBIS_PAD_BUTTON_RIGHT) nav_flags |= X4_UI2_NAV_RIGHT;
                 if (ui_pressed & ORBIS_PAD_BUTTON_UP) nav_flags |= X4_UI2_NAV_UP;
@@ -1853,7 +1931,9 @@ reopen_interface:;
                 bool at_edge = screen.page == 0 ? home_choice == X4_UI2_HOME_CONTINUE :
                     screen.page == 5 ? x4_catalog_browser_ui2_top_edge(&catalog_browser) :
                     screen.page == 4 ? account_ui.row == 0 : true;
-                X4Ui2NavResult nav = x4_ui2_shell_handle(&ui2_shell, nav_flags, at_edge);
+                X4Ui2Shell settings_shell = {.section = X4_UI2_SETTINGS};
+                X4Ui2NavResult nav = x4_ui2_shell_handle(settings_nav ?
+                    &settings_shell : &ui2_shell, nav_flags, at_edge);
                 X4Ui2HomeRoute route = {0};
                 if (!nav.consumed && screen.page == 0 && !ui2_shell.focused &&
                     !(nav_flags & X4_UI2_NAV_CIRCLE)) {
@@ -1871,6 +1951,8 @@ reopen_interface:;
                 }
                 bool enter_tab = false;
                 if (nav.activate) {
+                    if (nav_flags & X4_UI2_NAV_NEXT) shell_direction = 1;
+                    else if (nav_flags & X4_UI2_NAV_PREVIOUS) shell_direction = -1;
                     switch (nav.target) {
                     case X4_UI2_HOME: screen.page = 0; break;
                     case X4_UI2_DISCOVER: login_tab = X4_CAT_TAB_DISCOVER; enter_tab = true; break;
@@ -3099,7 +3181,11 @@ reopen_interface:;
         uint64_t draw_at = sceKernelGetProcessTime();
         x4_ui_draw_metrics_poll(draw_at,ui_dirty_skips);
         bool overlay_changed = memcmp(overlay_key, next_overlay_key, sizeof(overlay_key)) != 0;
-        if (live_visible && live_presented && !overlay_changed && draw_at - overlay_at < 500000 &&
+        const int touch_visibility = x4_touch_menu_visibility(&touch_menu, draw_at);
+        const bool touch_animating = touch_visibility != (touch_menu.is_open ? X4_MOTION_SCALE : 0) ||
+            (touch_menu.is_open && x4_touch_menu_focus(&touch_menu, draw_at) !=
+                touch_menu.selected_index * X4_MOTION_SCALE);
+        if (live_visible && live_presented && !overlay_changed && !touch_animating && draw_at - overlay_at < 500000 &&
             !x4_live_media_has_new_picture(live)) {
             ++idle_present_skips;
             x4_trace_monitor_state(live_trace, X4_MON_ACTOR_MAIN, X4_MON_PHASE_MAIN_IDLE, 0);
@@ -3256,6 +3342,19 @@ reopen_interface:;
                     ui_status_quality(request.profile), x4_ui2_local_minute(draw_at),
                     screen.signed_in ? catalog.gamertag : NULL)) ++status_revision;
         }
+        const bool ui_slide_enabled = !live_visible && !closing && screen.page != 3 && screen.page != 6;
+        X4UiSlide slide = ui_slide(&ui_motion, (UiMotionView){
+            .page = underlay, .section = ui2_shell.section, .settings_tab = picture_settings_ui.tab,
+            .modal = ui_modal, .keyboard = screen.page == 5 && catalog_browser.editing && !settings_page,
+            .dropdown = settings_page && picture_settings_ui.dropdown_open,
+            .qr = screen.page == 4 && account.state == X4_AUTH_WAITING,
+            .detail_tab = game_page_ui.page.tab,
+            .library_tab = catalog_browser.library.tab,
+            .game_details = game_page_frame,
+            .game_overlay = game_page_frame && (game_page_ui.page.qr_open || game_page_ui.page.fullscreen_open),
+        }, draw_at, ui_slide_enabled, shell_direction);
+        const bool sliding = slide.dx || slide.dy;
+        const bool animate_frame = sliding || ui_motion.settling;
         bool ui_reuse_work=false;
         if (!live_visible && screen.page != 3 && screen.page != 6) {
             uint32_t next_ui_sig = 2166136261u;
@@ -3434,14 +3533,14 @@ reopen_interface:;
                 ui_state_sig = next_ui_sig;
                 ui_dirty_buffers = 2;
             }
-            if (ui_dirty_buffers == 0) {
+            if (ui_dirty_buffers == 0 && !animate_frame) {
                 ++ui_dirty_skips;
                 main_submit_done();
                 sceKernelUsleep(4000);
                 continue;
             }
-            ui_reuse_work=ui_dirty_buffers==1;
-            --ui_dirty_buffers;
+            ui_reuse_work=ui_dirty_buffers<=1;
+            if (ui_dirty_buffers) --ui_dirty_buffers;
         } else {
             ui_dirty_buffers = 2;
         }
@@ -3791,9 +3890,11 @@ reopen_interface:;
 #endif
         }
         uint64_t present_begin = sceKernelGetProcessTime();
+        if (ui_motion.modal && sliding) slide.bounds = x4_ui2_modal_damage();
         rc = drew_live && trace_active ?
             x4_display_present_trace(&display, live_trace, drawn_generation, drawn_fresh) :
-            x4_display_present(&display);
+            x4_display_present_slide(&display, sliding ? &slide : NULL);
+        ui_motion.settling = sliding;
         uint64_t present_end=sceKernelGetProcessTime();
         if (rc == 0) ui2_splash_presented(&splash);
         if(!drew_live){

@@ -685,6 +685,11 @@ bool x4_picture_settings_ui_handle(X4PictureSettingsUi *s, unsigned a, bool can_
         settings_request_leave(s, X4_PIC_ROUTE_NONE);
         return true;
     }
+    if (a & (X4_PIC_SETTINGS_PREV_PAGE | X4_PIC_SETTINGS_NEXT_PAGE)) {
+        settings_request_leave(s, a & X4_PIC_SETTINGS_NEXT_PAGE ?
+            X4_PIC_ROUTE_NEXT_PAGE : X4_PIC_ROUTE_PREV_PAGE);
+        return true;
+    }
     if (a & (X4_PIC_SETTINGS_PREV_TAB | X4_PIC_SETTINGS_NEXT_TAB)) {
         settings_focus_section(s, (a & X4_PIC_SETTINGS_NEXT_TAB) != 0);
         return true;
@@ -751,6 +756,8 @@ enum {
 static const X4UiRect sections_rect = {SECTION_X, SECTION_Y, SECTION_W, SECTION_H};
 static const X4UiRect panel_rect = {PANEL_X, SECTION_Y, PANEL_W, PANEL_H};
 static const X4UiRect panel_body_rect = {PANEL_X + 15, 324, PANEL_W - 30, 580};
+
+X4UiRect x4_picture_settings_panel_bounds(void) { return panel_rect; }
 
 static const enum X4TextId section_labels[X4_PIC_SECTION_COUNT] = {
     X4_TR_UI2_SETTINGS_TRANSMISSION, X4_TR_OPTIONS_TAB_SERVER, X4_TR_ACCESS_TAB,
@@ -1058,7 +1065,6 @@ static void settings_draw_static(uint32_t *p)
     x4_rect(p, 0, 0, SETTINGS_W, SETTINGS_H, X4_UI2_BACKGROUND);
     x4_ui2_heading(p, PAGE_X, 119, x4_tr(X4_TR_APPLE_PILL_SETTINGS));
     const X4Ui2Hint hints[] = {
-        {X4_PAD_L1, ""}, {X4_PAD_R1, x4_tr(X4_TR_UI2_SETTINGS_SECTION)},
         {X4_PAD_CROSS, x4_tr(X4_TR_APPLE_HINT_SELECT)},
         {X4_PAD_CIRCLE, x4_tr(X4_TR_APPLE_HINT_BACK)},
     };
