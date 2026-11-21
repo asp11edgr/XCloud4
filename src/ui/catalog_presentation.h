@@ -4,12 +4,13 @@
 #include "product_metadata.h"
 
 enum { X4_PRESENTATION_HASH_SLOTS=8192, X4_PRESENTATION_DEMAND_MAX=24 };
-typedef struct { char product_id[32],name[128];uint64_t seen_generation; } X4PresentationName;
+typedef struct { char product_id[32],name[128]; } X4PresentationName;
 /* Main-only public name/genre overlay. <=736 KiB, no image pixels, no credentials
  * and no allocation/network operation. Covers remain in the separate LRU. */
 typedef struct {
     X4PresentationName names[X4_CATALOG_MAX];
     uint16_t lookup[X4_PRESENTATION_HASH_SLOTS];
+    uint8_t seen_current_generation[(X4_CATALOG_MAX+7)/8];
     char genre_names[X4_UI2_GENRE_MAX][64];
     uint8_t primary_genres[X4_CATALOG_MAX], detail_genres[X4_CATALOG_MAX];
     uint16_t attributes[X4_CATALOG_MAX];

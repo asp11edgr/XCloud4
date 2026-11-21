@@ -1327,6 +1327,48 @@ static int store_names(X4XboxWork *w)
     return 0;
 }
 
+/* Aggregate catalog diagnostics only; never log title, product, or account data. */
+static void catalog_name_diagnostics(const X4CatalogSnapshot *catalog)
+{
+    unsigned total = catalog->count;
+    unsigned capacity = (unsigned)(sizeof(catalog->titles) / sizeof(catalog->titles[0]));
+    if (total > capacity) total = capacity;
+
+    unsigned unnamed = 0;
+    unsigned without_product = 0;
+    unsigned invalid_product = 0;
+    unsigned missing_both = 0;
+    unsigned store_candidates = 0;
+    unsigned limit = total < X4_XBOX_STORE_NAMED ? total : X4_XBOX_STORE_NAMED;
+
+    for (unsigned i = 0; i < total; ++i) {
+        const X4CatalogTitle *title = &catalog->titles[i];
+        bool has_name = title->name[0] != 0;
+        bool has_product = title->product_id[0] != 0;
+
+        if (!has_name) ++unnamed;
+        if (!has_product) ++without_product;
+        if (has_product && !product_id(title->product_id)) ++invalid_product;
+        if (!has_name && !has_product) ++missing_both;
+
+        /* Match store_names(): non-empty unique IDs in the first 32 entries. */
+        if (i < limit && has_product) {
+            bool repeated = false;
+            for (unsigned j = 0; j < i && !repeated; ++j) {
+                const char *previous = catalog->titles[j].product_id;
+                repeated = previous[0] && same_id(previous, title->product_id);
+            }
+            if (!repeated) ++store_candidates;
+        }
+    }
+
+    printf("XCloud4: catalogo diag total=%u sem_nome=%u "
+        "sem_productId=%u productId_invalidos=%u sem_ambos=%u "
+        "candidatos_Store=%u fora_janela_Store=%u\n",
+        catalog->count, unnamed, without_product, invalid_product, missing_both,
+        store_candidates, catalog->count > limit ? catalog->count - limit : 0u);
+}
+
 static void run(X4XboxWork *w, const char *microsoft_token)
 {
     if (user_token(w, microsoft_token) || xsts(w)) return;
@@ -1347,6 +1389,7 @@ static void run(X4XboxWork *w, const char *microsoft_token)
         finish(w, X4_CATALOG_CANCELLED, 0, 0, "consulta cancelada");
         return;
     }
+    catalog_name_diagnostics(&w->result);
     finish(w, X4_CATALOG_READY, 0, w->result.http_status, "catalogo listo");
 }
 
